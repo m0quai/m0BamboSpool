@@ -126,3 +126,10 @@ AMSHelper ist eine nanoFramework-Anwendung für ESP32-S3 und Bambu Lab P1S/AMS.
 
 Wenn Architektur und aktueller Code abweichen, die Abweichung zuerst benennen und
 nicht stillschweigend eine neue Architektur einführen.
+
+## Historischer Projektkontext
+
+Bei OSM-Arbeiten den abgeglichenen Kontext in `OSM-PROJEKTKONTEXT.md`
+berücksichtigen. Er enthält historische Fakten, Quellen und offene Aufgaben.
+Diese AGENTS.md bleibt die einzige verbindliche Arbeitsanweisung; alte Chats
+und Erinnerungen dürfen den aktuellen Stand dieses PCs nicht überschreiben.
