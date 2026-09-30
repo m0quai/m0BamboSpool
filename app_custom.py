@@ -54,11 +54,11 @@ def _ensure_url_config():
     if missing:
         current = _CONFIG_ENV.read_text(encoding="utf-8")
         with _CONFIG_ENV.open("a", encoding="utf-8") as f:
-            if current and not current.endswith("\n"):
-                f.write("\n")
-            f.write("\n# OpenSpoolMan public/internal URLs (automatically added)\n")
+            if current and not current.endswith("\r\n"):
+                f.write("\r\n")
+            f.write("\r\n# OpenSpoolMan public/internal URLs (automatically added)\r\n")
             for key, value in missing:
-                f.write(f"{key}={value}\n")
+                f.write(f"{key}={value}\r\n")
                 values[key] = value
 
     return values
@@ -221,6 +221,7 @@ from flask import jsonify, redirect, request, url_for, render_template, send_fro
 import mqtt_bambulab
 import inventory_repository as spool_data
 import inventory_database as inventory_db
+from filament_color_catalog import SUNLU_COLOR_OPTIONS
 from config import USE_SPOOLMAN
 import print_history as print_history_service
 from config import EXTERNAL_SPOOL_AMS_ID, PRINTER_ID, PRINTER_NAME
@@ -233,6 +234,12 @@ from ui_formatting import format_ui_datetime
 from logger import log as _log
 
 spool_data.install_spoolman_compatibility_adapter()
+try:
+    # Keep the local administration schema available even while Spoolman remains active.
+    spool_data._spoolman_api.SPOOLMAN_API_URL = _openspoolman_config.SPOOLMAN_API_URL
+    spool_data.ensure_local_catalog()
+except Exception as exc:
+    _log(f"Local inventory schema initialization failed: {exc!r}")
 import inventory_service as _inventory_service
 
 _get_inventory_settings = _inventory_service.getSettings
@@ -381,7 +388,7 @@ if not _runtime_build_number or _runtime_build_number == "dev":
         _runtime_build_number = ""
 if not _runtime_build_number:
     _runtime_build_number = __build_number__
-builtins.print("\n" * 40, end="", flush=True)
+builtins.print("\r\n" * 40, end="", flush=True)
 _log("=" * 80)
 _log(f"Version {__version__} (Build {_runtime_build_number}) starting")
 _log("=" * 80)
@@ -782,7 +789,7 @@ def reconcile_stale_print_history_statuses():
             print_state.get("url"),
         )
         if candidate and candidate.get("status") != terminal_status:
-            status_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            status_at = candidate.get("predicted_end_time") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             print_history_service.update_layer_tracking(
                 candidate["id"], status=terminal_status, actual_end_time=status_at,
                 last_status_at=status_at,
@@ -802,10 +809,10 @@ def inventory():
     # Show the Spoolman inventory together with print consumption history.
     inventory_rows = []
     try:
-        spools = spool_data.list_spools(include_archived=True)
+        spools = spool_data.list_spools(include_archived=False)
     except Exception as exc:
         _log(f"Inventory could not load archived spools: {exc}")
-        spools = mqtt_bambulab.fetchSpools()
+        spools = [spool for spool in mqtt_bambulab.fetchSpools() if not spool.get("archived")]
     for spool in spools:
         spool_id = spool.get("id")
         if spool_id is None:
@@ -833,6 +840,111 @@ def inventory():
         inventory_materials=materials,
         inventory_filaments=filaments,
     )
+
+
+@app.get("/inventory/management/<entity>")
+def inventory_management(entity):
+    # Show one local inventory catalog in its own preview page.
+    entity_config = {
+        "vendors": ("Hersteller", "vendors"),
+        "materials": ("Materialien", "materials"),
+        "filaments": ("Filamente", "filaments"),
+        "spools": ("Spulen", "spools"),
+    }
+    if entity not in entity_config:
+        return render_template("error.html", error="Unbekannte Verwaltungsseite."), 404
+    title, table_name = entity_config[entity]
+    rows = []
+    local_inventory = not USE_SPOOLMAN
+    warning = None
+    form_id = request.args.get("edit", type=int)
+    copy_id = request.args.get("copy", type=int)
+    form_mode = "edit" if form_id else ("copy" if copy_id else ("new" if request.args.get("new") else None))
+    form_record = None
+    management_vendors = []
+    management_materials = []
+    management_filaments = []
+    management_spools = []
+    try:
+        spool_data.ensure_local_catalog()
+        management_vendors = inventory_db.list_entities("vendors")
+        management_materials = inventory_db.list_entities("materials")
+        management_filaments = inventory_db.list_filaments()
+        management_spools = inventory_db.list_spools(include_archived=True)
+        if entity == "spools":
+            rows = inventory_db.list_spools(include_archived=True)
+        elif entity == "filaments":
+            rows = inventory_db.list_filaments()
+        else:
+            rows = inventory_db.list_entities(table_name)
+        if form_id:
+            form_record = next((row for row in rows if int(row.get("id")) == form_id), None)
+        elif copy_id and entity == "spools":
+            source = next((row for row in rows if int(row.get("id")) == copy_id), None)
+            if source:
+                form_record = dict(source)
+                form_record.pop("id", None)
+                form_record["archived"] = False
+    except Exception as exc:
+        warning = "Die lokale Verwaltung ist derzeit nicht verfügbar."
+        _log(f"Inventory management preview could not load {entity}: {exc!r}")
+    return render_template(
+        "inventory_management.html",
+        management_entity=entity,
+        management_title=title,
+        management_rows=rows,
+        local_inventory=local_inventory,
+        management_warning=warning,
+        management_form_mode=form_mode,
+        management_form_record=form_record or {},
+        management_vendors=management_vendors,
+        management_materials=management_materials,
+        management_filaments=management_filaments,
+        management_spools=management_spools if entity == "filaments" else [],
+        sunlu_color_options=SUNLU_COLOR_OPTIONS,
+    )
+
+
+@app.post("/inventory/management/<entity>")
+def inventory_management_save(entity):
+    # Save only to the local catalog; the active Spoolman backend remains unchanged.
+    try:
+        if entity == "spools":
+            inventory_db.save_spool(_inventory_payload())
+        else:
+            inventory_db.save_entity(entity, _inventory_payload())
+    except (ValueError, KeyError, TypeError) as exc:
+        return redirect(url_for("inventory_management", entity=entity, new=1, error=str(exc)))
+    except Exception as exc:
+        _log(f"Local management create failed ({entity}): {exc!r}")
+        return redirect(url_for("inventory_management", entity=entity, new=1, error="Speichern fehlgeschlagen."))
+    return redirect(url_for("inventory_management", entity=entity, saved="created"))
+
+
+@app.post("/inventory/management/<entity>/<int:entity_id>")
+def inventory_management_update(entity, entity_id):
+    # Update only the local catalog; the active Spoolman backend remains unchanged.
+    try:
+        if entity == "spools":
+            inventory_db.save_spool(_inventory_payload(), entity_id)
+        else:
+            inventory_db.save_entity(entity, _inventory_payload(), entity_id)
+    except (ValueError, KeyError, TypeError) as exc:
+        return redirect(url_for("inventory_management", entity=entity, edit=entity_id, error=str(exc)))
+    except Exception as exc:
+        _log(f"Local management update failed ({entity} #{entity_id}): {exc!r}")
+        return redirect(url_for("inventory_management", entity=entity, edit=entity_id, error="Speichern fehlgeschlagen."))
+    return redirect(url_for("inventory_management", entity=entity, saved="updated"))
+
+
+@app.post("/inventory/management/<entity>/<int:entity_id>/delete")
+def inventory_management_delete(entity, entity_id):
+    # Deletion is intentionally limited to the local preview catalog.
+    if entity == "spools":
+        inventory_db.delete_entity("spools", entity_id)
+    else:
+        inventory_db.delete_entity(entity, entity_id)
+    return redirect(url_for("inventory_management", entity=entity, saved="deleted"))
 
 
 def _inventory_payload():

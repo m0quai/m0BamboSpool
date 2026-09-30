@@ -68,6 +68,46 @@ def get_filament_order(file):
     return filament_order
 
 
+def get_model_object_names(archive) -> list[str]:
+    # The object name is the user-renamed model name in Bambu Studio.
+    def normalize(value: str) -> str:
+        for suffix in (".stl", ".3mf", ".obj"):
+            if value.lower().endswith(suffix):
+                return value[:-len(suffix)]
+        return value
+
+    names = []
+    for path in sorted(archive.namelist()):
+        if not (path.startswith("Metadata/plate_") and path.endswith(".json")):
+            continue
+        try:
+            document = json.loads(archive.read(path).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError, KeyError):
+            continue
+        for obj in document.get("bbox_objects") or []:
+            value = normalize(str(obj.get("name") or "").strip())
+            if value and value not in names:
+                names.append(value)
+
+    # Older packages may not contain plate JSON object names.
+    path = "Metadata/model_settings.config"
+    if path not in archive.namelist() or names:
+        return names
+    try:
+        root = ET.fromstring(archive.read(path))
+    except (ET.ParseError, KeyError):
+        return names
+    for metadata in root.findall(".//metadata"):
+        if metadata.attrib.get("key") != "name":
+            continue
+        value = normalize(str(metadata.attrib.get("value") or "").strip())
+        if not value:
+            continue
+        if value and value not in names:
+            names.append(value)
+    return names
+
+
 def setupPycurlConnection(ftp_user, ftp_pass):
     c = pycurl.Curl()
     c.setopt(c.USERPWD, f"{ftp_user}:{ftp_pass}")
@@ -433,6 +473,7 @@ def download3mfFromFTP(filename, destFile, progress_callback=None, cancel_event=
                             f"curl={_curl_diagnostics(c)}"
                         )
                         return remote_path
+
                     except pycurl.error as exc:
                         if cancel_event is not None and cancel_event.is_set():
                             raise DownloadCancelledError("Druck wurde abgebrochen") from exc
@@ -485,6 +526,25 @@ def download3mfFromFTP(filename, destFile, progress_callback=None, cancel_event=
     raise RuntimeError(
         f"3MF-Datei konnte nicht vom Drucker geladen werden; letzter Fehler: {last_error}"
     )
+
+
+def delete3mfFromFTP(remote_path: str) -> bool:
+    # Delete one exact printer-side 3MF path after a confirmed print.
+    remote_path = str(remote_path or "").strip()
+    if not remote_path.startswith("/") or not remote_path.lower().endswith(".3mf"):
+        raise ValueError("Only an absolute .3mf printer path may be deleted")
+    if ".." in remote_path.split("/"):
+        raise ValueError("Unsafe printer path")
+    c = setupPycurlConnection("bblp", app_config.PRINTER_CODE)
+    try:
+        c.setopt(c.URL, f"ftps://{app_config.PRINTER_IP}{urllib.parse.quote(remote_path, safe='/')}")
+        c.setopt(c.CUSTOMREQUEST, "DELE")
+        c.setopt(c.WRITEDATA, io.BytesIO())
+        c.perform()
+        log(f"[3MF][FTP] Druckdatei gelöscht: {remote_path}")
+        return True
+    finally:
+        c.close()
 
 
 def download3mfFromLocalFilesystem(path, destFile, progress_callback=None, cancel_event=None):
@@ -544,6 +604,9 @@ def getMetaDataFrom3mf(url):
             )
 
             with zipfile.ZipFile(temp_file_name, 'r') as z:
+                object_names = get_model_object_names(z)
+                if object_names:
+                    metadata["model_name"] = " + ".join(object_names)
                 slice_info_path = "Metadata/slice_info.config"
                 if slice_info_path not in z.namelist():
                     log(f"[3MF] '{slice_info_path}' fehlt im Archiv.")
@@ -598,6 +661,7 @@ def getMetaDataFrom3mf(url):
 
                 log(
                     f"[3MF] Metadaten OK: file={metadata.get('file')!r}, "
+                    f"model_name={metadata.get('model_name')!r}, "
                     f"plate={metadata.get('plateID')!r}, filaments={len(metadata.get('filaments', {}))}, "
                     f"image={metadata.get('image')!r}"
                 )
@@ -625,6 +689,9 @@ def getMetaDataFromLocal3mf(path: str, model_path: str | None = None) -> dict:
     }
     try:
         with zipfile.ZipFile(path, "r") as z:
+            object_names = get_model_object_names(z)
+            if object_names:
+                metadata["model_name"] = " + ".join(object_names)
             slice_info_path = "Metadata/slice_info.config"
             if slice_info_path not in z.namelist():
                 log(f"[3MF] '{slice_info_path}' fehlt im lokalen Archiv.")
@@ -679,6 +746,7 @@ def getMetaDataFromLocal3mf(path: str, model_path: str | None = None) -> dict:
 
             log(
                 f"[3MF] Lokale Metadaten OK: file={metadata.get('file')!r}, "
+                f"model_name={metadata.get('model_name')!r}, "
                 f"plate={metadata.get('plateID')!r}, filaments={len(metadata.get('filaments', {}))}"
             )
             return metadata

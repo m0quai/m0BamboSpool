@@ -18,7 +18,7 @@ from logger import log
 
 
 def make_job_key(task_id, subtask_id):
-    """Build the same stable key for printer IDs regardless of their type."""
+    # Build the same stable key for printer IDs regardless of their type.
     if task_id is None and subtask_id is None:
         return None
     task = "" if task_id is None else str(task_id)
@@ -40,7 +40,7 @@ class Job3MFManager:
         with self._lock:
             current = self._jobs.get(job_key)
             if current and current.get("source") == source and current.get("state") in {
-                "queued", "resolving", "downloading", "processing", "ready"
+                "queued", "resolving", "downloading", "processing"
             }:
                 log(f"[3MF] Doppeldownload verhindert: job={job_key} state={current['state']}")
                 return dict(current)
@@ -196,6 +196,8 @@ class Job3MFManager:
                 if cancel_event.is_set():
                     raise tools_3mf.DownloadCancelledError("Druck wurde abgebrochen")
                 self._update(job_key, state="ready", percent=100 if self.get(job_key).get("bytes_total") else None)
+                if remote_path:
+                    metadata["_remote_3mf_path"] = remote_path
                 callback(job_key, local_path, metadata, None)
             except Exception as exc:
                 cancelled = self._cancel_events.get(job_key, threading.Event()).is_set()

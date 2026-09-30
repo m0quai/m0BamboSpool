@@ -44,6 +44,7 @@ UI_TRANSLATIONS = {
         "Deutsch": "Deutsch",
         "Englisch": "Englisch",
         "Speichern": "Speichern",
+        "vorläufig": "vorläufig",
         "Print history": "Druckhistorie",
         "Print history pagination": "Seitennavigation der Druckhistorie",
         "Build": "Build",
@@ -262,6 +263,7 @@ UI_TRANSLATIONS = {
         "Deutsch": "German",
         "Englisch": "English",
         "Speichern": "Save",
+        "vorläufig": "provisional",
         "Print history": "Print history",
         "Print history pagination": "Print history pagination",
         "Build": "Build",
@@ -451,3 +453,23 @@ UI_TRANSLATIONS = {
         "Unbekannte Bambu-Labs Spule erkannt – entferne die aktuelle Zuordnung und verknüpfe sie mit SpoolMan.": "Unknown Bambu Lab spool detected – remove the current assignment and link it to SpoolMan."
     }
 }
+
+# Labels for the local inventory management preview and editor.
+UI_TRANSLATIONS["de"].update({
+    "Hersteller": "Hersteller", "Materialien": "Materialien", "Filamente": "Filamente", "Spulen": "Spulen",
+    "Verwaltungsseiten": "Verwaltungsseiten", "Eigene Verwaltung": "Eigene Verwaltung",
+    "Vorschau der lokalen Tabellen, ohne die aktuelle Verwaltung umzustellen.": "Vorschau der lokalen Tabellen, ohne die aktuelle Verwaltung umzustellen.",
+    "Einträge": "Einträge", "Neu anlegen": "Neu anlegen", "Bearbeiten": "Bearbeiten", "Gespeichert.": "Gespeichert.",
+    "Keine Einträge vorhanden.": "Keine Einträge vorhanden.", "Startgewicht": "Startgewicht", "Leergewicht": "Leergewicht",
+    "Preis": "Preis", "NFC-Tag": "NFC-Tag", "AMS-Fach": "AMS-Fach", "Abbrechen": "Abbrechen",
+    "Bestandskorrektur": "Bestandskorrektur", "Differenz (+/- g)": "Differenz (+/- g)", "Absoluter Restbestand (g)": "Absoluter Restbestand (g)", "Korrekturwert": "Korrekturwert", "Farbe auswählen": "Farbe auswählen", "Speichern fehlgeschlagen.": "Speichern fehlgeschlagen.",
+})
+UI_TRANSLATIONS["en"].update({
+    "Hersteller": "Manufacturers", "Materialien": "Materials", "Filamente": "Filaments", "Spulen": "Spools",
+    "Verwaltungsseiten": "Management pages", "Eigene Verwaltung": "Local management",
+    "Vorschau der lokalen Tabellen, ohne die aktuelle Verwaltung umzustellen.": "Preview of the local tables without switching the active management backend.",
+    "Einträge": "Entries", "Neu anlegen": "Create new", "Bearbeiten": "Edit", "Gespeichert.": "Saved.",
+    "Keine Einträge vorhanden.": "No entries available.", "Startgewicht": "Initial weight", "Leergewicht": "Empty spool weight",
+    "Preis": "Price", "NFC-Tag": "NFC tag", "AMS-Fach": "AMS tray", "Abbrechen": "Cancel",
+    "Bestandskorrektur": "Stock correction", "Differenz (+/- g)": "Difference (+/- g)", "Absoluter Restbestand (g)": "Absolute remaining stock (g)", "Korrekturwert": "Correction value", "Farbe auswählen": "Select color", "Speichern fehlgeschlagen.": "Save failed.",
+})

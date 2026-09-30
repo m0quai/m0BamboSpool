@@ -131,9 +131,9 @@ def import_spoolman(vendors: list[dict[str, Any]], filaments: list[dict[str, Any
                     bambu_filament_id, bambu_setting_id, created_at, updated_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (filament_id, vendor_id, material_id, filament.get("name") or f"Filament {filament_id}",
-                 filament.get("color_hex"), filament.get("settings_extruder_temp"), filament.get("settings_bed_temp"),
-                 _extra_value(filament.get("extra"), "nozzle_temperature"), _extra_value(filament.get("extra"), "cali_idx"),
-                 _extra_value(filament.get("extra"), "filament_id"), _extra_value(filament.get("extra"), "setting_id"), now, now),
+                 _db_value(filament.get("color_hex")), _db_value(filament.get("settings_extruder_temp")), _db_value(filament.get("settings_bed_temp")),
+                 _db_value(_extra_value(filament.get("extra"), "nozzle_temperature")), _db_value(_extra_value(filament.get("extra"), "cali_idx")),
+                 _db_value(_extra_value(filament.get("extra"), "filament_id")), _db_value(_extra_value(filament.get("extra"), "setting_id")), now, now),
             )
         for spool in spools:
             filament = spool.get("filament") or {}
@@ -176,6 +176,14 @@ def _extra_value(extras: dict[str, Any] | None, key: str) -> Any:
             return json.loads(value)
         except (TypeError, ValueError):
             return value
+    return value
+
+
+def _db_value(value: Any) -> Any:
+    # SQLite accepts scalar values only; preserve structured Spoolman extras as JSON.
+    if isinstance(value, (list, dict, tuple)):
+        import json
+        return json.dumps(value, ensure_ascii=False)
     return value
 
 
@@ -263,11 +271,14 @@ def save_spool(values: dict[str, Any], spool_id: int | None = None) -> int:
     row = {field: values.get(field) for field in fields}
     row["archived"] = int(row["archived"] is True or str(row["archived"]).strip().lower() in {"1", "true", "yes", "on"})
     row["weight_correction"] = float(row["weight_correction"] or 0)
-    row["tag"] = str(row["tag"] or "").strip() or None
-    row["active_tray"] = str(row["active_tray"] or "").strip() or None
     now = _now()
     with _connect() as conn:
+        existing = conn.execute("SELECT tag, active_tray FROM spools WHERE id = ?", (spool_id,)).fetchone() if spool_id is not None else None
+        row["tag"] = str(row["tag"] or "").strip() or None if "tag" in values else (existing["tag"] if existing else None)
+        row["active_tray"] = str(row["active_tray"] or "").strip() or None if "active_tray" in values else (existing["active_tray"] if existing else None)
         measured_remaining = values.get("current_remaining_weight")
+        adjustment_value = values.get("adjustment_weight")
+        adjustment_mode = str(values.get("adjustment_mode") or "").strip().lower()
         if measured_remaining not in (None, ""):
             used = 0.0
             if spool_id is not None:
@@ -276,6 +287,18 @@ def save_spool(values: dict[str, Any], spool_id: int | None = None) -> int:
                     (spool_id,),
                 ).fetchone()[0] or 0)
             row["weight_correction"] = float(measured_remaining) - float(row["initial_weight"] or 0) + used
+        elif adjustment_value not in (None, "") and spool_id is not None:
+            previous = conn.execute("SELECT weight_correction FROM spools WHERE id = ?", (spool_id,)).fetchone()
+            previous_correction = float(previous["weight_correction"] or 0) if previous else 0.0
+            amount = float(adjustment_value)
+            if adjustment_mode == "absolute":
+                used = float(conn.execute(
+                    "SELECT COALESCE(SUM(grams_used), 0) FROM filament_usage WHERE spool_id = ?",
+                    (spool_id,),
+                ).fetchone()[0] or 0)
+                row["weight_correction"] = amount - float(row["initial_weight"] or 0) + used
+            else:
+                row["weight_correction"] = previous_correction + amount
         elif spool_id is not None:
             previous = conn.execute("SELECT weight_correction FROM spools WHERE id = ?", (spool_id,)).fetchone()
             if previous:

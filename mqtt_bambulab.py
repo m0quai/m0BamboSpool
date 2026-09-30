@@ -31,7 +31,7 @@ from inventory_service import (
   trayUid,
 )
 from inventory_repository import record_consumption
-from tools_3mf import getMetaDataFrom3mf
+from tools_3mf import getMetaDataFrom3mf, delete3mfFromFTP
 import time
 import threading
 import copy
@@ -40,6 +40,7 @@ from collections.abc import Mapping
 from logger import application_log_file, append_to_rotating_file, log
 from print_history import (
   insert_print,
+  update_print_file_name,
   insert_filament_usage,
   ensure_layer_tracking,
   update_print_image,
@@ -54,6 +55,8 @@ from print_history import (
   printer_state_to_history_status,
   update_filament_spool,
   update_filament_physical_slot,
+  claim_filament_usage_event,
+  set_filament_usage_event_status,
 )
 from filament_usage_tracker import FilamentUsageTracker
 from jobs_3mf import JOBS_3MF, make_job_key
@@ -337,6 +340,9 @@ def _on_3mf_job_complete(job_key, local_path, metadata, error):
   metadata = dict(job.get("print_metadata") or {})
   metadata.update(parsed_metadata)
   metadata["print_id"] = job["print_id"]
+  remote_3mf_path = metadata.get("_remote_3mf_path")
+  if remote_3mf_path:
+    update_layer_tracking(job["print_id"], remote_3mf_path=remote_3mf_path)
   with _ACTIVE_3MF_PRINTS_LOCK:
     job["metadata_ready"] = True
   metadata["local_model_path"] = local_path
@@ -344,6 +350,8 @@ def _on_3mf_job_complete(job_key, local_path, metadata, error):
   PENDING_PRINT_METADATA = metadata
   if metadata.get("image"):
     update_print_image(job["print_id"], metadata["image"])
+  if metadata.get("model_name"):
+    update_print_file_name(job["print_id"], metadata["model_name"])
 
   # Create/enrich usage rows before the tracker binds physical spools.
   for filament_id, filament in (metadata.get("filaments") or {}).items():
@@ -397,6 +405,11 @@ def _queue_3mf_job(print_data):
   with _ACTIVE_3MF_PRINTS_LOCK:
     existing = ACTIVE_3MF_PRINTS.get(job_key)
     if existing:
+      tracking = get_layer_tracking_for_prints([existing["print_id"]]).get(existing["print_id"], {})
+      if tracking.get("status") in {"COMPLETED", "FAILED", "ABORTED"}:
+        ACTIVE_3MF_PRINTS.pop(job_key, None)
+        existing = None
+    if existing:
       print_data["_metadata_job_queued"] = True
       _ensure_provisional_filament_usage(existing, print_data)
       return existing
@@ -404,6 +417,7 @@ def _queue_3mf_job(print_data):
     file_name = print_data.get("subtask_name") or print_data.get("gcode_file") or print_data.get("url") or job_key
     print_id = insert_print(file_name, print_data.get("print_type") or "cloud")
     ensure_layer_tracking(print_id, "PREPARING")
+    update_layer_tracking(print_id, printer_job_key=job_key)
     mapping_value = _active_tray_mapping(print_data)
     metadata = {
       "task_id": print_data.get("task_id"),
@@ -452,10 +466,20 @@ def _reconcile_completed_printer_job(print_data: dict) -> None:
     print_data.get("subtask_name"),
     print_data.get("gcode_file"),
     print_data.get("url"),
+    job_key=_job_key(print_data),
   )
   if not candidate or not _COMPLETION_RECONCILE_LOCK.acquire(blocking=False):
     return
   try:
+    # A later FINISH packet for the same file must never revive a job that was
+    # already aborted or failed.  Bambu reuses task/subtask keys and filenames,
+    # so status is the final guard against cross-job completion.
+    if candidate.get("status") not in {"PREPARING", "RUNNING", "PAUSED"}:
+      log(
+        f"[filament-tracker] Abschluss-Recovery übersprungen: Print "
+        f"{candidate.get('id')} steht bereits auf {candidate.get('status')}"
+      )
+      return
     print_id = int(candidate["id"])
     usage_rows = get_filament_usage_for_reconciliation(print_id)
     updates = []
@@ -477,12 +501,21 @@ def _reconcile_completed_printer_job(print_data: dict) -> None:
             f"Fach {row.get('ams_slot')} ohne Spool-Zuordnung"
           )
           return
+        recovery_layer = -1
+        recovery_index = int(row["id"])
+        event_status = claim_filament_usage_event(
+          print_id, recovery_layer, recovery_index, int(spool_id), missing_length
+        )
+        if event_status in {"sent", "confirmed"}:
+          continue
+        set_filament_usage_event_status(print_id, recovery_layer, recovery_index, "sent")
         try:
           record_consumption(
             int(spool_id),
             length_mm=missing_length,
             occurred_at=candidate.get("predicted_end_time"),
           )
+          set_filament_usage_event_status(print_id, recovery_layer, recovery_index, "confirmed")
         except Exception as exc:
           log(
             f"[filament-tracker] Abschluss-Recovery fehlgeschlagen: Print {print_id}, "
@@ -510,6 +543,12 @@ def _reconcile_completed_printer_job(print_data: dict) -> None:
       )
       return
     mark_print_reconciled(print_id, updates, completion_time)
+    remote_path = candidate.get("remote_3mf_path")
+    if remote_path:
+      try:
+        delete3mfFromFTP(remote_path)
+      except Exception as exc:
+        log(f"[3MF][FTP] Exakte Druckdatei konnte nicht gelöscht werden: {exc!r}")
     log(
       f"[filament-tracker] Abschluss-Recovery abgeschlossen: Print {print_id}, "
       f"Druckerstatus={state}/{percent:.0f}%, errechnetes_ende={completion_time}"
@@ -597,7 +636,7 @@ def map_filament(tray_tar):
         if tray is not None
       }
       if target_filaments.issubset(assigned_filaments):
-        log("\n✅ All trays assigned:")
+        log("\r\n✅ All trays assigned:")
         return True
   
   return False
@@ -663,8 +702,10 @@ def processMessage(data):
         tracking_status in {"PREPARING", "RUNNING", "PAUSED"}
         or (status == "ABORTED" and tracking_status == "FAILED")
       ):
+        if status == "COMPLETED":
+          _reconcile_completed_printer_job(current_print)
         status_fields = {"status": status}
-        if status in {"COMPLETED", "FAILED", "ABORTED"}:
+        if status in {"FAILED", "ABORTED"}:
           status_fields["actual_end_time"] = status_at
         update_layer_tracking(active_job["print_id"], **status_fields)
     else:
@@ -676,10 +717,13 @@ def processMessage(data):
       state = str(current_print.get("gcode_state") or "").upper()
       terminal_status = printer_state_to_history_status(state, current_print.get("print_error"))
       if terminal_status:
+        if terminal_status == "COMPLETED":
+          _reconcile_completed_printer_job(current_print)
         candidate = find_open_print_for_printer_job(
           current_print.get("subtask_name"),
           current_print.get("gcode_file"),
           current_print.get("url"),
+          job_key=_job_key(current_print),
         )
         current_status = candidate.get("status") if candidate else None
         active_statuses = {"PREPARING", "RUNNING", "PAUSED"}

@@ -2,7 +2,6 @@
 {% block content %}
 <h1 class="mb-4 text-center">{{ _('Inventory') }}</h1>
 <div class="alert {{ 'alert-primary' if local_inventory else 'alert-secondary' }} d-flex justify-content-between align-items-center gap-3">
-  <div><strong>Inventarverwaltung: {{ 'Lokal' if local_inventory else 'Spoolman' }}</strong><br><small>Backend in <code>config.env</code>: <code>USE_SPOOLMAN={{ 'no' if local_inventory else 'yes' }}</code> (Neustart erforderlich)</small></div>
 </div>
 <div class="table-responsive">
   <table class="table table-hover align-middle inventory-table {{ 'inventory-has-status' if show_status_column else 'inventory-no-status' }}" id="inventory-table">
@@ -39,7 +38,7 @@
 </div>
 {% if local_inventory %}
 <section class="mt-5" id="local-inventory-management">
-  <div class="d-flex justify-content-between align-items-center mb-3"><h2 class="h4 mb-0">Lokale Verwaltung</h2><span class="text-muted">Hersteller · Materialien · Filamente · Spulen</span></div>
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3"><div><h2 class="h4 mb-0">Lokale Verwaltung</h2><span class="text-muted">Hersteller · Materialien · Filamente · Spulen</span></div></div>
   <div id="inventory-admin-message" class="alert d-none" role="alert"></div>
   <div class="row g-3">
     {% for entity, title, rows in [('vendors', 'Hersteller', inventory_vendors), ('materials', 'Materialien', inventory_materials), ('filaments', 'Filamente', inventory_filaments)] %}

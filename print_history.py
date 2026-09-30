@@ -57,7 +57,8 @@ def create_database() -> None:
             print_date TEXT NOT NULL,
             file_name TEXT NOT NULL,
             print_type TEXT NOT NULL,
-            image_file TEXT
+            image_file TEXT,
+            file_name_source TEXT NOT NULL DEFAULT 'legacy'
         )
     ''')
 
@@ -105,6 +106,7 @@ def create_database() -> None:
             status TEXT NOT NULL DEFAULT 'RUNNING',
             predicted_end_time TEXT,
             actual_end_time TEXT,
+            printer_job_key TEXT,
             FOREIGN KEY (print_id) REFERENCES prints (id) ON DELETE CASCADE
         )
     ''')
@@ -115,6 +117,7 @@ def create_database() -> None:
         "estimated_grams",
         "REAL",
     )
+    _ensure_column(cursor, "prints", "file_name_source", "TEXT NOT NULL DEFAULT 'legacy'")
     _ensure_column(
         cursor,
         "filament_usage",
@@ -176,6 +179,8 @@ def create_database() -> None:
     _ensure_column(cursor, "print_layer_tracking", "printer_percent", "REAL")
     _ensure_column(cursor, "print_layer_tracking", "last_status_at", "TEXT")
     _ensure_column(cursor, "print_layer_tracking", "last_usage_event_at", "TEXT")
+    _ensure_column(cursor, "print_layer_tracking", "printer_job_key", "TEXT")
+    _ensure_column(cursor, "print_layer_tracking", "remote_3mf_path", "TEXT")
 
     conn.commit()
     conn.close()
@@ -191,8 +196,8 @@ def insert_print(file_name: str, print_type: str, image_file: str = None, print_
     conn = connect_database(db_config["db_path"])
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO prints (print_date, file_name, print_type, image_file)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO prints (print_date, file_name, print_type, image_file, file_name_source)
+        VALUES (?, ?, ?, ?, 'provisional')
     ''', (print_date, file_name, print_type, image_file))
     print_id = cursor.lastrowid
     if print_id is None:
@@ -222,6 +227,19 @@ def update_print_image(print_id: int, image_file: str) -> None:
         return
     conn = connect_database(db_config["db_path"])
     conn.execute("UPDATE prints SET image_file = ? WHERE id = ?", (image_file, print_id))
+    conn.commit()
+    conn.close()
+
+
+def update_print_file_name(print_id: int, file_name: str) -> None:
+    # Replace the provisional MQTT name after the 3MF object name is known.
+    if print_id is None or not file_name:
+        return
+    conn = connect_database(db_config["db_path"])
+    conn.execute(
+        "UPDATE prints SET file_name = ?, file_name_source = 'model' WHERE id = ?",
+        (str(file_name).strip(), print_id),
+    )
     conn.commit()
     conn.close()
 
@@ -286,7 +304,7 @@ def _normalise_print_name(value: str | None) -> str:
     return name
 
 
-def find_open_print_for_printer_job(*names: str | None) -> dict | None:
+def find_open_print_for_printer_job(*names: str | None, job_key: str | None = None) -> dict | None:
     # Find the newest matching history row that may still need terminal-status
     # reconciliation. A failed row can be reclassified when later MQTT evidence
     # confirms that the user stopped the print manually.
@@ -300,7 +318,8 @@ def find_open_print_for_printer_job(*names: str | None) -> dict | None:
     rows = conn.execute(
         """SELECT p.id, p.file_name, t.status, t.total_layers,
                          t.layers_printed, t.predicted_end_time,
-                         t.estimated_duration_minutes, t.reconciliation_done
+                         t.estimated_duration_minutes, t.reconciliation_done,
+                         t.remote_3mf_path
              FROM prints p
              JOIN print_layer_tracking t ON t.print_id = p.id
              WHERE COALESCE(p.is_deleted, 0) = 0
@@ -309,6 +328,25 @@ def find_open_print_for_printer_job(*names: str | None) -> dict | None:
              ORDER BY p.id DESC"""
     ).fetchall()
     conn.close()
+    if job_key:
+        conn = connect_database(db_config["db_path"])
+        conn.row_factory = sqlite3.Row
+        exact = conn.execute(
+            """SELECT p.id, p.file_name, t.status, t.total_layers,
+                      t.layers_printed, t.predicted_end_time,
+                      t.estimated_duration_minutes, t.reconciliation_done,
+                      t.remote_3mf_path
+               FROM prints p JOIN print_layer_tracking t ON t.print_id = p.id
+               WHERE COALESCE(p.is_deleted, 0) = 0
+                 AND t.printer_job_key = ?
+                 AND t.status IN ('PREPARING', 'RUNNING', 'PAUSED', 'ABORTED', 'FAILED')
+                 AND COALESCE(t.reconciliation_done, 0) = 0
+               ORDER BY p.id DESC LIMIT 1""",
+            (str(job_key),),
+        ).fetchone()
+        conn.close()
+        if exact:
+            return dict(exact)
     for row in rows:
         if _normalise_print_name(row["file_name"]) in wanted:
             return dict(row)
@@ -694,7 +732,8 @@ def get_prints_with_filament(limit: int | None = None, offset: int | None = None
     cursor = conn.cursor()
     query = '''
         SELECT p.id AS id, p.print_date AS print_date, p.file_name AS file_name,
-               p.print_type AS print_type, p.image_file AS image_file, p.is_deleted AS is_deleted,
+               p.file_name_source AS file_name_source, p.print_type AS print_type,
+               p.image_file AS image_file, p.is_deleted AS is_deleted,
        (
            SELECT json_group_array(json_object(
                'spool_id', f.spool_id,
@@ -820,6 +859,8 @@ def update_layer_tracking(print_id: int, **fields):
       "printer_percent",
       "last_status_at",
       "last_usage_event_at",
+      "printer_job_key",
+      "remote_3mf_path",
   }
 
   sanitized = {key: value for key, value in fields.items() if key in allowed_columns}

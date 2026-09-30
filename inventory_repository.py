@@ -28,6 +28,12 @@ def get_backend() -> str:
     return "spoolman" if USE_SPOOLMAN else "local"
 
 
+def ensure_local_catalog() -> None:
+    # Create the local catalog tables and import the remote catalog once for preview pages.
+    _local.initialize()
+    _import_remote_once()
+
+
 def _import_remote_once() -> None:
     if not _local.needs_spoolman_import():
         return
@@ -44,14 +50,25 @@ def list_spools(*, include_archived: bool = False) -> list[dict[str, Any]]:
     if get_backend() == "local":
         _import_remote_once()
         return _local.list_spools(include_archived=include_archived)
-    return _REMOTE["list"](include_archived=include_archived)
+    try:
+        return _REMOTE["list"](include_archived=include_archived)
+    except Exception:
+        # Keep historical spool references resolvable while Spoolman is
+        # temporarily unavailable.  The local catalog is a read-only mirror
+        # for this fallback; consumption still uses the configured backend.
+        _local.initialize()
+        return _local.list_spools(include_archived=include_archived)
 
 
 def get_spool(spool_id: int | str) -> dict[str, Any]:
     if get_backend() == "local":
         _import_remote_once()
         return _local.get_spool(spool_id)
-    return _REMOTE["get"](spool_id)
+    try:
+        return _REMOTE["get"](spool_id)
+    except Exception:
+        _local.initialize()
+        return _local.get_spool(spool_id)
 
 
 def record_consumption(
