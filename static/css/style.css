@@ -747,30 +747,30 @@ main.container {
     border-collapse: separate;
     border-spacing: 0;
 }
-.inventory-table th,
-.inventory-table td {
+.inventory-table > thead > tr > th,
+.inventory-table > tbody > tr > td {
     padding: .75rem .85rem;
     vertical-align: middle;
     border-right: 1px solid var(--bs-border-color);
     border-bottom: 1px solid var(--bs-border-color);
 }
-.inventory-table tr > :last-child { border-right: 0; }
-.inventory-table tbody tr:last-child > * { border-bottom: 0; }
-.inventory-table tbody tr > td { vertical-align: top; }
-.inventory-table thead th { background: var(--bs-tertiary-bg); white-space: nowrap; }
-.inventory-table thead th:nth-child(1) { width: 7%; }
-.inventory-table thead th:nth-child(2) { width: 12%; }
-.inventory-table thead th:nth-child(3) { width: 11%; }
-.inventory-table thead th:nth-child(4) { width: 17%; }
-.inventory-table thead th:nth-child(5) { width: 10%; }
-.inventory-table.inventory-has-status thead th:nth-child(6) { width: 9%; }
-.inventory-table.inventory-has-status thead th:nth-child(7) { width: 11%; }
-.inventory-table.inventory-has-status thead th:nth-child(8) { width: 14%; }
-.inventory-table.inventory-has-status thead th:nth-child(9) { width: 9%; }
-.inventory-table.inventory-no-status thead th:nth-child(6) { width: 12%; }
-.inventory-table.inventory-no-status thead th:nth-child(7) { width: 16%; }
-.inventory-table.inventory-no-status thead th:nth-child(8) { width: 15%; }
-.inventory-table tbody td { overflow-wrap: anywhere; }
+.inventory-table > :is(thead, tbody) > tr > :last-child { border-right: 0; }
+.inventory-table > tbody > tr:last-child > * { border-bottom: 0; }
+.inventory-table > tbody > tr > td { vertical-align: top; }
+.inventory-table > thead > tr > th { background: var(--bs-tertiary-bg); white-space: nowrap; }
+.inventory-table > thead > tr > th:nth-child(1) { width: 7%; }
+.inventory-table > thead > tr > th:nth-child(2) { width: 12%; }
+.inventory-table > thead > tr > th:nth-child(3) { width: 11%; }
+.inventory-table > thead > tr > th:nth-child(4) { width: 17%; }
+.inventory-table > thead > tr > th:nth-child(5) { width: 10%; }
+.inventory-table.inventory-has-status > thead > tr > th:nth-child(6) { width: 9%; }
+.inventory-table.inventory-has-status > thead > tr > th:nth-child(7) { width: 11%; }
+.inventory-table.inventory-has-status > thead > tr > th:nth-child(8) { width: 14%; }
+.inventory-table.inventory-has-status > thead > tr > th:nth-child(9) { width: 9%; }
+.inventory-table.inventory-no-status > thead > tr > th:nth-child(6) { width: 12%; }
+.inventory-table.inventory-no-status > thead > tr > th:nth-child(7) { width: 16%; }
+.inventory-table.inventory-no-status > thead > tr > th:nth-child(8) { width: 15%; }
+.inventory-table > tbody > tr > td { overflow-wrap: anywhere; }
 .inventory-table-container { width: 100%; overflow-x: hidden; }
 .inventory-color-code {
     display: inline-block;
@@ -793,15 +793,19 @@ main.container {
 .inventory-print-table td:nth-child(2),
 .inventory-print-table th:nth-child(3),
 .inventory-print-table td:nth-child(3),
-.inventory-table td:nth-child(7) { text-align: right; }
+.inventory-table > tbody > tr > td:nth-child(7) { text-align: right; }
 .inventory-print-table th:nth-child(4),
 .inventory-print-table td:nth-child(4) { text-align: left; }
-.inventory-table.inventory-no-status td:nth-child(6) { text-align: right; }
-.inventory-table td:last-child { text-align: left; }
+.inventory-table.inventory-no-status > tbody > tr > td:nth-child(6) { text-align: right; }
+.inventory-table > tbody > tr > td:last-child { text-align: left; }
 .inventory-print-table thead th { background: transparent; font-size: .8rem; }
-.inventory-print-details summary { cursor: pointer; color: var(--bs-primary); }
-.inventory-print-details[open] { width: 100%; }
-.inventory-print-table { width: 100%; table-layout: fixed; }
+.inventory-print-toggle { padding: 0; border: 0; background: none; color: var(--bs-primary); white-space: nowrap; }
+.inventory-print-detail-row > td { background: var(--bs-tertiary-bg); }
+.inventory-print-table { width: 100%; min-width: 34rem; table-layout: auto; }
+.inventory-print-table th:nth-child(1) { width: 4rem; }
+.inventory-print-table th:nth-child(2) { width: 11rem; }
+.inventory-print-table th:nth-child(3) { width: 7rem; }
+.inventory-print-table td:last-child { overflow-wrap: anywhere; }
 .inventory-filter-menu.show {
     position: fixed !important;
     transform: none !important;
@@ -1123,4 +1127,3 @@ main.container {
   border: 1px solid rgba(255, 255, 255, .16) !important;
   border-radius: var(--m0-radius) !important;
 }
-

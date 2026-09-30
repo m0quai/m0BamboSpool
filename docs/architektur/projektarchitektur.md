@@ -2,7 +2,7 @@
 
 > Einstieg: [START.md](../START.md) · Entscheidungen: [Design](../../DESIGN.md)
 
-OpenSpoolMan wird als eigener Fork mit Bambu-Lab-Erweiterungen gepflegt. Eigene Funktionalität bleibt möglichst von Upstream-Code getrennt.
+m0BamboSpool wird als eigener Fork mit Bambu-Lab-Erweiterungen gepflegt. Eigene Funktionalität bleibt möglichst von Upstream-Code getrennt.
 
 ## Modulgrenzen
 

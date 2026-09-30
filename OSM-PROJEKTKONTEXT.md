@@ -6,7 +6,7 @@ Stand: 29.09.2026. Historische Fakten und offene Aufgaben; verbindliche Arbeitsr
 
 - Entwicklung: 01a039da-68e5-7f20-8921-012fc9080cb4, ursprünglich 25.08.–25.09.2026.
 - Prüfe Repository vor Änderungen: 01a0395d-855c-79c0-ac44-3178d44907a8, ursprünglich 25.08.2026; als archivierter Chat übernommen.
-- Beide gehören zum aktuellen OSM-Projekt unter C:\Development\Docker\OpenSpoolMan. Alte Nachrichten enthalten weiterhin ihre damaligen Pfade C:\Docker\OpenSpoolMan und den damaligen Benutzerordner.
+- Beide gehören zum aktuellen OSM-Projekt unter C:\Development\Docker\m0BamboSpool. Alte Nachrichten enthalten weiterhin ihre damaligen Pfade C:\Docker\OpenSpoolMan und den damaligen Benutzerordner.
 
 ## Bereits vorhandene Änderungen
 

@@ -1,4 +1,4 @@
-# OpenSpoolMan – Design-Entscheidungen
+# m0BamboSpool – Design-Entscheidungen
 
 Diese Datei ist die zentrale und verbindliche Sammlung dauerhafter Projektentscheidungen.
 
@@ -14,9 +14,9 @@ Diese Datei ist die zentrale und verbindliche Sammlung dauerhafter Projektentsch
 - Feature-Branches heißen `feature/<name>`, Fehlerbehebungs-Branches `bug/<name>` und werden immer von `dev` abgeleitet. Der Präfix `codex/` wird nicht verwendet.
 - Änderungen werden geprüft und anschließend in `dev` integriert. Patch-ZIPs sind kein regulärer Übergabeweg.
 
-## OpenSpoolMan-Struktur
+## m0BamboSpool-Struktur
 
-- OpenSpoolMan wird als eigener Fork gepflegt.
+- m0BamboSpool wird als eigener Fork gepflegt.
 - `app.py` darf für projektspezifische Anpassungen nicht geändert werden.
 - Eigener Einstieg: `app_custom.py`.
 - Bambu-Routen: `bambu_auth_routes.py`.
@@ -28,7 +28,7 @@ Diese Datei ist die zentrale und verbindliche Sammlung dauerhafter Projektentsch
 - Inventardaten werden über `inventory_repository.py` als zentrale Datenzugriffsschicht
   bezogen. Fachlogik und UI greifen nicht direkt auf die Spoolman-HTTP-API zu.
 - Nicht benötigte Spoolman-Felder werden an dieser Grenze reduziert; interne Modelle
-  enthalten nur die für OpenSpoolMan benötigten Daten.
+  enthalten nur die für m0BamboSpool benötigten Daten.
 - Dauerhafte UI-Texte liegen zentral in `translations.py`; sichtbare Texte und
   Buttons dürfen nicht seitenweise fest verdrahtet werden.
 
@@ -54,7 +54,7 @@ Diese Datei ist die zentrale und verbindliche Sammlung dauerhafter Projektentsch
 - `pushall` und `ams_filament_setting` funktionieren im LAN-Pfad ohne RSA-SHA256/X.509-Signierung.
 - Signing bleibt für den Online-/Cloud-Kontext relevant.
 - Sparse AMS-Materialdaten werden serverseitig mit dem zuletzt bestätigten Cache ergänzt.
-- `Clear` löscht zuerst am Drucker, danach die OpenSpoolMan-/Spoolman-Zuordnung und invalidiert den Cache sofort.
+- `Clear` löscht zuerst am Drucker, danach die m0BamboSpool-/Spoolman-Zuordnung und invalidiert den Cache sofort.
 
 ## AMSHelper-Softwarearchitektur
 
@@ -72,9 +72,9 @@ Diese Datei ist die zentrale und verbindliche Sammlung dauerhafter Projektentsch
 - Beim initialen Gesamtstatus werden alle vier Trays einmal mit Belegungszustand, PN532-Readerstatus und – falls bereits vorhanden – PN532-UID ausgegeben.
 - Kein eigener Heartbeat-/Scheduler-Thread pro Tray. Der frühere Tray-Heartbeat mit `0/1/2/3`-Ausgabe ist entfernt.
 - MQTT-Empfang und Tray-Aktionen bleiben logisch getrennt; Ereignisse werden bevorzugt.
-- `OpenSpoolManClient` kapselt HTTP-Kommunikation.
+- `m0BamboSpoolClient` kapselt HTTP-Kommunikation.
 - AMSHelper meldet UID + AMS-Slot und zusätzlich „Tray leer“.
-- UID→Spool-Auflösung erfolgt ausschließlich serverseitig in OpenSpoolMan/Spoolman.
+- UID→Spool-Auflösung erfolgt ausschließlich serverseitig in m0BamboSpool/Spoolman.
 - C#-`if`-Anweisungen werden immer mit `{ }` geschrieben.
 
 ### Debug-/Trace-Ausgabe

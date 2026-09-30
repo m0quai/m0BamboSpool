@@ -16,24 +16,31 @@
       {% set last_used_value = item.last_used or '' %}
       {% set spool_status = 'archived' if spool.archived else 'active' %}{% set spool_status_label = _('Archiviert') if spool.archived else _('Aktiv') %}
       <tr data-inventory-row data-inventory-id="{{ spool.id }}" data-inventory-vendor="{{ (filament.vendor.name if filament.vendor else '')|lower }}" data-inventory-vendor-label="{{ filament.vendor.name if filament.vendor else _('Unbekannt') }}" data-inventory-filament="{{ (filament.name or '')|lower }}" data-inventory-filament-label="{{ filament.name or _('Ohne Namen') }}" data-inventory-material="{{ (filament.material or '')|lower }}" data-inventory-material-label="{{ filament.material or _('Unbekannt') }}" data-inventory-status="{{ spool_status }}" data-inventory-status-label="{{ spool_status_label }}" data-inventory-color="{{ (filament.color_hex or '')|lower }}" data-inventory-color-label="{{ filament.color_hex or '' }}" data-inventory-weight="{{ spool.remaining_weight|float }}" data-inventory-last-used="{{ last_used_value }}">
-        <td class="text-nowrap">{% if local_inventory %}<strong>#{{ spool.id }}</strong>{% else %}<a class="inventory-spool-link" href="{{ SPOOLMAN_BASE_URL }}/?sel=spool:{{ spool.id }}" target="openspoolman-spoolman" data-spoolman-window="true" title="{{ _('view in spoolman') }}"><strong>#{{ spool.id }}</strong></a>{% endif %}</td>
-        <td>{% if filament.vendor and filament.vendor.id %}{% if local_inventory %}{{ filament.vendor.name }}{% else %}<a class="inventory-entity-link" href="{{ SPOOLMAN_BASE_URL }}/?sel=vendor:{{ filament.vendor.id }}" target="openspoolman-spoolman" data-spoolman-window="true">{{ filament.vendor.name }}</a>{% endif %}{% else %}{{ _('Unbekannt') }}{% endif %}</td>
+        <td class="text-nowrap">{% if local_inventory %}<strong>#{{ spool.id }}</strong>{% else %}<a class="inventory-spool-link" href="{{ SPOOLMAN_BASE_URL }}/?sel=spool:{{ spool.id }}" target="m0bambospool-spoolman" data-spoolman-window="true" title="{{ _('view in spoolman') }}"><strong>#{{ spool.id }}</strong></a>{% endif %}</td>
+        <td>{% if filament.vendor and filament.vendor.id %}{% if local_inventory %}{{ filament.vendor.name }}{% else %}<a class="inventory-entity-link" href="{{ SPOOLMAN_BASE_URL }}/?sel=vendor:{{ filament.vendor.id }}" target="m0bambospool-spoolman" data-spoolman-window="true">{{ filament.vendor.name }}</a>{% endif %}{% else %}{{ _('Unbekannt') }}{% endif %}</td>
         <td>{{ filament.material or _('Unbekannt') }}</td>
-        <td>{% if filament.id and not local_inventory %}<a class="inventory-entity-link" href="{{ SPOOLMAN_BASE_URL }}/?sel=filament:{{ filament.id }}" target="openspoolman-spoolman" data-spoolman-window="true">{{ filament.name or _('Ohne Namen') }}</a>{% else %}{{ filament.name or _('Ohne Namen') }}{% endif %}</td>
+        <td>{% if filament.id and not local_inventory %}<a class="inventory-entity-link" href="{{ SPOOLMAN_BASE_URL }}/?sel=filament:{{ filament.id }}" target="m0bambospool-spoolman" data-spoolman-window="true">{{ filament.name or _('Ohne Namen') }}</a>{% else %}{{ filament.name or _('Ohne Namen') }}{% endif %}</td>
         {% set color_value = filament.color_hex or '000000' %}<td><span class="inventory-color-code" style="background-color: #{{ color_value }}; color: {{ '#fff' if color_is_dark(color_value) else '#111' }}; text-shadow: {{ '0 1px 1px rgba(0,0,0,.65)' if color_is_dark(color_value) else 'none' }};">#{{ color_value }}</span></td>
         {% if show_status_column %}<td><span class="badge {{ 'text-bg-secondary' if spool.archived else 'text-bg-success' }}">{{ spool_status_label }}</span></td>{% endif %}
         <td class="text-nowrap">{{ '%.1f'|format(spool.remaining_weight|float) }} g</td>
         <td class="text-nowrap">{{ format_datetime(last_used_value) if last_used_value else '—' }}</td>
         <td>
           {% if item.prints %}
-          <details class="inventory-print-details"><summary>{{ item.prints|length }} {{ _('Drucke') }}</summary>
-            <table class="table table-sm inventory-print-table mb-0"><thead><tr><th>{{ _('ID') }}</th><th>{{ _('Datum') }}</th><th>{{ _('Verbrauch') }}</th><th>{{ _('Auftrag') }}</th></tr></thead><tbody>
-            {% for print in item.prints %}<tr><td class="text-nowrap"><a href="{{ url_for('print_history', print_id=print.print_id, _anchor='print_' ~ print.print_id) }}">#{{ print.print_id }}</a></td><td class="text-nowrap">{{ format_datetime(print.print_date) }}</td><td class="text-nowrap">{{ '%.2f'|format(print.grams_used|float) }} g</td><td>{{ print.file_name }}</td></tr>{% endfor %}
-            </tbody></table>
-          </details>
+          <button type="button" class="inventory-print-toggle" aria-expanded="false" aria-controls="inventory-prints-{{ spool.id }}"><span aria-hidden="true">▸</span> {{ item.prints|length }} {{ _('Drucke') }}</button>
           {% else %}<span class="text-muted">{{ _('ungebraucht') }}</span>{% endif %}
         </td>
       </tr>
+      {% if item.prints %}
+      <tr class="inventory-print-detail-row" id="inventory-prints-{{ spool.id }}" hidden>
+        <td colspan="{{ 9 if show_status_column else 8 }}">
+          <div class="table-responsive">
+            <table class="table table-sm inventory-print-table mb-0"><thead><tr><th scope="col">{{ _('ID') }}</th><th scope="col">{{ _('Datum') }}</th><th scope="col">{{ _('Verbrauch') }}</th><th scope="col">{{ _('Auftrag') }}</th></tr></thead><tbody>
+            {% for print in item.prints %}<tr><td class="text-nowrap"><a href="{{ url_for('print_history', print_id=print.print_id, _anchor='print_' ~ print.print_id) }}">#{{ print.print_id }}</a></td><td class="text-nowrap">{{ format_datetime(print.print_date) }}</td><td class="text-nowrap">{{ '%.2f'|format(print.grams_used|float) }} g</td><td>{{ print.file_name }}</td></tr>{% endfor %}
+            </tbody></table>
+          </div>
+        </td>
+      </tr>
+      {% endif %}
     {% else %}<tr><td colspan="{{ 9 if show_status_column else 8 }}" class="text-center text-muted py-4">{{ _('Keine Spulen gefunden') }}</td></tr>{% endfor %}
     </tbody>
   </table>
@@ -134,12 +141,25 @@ document.addEventListener('DOMContentLoaded', () => {
   if (!table) return;
   const body = table.tBodies[0];
   const rows = Array.from(body.querySelectorAll('[data-inventory-row]'));
+  const printDetails = new Map();
+  rows.forEach(row => {
+    const toggle = row.querySelector('.inventory-print-toggle');
+    if (!toggle) return;
+    const detail = document.getElementById(toggle.getAttribute('aria-controls'));
+    printDetails.set(row, { toggle, detail });
+    toggle.addEventListener('click', () => {
+      const expanded = toggle.getAttribute('aria-expanded') !== 'true';
+      toggle.setAttribute('aria-expanded', String(expanded));
+      toggle.querySelector('span').textContent = expanded ? '▾' : '▸';
+      detail.hidden = row.hidden || !expanded;
+    });
+  });
   const textFilters = Array.from(document.querySelectorAll('[data-inventory-filter]'));
   const filterMenus = Array.from(document.querySelectorAll('[data-inventory-filter-menu]'));
   const filterSets = Object.fromEntries(filterMenus.map(menu => [menu.dataset.inventoryFilterMenu, new Set()]));
   if (filterSets.status) filterSets.status.add('active');
   const buttons = Array.from(document.querySelectorAll('[data-inventory-sort]'));
-  const storageKey = 'openspoolman-inventory-table-state';
+  const storageKey = 'm0bambospool-inventory-table-state';
   let savedState = {};
   try { savedState = JSON.parse(localStorage.getItem(storageKey) || '{}'); } catch (_) { savedState = {}; }
   const validFields = ['id', 'vendor', 'material', 'filament', 'last-used'];
@@ -150,10 +170,16 @@ document.addEventListener('DOMContentLoaded', () => {
   const apply = () => {
     const active = Object.fromEntries(textFilters.map(input => [input.dataset.inventoryFilter, input.value.trim().toLowerCase()]));
     rows.forEach(row => { row.hidden = Object.entries(active).some(([key, value]) => value && !row.dataset['inventory' + key.charAt(0).toUpperCase() + key.slice(1)].includes(value)) || Object.entries(filterSets).some(([key, values]) => values.size && !values.has(row.dataset['inventory' + key.charAt(0).toUpperCase() + key.slice(1)])); });
+    printDetails.forEach(({ toggle, detail }, row) => {
+      detail.hidden = row.hidden || toggle.getAttribute('aria-expanded') !== 'true';
+    });
     const visible = rows.filter(row => !row.hidden);
     try { localStorage.setItem(storageKey, JSON.stringify({ field, direction })); } catch (_) {}
     visible.sort((a, b) => { const key = 'inventory' + field.charAt(0).toUpperCase() + field.slice(1); let left; let right; if (field === 'last-used') { const leftRaw = a.dataset.inventoryLastUsed || ''; const rightRaw = b.dataset.inventoryLastUsed || ''; if (!leftRaw || !rightRaw) { if (!leftRaw && !rightRaw) return 0; return leftRaw ? -1 : 1; } left = Date.parse(leftRaw) || 0; right = Date.parse(rightRaw) || 0; } else { left = field === 'id' || field === 'weight' ? Number(a.dataset[key]) : a.dataset[key]; right = field === 'id' || field === 'weight' ? Number(b.dataset[key]) : b.dataset[key]; } const result = left < right ? -1 : left > right ? 1 : 0; return direction === 'asc' ? result : -result; });
-    visible.forEach(row => body.appendChild(row));
+    visible.forEach(row => {
+      body.appendChild(row);
+      if (printDetails.has(row)) body.appendChild(printDetails.get(row).detail);
+    });
   };
   textFilters.forEach(input => input.addEventListener('input', apply));
   filterMenus.forEach(menu => {

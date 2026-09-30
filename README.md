@@ -30,7 +30,7 @@ Netzwerkverbindung während eines Drucks vorübergehend nicht verfügbar war.
   direkter SpoolMan-Zugriffe
 - Lokale Verwaltungs- und Datenbanktabellen für Hersteller, Filamente und Spulen
   als Grundlage für eine eigene Verwaltung
-- About-Seite mit Verweisen auf OpenSpoolMan, SpoolMan und dieses Projekt
+- About-Seite mit Verweisen auf m0BamboSpool, SpoolMan und dieses Projekt
 
 ## Eigene NFC-Hardware
 
@@ -45,7 +45,7 @@ Die Hardware-Komponenten sind getrennt aufgebaut:
 - WLAN-/Netzwerkkomponente
 - vier `AmsTray`-Objekte für die AMS-Fächer
 - PN532-/NFC-Abstraktion für die Tray-bezogene Zuordnung
-- OpenSpoolMan-Client für die Kommunikation mit dem Dashboard
+- m0BamboSpool-Client für die Kommunikation mit dem Dashboard
 
 Die technische Dokumentation der Hardware liegt unter [`docs/amshelper`](docs/amshelper/).
 

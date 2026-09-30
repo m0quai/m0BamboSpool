@@ -1,4 +1,4 @@
-# OpenSpoolMan – Dokumentation
+# m0BamboSpool – Dokumentation
 
 Diese Datei ist der einzige Einstiegspunkt für Projektkontext, Entwicklungsregeln und Architekturentscheidungen.
 

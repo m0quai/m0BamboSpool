@@ -91,7 +91,7 @@
       <span class="app-nav-divider"></span>
       <a href="{{ url_for('bambu_cloud.index') }}" class="app-nav-link{% if request.endpoint and request.endpoint.startswith('bambu_cloud.') %} active{% endif %}"><i class="bi bi-gear" aria-hidden="true"></i><span>{{ _('Settings') }}</span>{% if not mqtt_connected|default(false) %}<span class="mqtt-menu-status-dot disconnected"></span>{% endif %}</a>
       <a href="{{ url_for('about') }}" class="app-nav-link{% if request.endpoint == 'about' %} active{% endif %}"><i class="bi bi-info-circle" aria-hidden="true"></i><span>{{ _('About') }}</span></a>
-      <a href="{{ SPOOLMAN_BASE_URL }}" target="openspoolman-spoolman" data-spoolman-window="true" class="app-nav-link"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i><span>{{ _('SpoolMan') }}</span></a>
+      <a href="{{ SPOOLMAN_BASE_URL }}" target="m0bambospool-spoolman" data-spoolman-window="true" class="app-nav-link"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i><span>{{ _('SpoolMan') }}</span></a>
     </nav>
     <div class="app-sidebar-footer">m0BamboSpool</div>
   </aside>
@@ -193,7 +193,7 @@
   <div class="container-fluid d-flex flex-wrap justify-content-between align-items-center">
     <ul class="nav col-md-12 justify-content-end list-unstyled d-flex">
       <li class="nav-item d-flex align-items-center me-2">
-        <span class="text-body-secondary">v{{ openspoolman_version }} ({{ _('Build') }} {{ openspoolman_build_number }}) @m0quai</span>
+        <span class="text-body-secondary">v{{ m0bambospool_version }} ({{ _('Build') }} {{ m0bambospool_build_number }}) @m0quai</span>
       </li>
       <li class="ms-3"><a class="link-body-emphasis" href="https://github.com/m0quai/m0BamboSpool" target="_blank" rel="noopener noreferrer">
         <i class="bi bi-github"></i>
@@ -233,7 +233,7 @@
     }
     document.querySelectorAll('a[data-spoolman-window]').forEach(function (link) {
       link.addEventListener('click', function (event) {
-        const spoolmanWindow = window.open(link.href, 'openspoolman-spoolman');
+        const spoolmanWindow = window.open(link.href, 'm0bambospool-spoolman');
         if (!spoolmanWindow) {
           return;
         }

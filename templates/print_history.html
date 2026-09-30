@@ -82,7 +82,7 @@ function initPrintHistoryRefresh() {
   }, 5000);
 }
 function initHistoryCollapsePersistence() {
-  const key = 'openspoolman-history-open';
+  const key = 'm0bambospool-history-open';
   document.querySelectorAll('.print-history .collapse').forEach(panel => {
     const id = panel.id;
     const toggle = document.querySelector(`[data-bs-target="#${id}"]`);
@@ -147,7 +147,7 @@ function initHistoryTableControls() {
   const body = table.tBodies[0];
   const rows = Array.from(body.querySelectorAll('tr[data-history-row]'));
   const details = new Map(Array.from(body.querySelectorAll('tr[data-history-detail]')).map(row => [row.dataset.historyDetail, row]));
-  const storageKey = 'openspoolman-history-table-state';
+  const storageKey = 'm0bambospool-history-table-state';
   let savedState = {};
   try { savedState = JSON.parse(localStorage.getItem(storageKey) || '{}'); } catch (_) { savedState = {}; }
   [...new Set(rows.map(row => row.dataset.historyStatus))].sort().forEach(value => {

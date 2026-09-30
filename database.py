@@ -1,4 +1,4 @@
-"""Central connection and file migration for the OpenSpoolMan database."""
+"""Central connection and file migration for the m0BamboSpool database."""
 
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ def _migrate_legacy_database_file(target_path: Path) -> None:
 def connect_database(path: str | Path | None = None) -> sqlite3.Connection:
     if DATABASE_TYPE != "sqlite":
         raise RuntimeError(
-            f"Unsupported OpenSpoolMan database type: {DATABASE_TYPE!r}; only 'sqlite' is available"
+            f"Unsupported m0BamboSpool database type: {DATABASE_TYPE!r}; only 'sqlite' is available"
         )
 
     target_path = Path(path).expanduser() if path is not None else DATABASE_PATH

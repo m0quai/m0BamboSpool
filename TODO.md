@@ -1,4 +1,4 @@
-# OpenSpoolMan – zentrale To-do-Liste
+# m0BamboSpool – zentrale To-do-Liste
 
 Diese Liste enthält nur noch offene oder ausdrücklich zu verifizierende Aufgaben.
 Erledigte Punkte werden entfernt und nicht als erledigt weitergeführt.
@@ -12,7 +12,7 @@ Erledigte Punkte werden entfernt und nicht als erledigt weitergeführt.
 - Hotspot-Modus zum Öffnen beziehungsweise Anbieten eines WLAN-Hotspots implementieren,
   falls dieser weiterhin benötigt wird.
 
-## OpenSpoolMan / AMS-Kommunikation
+## m0BamboSpool / AMS-Kommunikation
 
 - Unterschiede zwischen AMS-Status und Spoolman-Zuordnung abschließend behandeln und
   mit realen Druck-/Wechselvorgängen verifizieren.

@@ -13,7 +13,7 @@ from config import EXTERNAL_SPOOL_AMS_ID, EXTERNAL_SPOOL_ID, PRINTER_ID, PRINTER
 API_VERSION = "v1"
 api_bp = Blueprint("api", __name__, url_prefix=f"/api/{API_VERSION}")
 
-READ_ONLY_MODE = os.getenv("OPENSPOOLMAN_LIVE_READONLY") == "1"
+READ_ONLY_MODE = os.getenv("M0BAMBOSPOOL_LIVE_READONLY") == "1"
 ACTIVE_PRINTER_ID = (PRINTER_ID or "").upper() or "PRINTER_1"
 
 

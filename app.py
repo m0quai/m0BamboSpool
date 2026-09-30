@@ -26,7 +26,7 @@ import spoolman_service
 from spoolman_service import augmentTrayDataWithSpoolMan, trayUid, normalize_color_hex
 from logger import log
 
-READ_ONLY_MODE = os.getenv("OPENSPOOLMAN_LIVE_READONLY") == "1"
+READ_ONLY_MODE = os.getenv("M0BAMBOSPOOL_LIVE_READONLY") == "1"
 
 LAYER_TRACKING_STATUS_DISPLAY = {
     "RUNNING": ("Printing", "warning"),
@@ -180,7 +180,7 @@ def fill():
     return redirect(url_for(
       'home',
       success_message=(
-        f"Spool ID {spool_id} assigned in OpenSpoolMan to AMS {ams_id}, Tray {tray_id}. "
+        f"Spool ID {spool_id} assigned in m0BamboSpool to AMS {ams_id}, Tray {tray_id}. "
         "AMS material update sent to printer; verify the tray status below."
       )
     ))
@@ -362,7 +362,7 @@ def spoolman_compatible_spool_info(spool_id):
 
 @app.post("/tray_clear")
 def tray_clear():
-  # Remove only the OpenSpoolMan/Spoolman assignment for a tray.
+  # Remove only the m0BamboSpool/Spoolman assignment for a tray.
   #
   #   This deliberately does not send AMS_FILAMENT_SETTING to the printer, so the
   #   material/color configured in Bambu remains untouched.
@@ -523,7 +523,7 @@ def setActiveSpool(ams_id, tray_id, spool_data):
   ams_message["print"]["tray_sub_brands"] = ""
 
   print(
-    "[OpenSpoolMan] AMS Fill v2: "
+    "[m0BamboSpool] AMS Fill v2: "
     f"ams={ams_id} tray={tray_id} "
     f"tray_type={ams_message['print'].get('tray_type')!r} "
     f"tray_info_idx={ams_message['print'].get('tray_info_idx')!r} "

@@ -28,7 +28,7 @@
 document.addEventListener('DOMContentLoaded', () => {
   const rows = [...document.querySelectorAll('[data-management-row]')];
   const entity = {{ management_entity|tojson }};
-  const storageKey = `openspoolman-management-table-state:${entity}`;
+  const storageKey = `m0bambospool-management-table-state:${entity}`;
   let savedState = {};
   try { savedState = JSON.parse(localStorage.getItem(storageKey) || '{}'); } catch (_) { savedState = {}; }
   const apply = () => {

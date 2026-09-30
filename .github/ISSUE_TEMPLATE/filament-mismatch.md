@@ -10,7 +10,7 @@ assignees: []
 A clear, short description of the mismatch (what you expected vs. what you saw).
 
 ## Environment
-- OpenSpoolMan version / commit:
+- m0BamboSpool version / commit:
 - Deployment: ☐ Docker ☐ venv ☐ Helm/cluster ☐ Other
 - Browser (name/version):
 - `DISABLE_MISMATCH_WARNING` set?: ☐ Yes ☐ No

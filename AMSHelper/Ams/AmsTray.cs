@@ -2,7 +2,7 @@ using System;
 using AMSHelper.Diagnostics;
 using AMSHelper.Mqtt;
 using AMSHelper.Hardware;
-using AMSHelper.OpenSpoolMan;
+using AMSHelper.m0BamboSpool;
 
 namespace AMSHelper.Ams
 {
@@ -17,7 +17,7 @@ namespace AMSHelper.Ams
 
       private readonly BambuMqtt _mqtt;
       private readonly Pn532Device _pn532Device;
-      private readonly OpenSpoolManClient _openSpoolMan;
+      private readonly m0BamboSpoolClient _m0BamboSpool;
       private string _uid = string.Empty;
       private string _activity = "Unbekannt";
       private string _lastSummary = string.Empty;
@@ -29,11 +29,11 @@ namespace AMSHelper.Ams
       private bool _isTargetTray;
       private bool _nfcUidCapturedInCycle;
 
-      public AmsTray(int index, BambuMqtt mqtt, OpenSpoolManClient openSpoolMan)
+      public AmsTray(int index, BambuMqtt mqtt, m0BamboSpoolClient m0BamboSpool)
       {
          this.Index = index;
          _mqtt = mqtt;
-         _openSpoolMan = openSpoolMan;
+         _m0BamboSpool = m0BamboSpool;
          _pn532Device = new Pn532Device(index);
          _pn532Device.UidRead += this.Pn532UidRead;
 
@@ -295,9 +295,9 @@ namespace AMSHelper.Ams
          _occupied = occupied;
          if (!occupied)
          {
-            if (changed && _openSpoolMan != null)
+            if (changed && _m0BamboSpool != null)
             {
-               _openSpoolMan.ClearTray(this.Index);
+               _m0BamboSpool.ClearTray(this.Index);
             }
             _uid = string.Empty;
             _lastSummary = string.Empty;
@@ -376,9 +376,9 @@ namespace AMSHelper.Ams
          _nfcUidCapturedInCycle = true;
          _lastSummary = string.Empty;
          AmsTray.Write("[NFC] Tray " + this.Index + " UID=" + uid);
-         if (_openSpoolMan != null)
+         if (_m0BamboSpool != null)
          {
-            _openSpoolMan.AssignUid(this.Index, uid);
+            _m0BamboSpool.AssignUid(this.Index, uid);
          }
          this.StopNfcPolling();
          this.WriteSummaryIfStable();

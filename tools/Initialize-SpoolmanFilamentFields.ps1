@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Creates the OpenSpoolMan filament extra fields in Spoolman.
+  Creates the m0BamboSpool filament extra fields in Spoolman.
 
 .DESCRIPTION
   Spoolman manages extra-field definitions in its Settings UI. This script

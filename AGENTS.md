@@ -1,4 +1,4 @@
-# OpenSpoolMan / AMSHelper – verbindliche Arbeitsregeln
+# m0BamboSpool / AMSHelper – verbindliche Arbeitsregeln
 
 Diese Datei ist die einzige verbindliche Codex- und Entwicklerdokumentation unter
 den Solution Items. Ältere parallele Anleitungen dürfen keine abweichenden Regeln
@@ -6,7 +6,7 @@ enthalten.
 
 ## Repository, Branches und Arbeitsweise
 
-- Repository: `m0quai/openspoolman`.
+- Repository: `m0quai/m0BamboSpool`.
 - `dev` ist der aktuelle Entwicklungs- und Integrationsbranch.
 - `main` bleibt der stabile Branch.
 - Feature-Branches heißen ausschließlich `feature/<name>`.
@@ -43,9 +43,9 @@ Keine Force-Pushes und keine History-Rewrites ohne ausdrücklichen Auftrag.
   Kommentare verwenden.
 - Textdateien werden mit Windows-Zeilenenden (`CRLF`) gespeichert und beendet.
 
-## OpenSpoolMan
+## m0BamboSpool
 
-- OpenSpoolMan wird als eigener Fork gepflegt; Upstream ist `drndos/openspoolman`.
+- m0BamboSpool wird als eigener Fork gepflegt; Upstream ist `drndos/openspoolman`.
 - Änderungen möglichst updatefreundlich halten.
 - `app.py` nicht ändern, sofern es nicht ausdrücklich erforderlich und beauftragt
   ist. Eigene Erweiterungen gehören bevorzugt in `app_custom.py` sowie getrennte
@@ -53,7 +53,7 @@ Keine Force-Pushes und keine History-Rewrites ohne ausdrücklichen Auftrag.
 - Bestehende Trennung für Bambu-Authentifizierung (z. B. `bambu_auth.py`) achten.
 - Inventarzugriffe laufen über die allgemeine Repository-/Datenzugriffsschicht
   (`inventory_repository.py`); direkte API-Aufrufe in UI- oder Fachlogik vermeiden.
-- Die Spool-/UID-Zuordnung bleibt auf OpenSpoolMan-Seite; AMSHelper löst keine UID
+- Die Spool-/UID-Zuordnung bleibt auf m0BamboSpool-Seite; AMSHelper löst keine UID
   selbst in eine Spool-ID auf.
 - Weboberfläche und bestehende API-Verträge nicht ohne ausdrücklichen Auftrag
   inkompatibel ändern.
@@ -68,7 +68,7 @@ AMSHelper ist eine nanoFramework-Anwendung für ESP32-S3 und Bambu Lab P1S/AMS.
   Felder nicht als neue Werte interpretieren.
 - WLAN/Netzwerk bleibt eine eigene Komponente und gehört nicht in ein gemeinsames
   `Esp`-Objekt.
-- `OpenSpoolManClient` kapselt die Kommunikation mit OpenSpoolMan.
+- `m0BamboSpoolClient` kapselt die Kommunikation mit m0BamboSpool.
 - Vier `AmsTray`-Objekte repräsentieren Tray 0 bis 3.
 - Traybezogene PN532-/NFC-Logik gehört in bzw. hinter die Tray-Abstraktion.
 - Aktionen möglichst ereignis- oder statusgetrieben statt unnötigem Dauerpolling.
@@ -104,7 +104,7 @@ AMSHelper ist eine nanoFramework-Anwendung für ESP32-S3 und Bambu Lab P1S/AMS.
 
 - `if`-Anweisungen immer mit `{ }`, auch bei nur einer Anweisung.
 - Bestehende Namespace-/Ordnerstruktur respektieren (`Ams`, `Config`, `Diagnostics`,
-  `Hardware`, `Mqtt`, `Network`, `Nfc`, `OpenSpoolMan`).
+  `Hardware`, `Mqtt`, `Network`, `Nfc`, `m0BamboSpool`).
 - Vor neuen NuGet-Paketen die nanoFramework-Kompatibilität prüfen.
 - Keine Desktop-.NET-APIs verwenden, die nanoFramework nicht unterstützt.
 

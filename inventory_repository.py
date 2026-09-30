@@ -1,4 +1,4 @@
-# OpenSpoolMan's narrow data-access boundary for spool inventory.
+# m0BamboSpool's narrow data-access boundary for spool inventory.
 #
 # Application code should use this module instead of constructing SpoolMan API
 # requests or depending on SpoolMan's complete object model.  The implementation

@@ -1,0 +1,14 @@
+apiVersion: v2
+appVersion: 0.0.1
+description: A Helm chart for Kubernetes
+name: m0bambospool
+type: application
+version: 0.0.1
+dependencies:
+  - name: common
+    version: 25.1.7
+    repository: oci://tccr.io/truecharts
+    condition: ""
+    alias: ""
+    tags: []
+    import-values: []

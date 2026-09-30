@@ -7,7 +7,7 @@ from typing import Any
 
 
 class UiDateFormatter:
-    # Format stored OpenSpoolMan timestamps consistently for the UI.
+    # Format stored m0BamboSpool timestamps consistently for the UI.
 
     _FORMATS = {
         "de": "%d.%m.%Y %H:%M",

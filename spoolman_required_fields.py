@@ -51,7 +51,7 @@ def _raise_with_body(response):
 
 def ensure_required_spoolman_fields():
     api = _runtime_base_url() + "/api/v1"
-    print(f"[OpenSpoolMan] Checking required Spoolman fields via {api} ...")
+    print(f"[m0BamboSpool] Checking required Spoolman fields via {api} ...")
     try:
         for entity, definitions in REQUIRED_FIELDS.items():
             response = requests.get(f"{api}/field/{entity}", timeout=10)
@@ -62,7 +62,7 @@ def ensure_required_spoolman_fields():
             for definition in definitions:
                 key = definition["key"]
                 if key in keys:
-                    print(f"[OpenSpoolMan] [OK] {entity}/{key}")
+                    print(f"[m0BamboSpool] [OK] {entity}/{key}")
                     continue
 
                 # Spoolman creates an extra field via
@@ -85,11 +85,10 @@ def ensure_required_spoolman_fields():
                     timeout=10,
                 )
                 _raise_with_body(created)
-                print(f"[OpenSpoolMan] [CREATED] {entity}/{key}")
+                print(f"[m0BamboSpool] [CREATED] {entity}/{key}")
 
-        print("[OpenSpoolMan] Required Spoolman fields ready.")
+        print("[m0BamboSpool] Required Spoolman fields ready.")
         return True
     except Exception as exc:
-        print(f"[OpenSpoolMan] Required field check skipped/failed: {exc}")
+        print(f"[m0BamboSpool] Required field check skipped/failed: {exc}")
         return False
-

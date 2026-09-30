@@ -36,7 +36,7 @@ namespace AMSHelper.Config
             public static string MqttClientId => "AMSHelper-" + PrinterSerial;
         }
 
-        public static class OpenSpoolMan
+        public static class m0BamboSpool
         {
             public const string Host = "192.168.52.73";
             public const int Port = 8000;

@@ -198,10 +198,10 @@ def start_server(
     env.setdefault("FLASK_APP", "app_custom")
     env["FLASK_RUN_PORT"] = str(port)
     if live_read_only:
-        env["OPENSPOOLMAN_LIVE_READONLY"] = "1"
+        env["M0BAMBOSPOOL_LIVE_READONLY"] = "1"
     if print_history_db:
-        env["OPENSPOOLMAN_DATABASE_PATH"] = print_history_db
-    env.setdefault("OPENSPOOLMAN_BASE_URL", f"http://127.0.0.1:{port}")
+        env["M0BAMBOSPOOL_DATABASE_PATH"] = print_history_db
+    env.setdefault("M0BAMBOSPOOL_BASE_URL", f"http://127.0.0.1:{port}")
 
     process = subprocess.Popen(
         [sys.executable, "-m", "flask", "run", "--port", str(port), "--host", "0.0.0.0"],
@@ -254,7 +254,7 @@ def main() -> int:
     parser.add_argument(
         "--live-readonly",
         action="store_true",
-        help="Explicitly set OPENSPOOLMAN_LIVE_READONLY=1 when starting the Flask server",
+        help="Explicitly set M0BAMBOSPOOL_LIVE_READONLY=1 when starting the Flask server",
     )
     parser.add_argument("--allow-live-actions", action="store_true", help="Permit live mode to make state changes instead of running read-only")
     parser.add_argument(
@@ -289,7 +289,7 @@ def main() -> int:
             )
             wait_for_server(f"{base_url}/health")
         elif not args.allow_live_actions:
-            log("Live mode reminder: set OPENSPOOLMAN_LIVE_READONLY=1 on the target server to avoid state changes.")
+            log("Live mode reminder: set M0BAMBOSPOOL_LIVE_READONLY=1 on the target server to avoid state changes.")
 
         asyncio.run(capture_pages(base_url, jobs, color_scheme=color_scheme))
         return 0

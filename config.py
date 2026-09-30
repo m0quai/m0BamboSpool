@@ -8,16 +8,23 @@ from dotenv import load_dotenv
 # to printer and Spoolman credentials without manual exports.
 load_dotenv(Path(__file__).resolve().parent / "config.env")
 
-# Central OpenSpoolMan database configuration.
-DATABASE_TYPE = (os.getenv("OPENSPOOLMAN_DATABASE_TYPE") or "sqlite").strip().lower()
-DATABASE_NAME = (os.getenv("OPENSPOOLMAN_DATABASE_NAME") or "osm.db").strip()
+# Accept existing installations while using the new project prefix internally.
+for _legacy_name, _legacy_value in tuple(os.environ.items()):
+    if _legacy_name.startswith("OPENSPOOLMAN_"):
+        os.environ.setdefault(
+            "M0BAMBOSPOOL_" + _legacy_name[len("OPENSPOOLMAN_"):], _legacy_value
+        )
+
+# Central m0BamboSpool database configuration.
+DATABASE_TYPE = (os.getenv("M0BAMBOSPOOL_DATABASE_TYPE") or "sqlite").strip().lower()
+DATABASE_NAME = (os.getenv("M0BAMBOSPOOL_DATABASE_NAME") or "osm.db").strip()
 DATABASE_PATH_OVERRIDE = (
-    os.getenv("OPENSPOOLMAN_DATABASE_PATH")
-    or os.getenv("OPENSPOOLMAN_PRINT_HISTORY_DB")
+    os.getenv("M0BAMBOSPOOL_DATABASE_PATH")
+    or os.getenv("M0BAMBOSPOOL_PRINT_HISTORY_DB")
     or ""
 ).strip()
 if not DATABASE_NAME or Path(DATABASE_NAME).name != DATABASE_NAME:
-    raise ValueError("OPENSPOOLMAN_DATABASE_NAME must be a filename without a directory")
+    raise ValueError("M0BAMBOSPOOL_DATABASE_NAME must be a filename without a directory")
 DATABASE_PATH = (
     Path(DATABASE_PATH_OVERRIDE).expanduser().resolve()
     if DATABASE_PATH_OVERRIDE
@@ -47,7 +54,7 @@ def _env_to_int(name: str, default: int) -> int:
         return default
 
 
-BASE_URL = os.getenv("OPENSPOOLMAN_BASE_URL")  # Where will this app be accessible
+BASE_URL = os.getenv("M0BAMBOSPOOL_BASE_URL")  # Where will this app be accessible
 PRINTER_ID = (os.getenv("PRINTER_ID") or "").upper()  # Printer serial number - Run init_bambulab.py
 PRINTER_ACCESS_ONLINE = os.getenv("PRINTER_ACCESS_ONLINE") or ""  # Online/cloud printer access code
 PRINTER_ACCESS_LAN = os.getenv("PRINTER_ACCESS_LAN") or ""  # Local LAN/Developer Mode access code

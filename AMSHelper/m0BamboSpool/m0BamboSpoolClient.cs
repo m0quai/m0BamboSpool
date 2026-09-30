@@ -4,9 +4,9 @@ using System.Text;
 using AMSHelper.Config;
 using AMSHelper.Diagnostics;
 
-namespace AMSHelper.OpenSpoolMan
+namespace AMSHelper.m0BamboSpool
 {
-   public sealed class OpenSpoolManClient
+   public sealed class m0BamboSpoolClient
    {
       private readonly HttpClient _httpClient = new HttpClient();
 
@@ -27,14 +27,14 @@ namespace AMSHelper.OpenSpoolMan
 
       private bool SetTray(int trayIndex, string uid)
       {
-         if (string.IsNullOrEmpty(Configuration.OpenSpoolMan.BaseUrl))
+         if (string.IsNullOrEmpty(Configuration.m0BamboSpool.BaseUrl))
          {
             TraceWriter.WriteLine("[OSM] Host nicht konfiguriert.");
             return false;
          }
 
-         string url = Configuration.OpenSpoolMan.BaseUrl + "/ams/nfc/" + trayIndex.ToString() + "/set";
-         string json = "{\"uid\":\"" + OpenSpoolManClient.EscapeJson(uid) + "\"}";
+         string url = Configuration.m0BamboSpool.BaseUrl + "/ams/nfc/" + trayIndex.ToString() + "/set";
+         string json = "{\"uid\":\"" + m0BamboSpoolClient.EscapeJson(uid) + "\"}";
 
          try
          {

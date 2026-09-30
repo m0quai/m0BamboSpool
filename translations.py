@@ -1,4 +1,4 @@
-# User-interface translations for OpenSpoolMan.
+# User-interface translations for m0BamboSpool.
 #
 # Keep visible labels in this module so templates and routes do not contain
 # duplicated language dictionaries.
@@ -238,14 +238,14 @@ UI_TRANSLATIONS = {
         "3MF geladen": "3MF geladen",
         "3MF konnte nicht geladen werden": "3MF konnte nicht geladen werden",
         "Unbekannt": "Unbekannt",
-        "OpenSpoolMan": "m0BamboSpool",
-        "OpenSpoolMan Logo": "m0BamboSpool-Logo",
+        "m0BamboSpool": "m0BamboSpool",
+        "m0BamboSpool Logo": "m0BamboSpool-Logo",
         "Spool Details": "Spulendetails",
         "Spule ist bereits einem Fach zugeordnet": "Spule ist bereits einem Fach zugeordnet",
         "Ja": "Ja",
         "Nein": "Nein",
         "ID": "ID",
-        "Livebild nicht aktiv – OpenSpoolMan @ moquai": "Livebild nicht aktiv – m0BamboSpool @ moquai",
+        "Livebild nicht aktiv – m0BamboSpool @ moquai": "Livebild nicht aktiv – m0BamboSpool @ moquai",
         "Unbekannte Bambu-Labs Spule erkannt – entferne die aktuelle Zuordnung und verknüpfe sie mit SpoolMan.": "Unbekannte Bambu-Labs Spule erkannt – entferne die aktuelle Zuordnung und verknüpfe sie mit SpoolMan.",
     },
     "en": {
@@ -472,14 +472,14 @@ UI_TRANSLATIONS = {
         "3MF geladen": "3MF loaded",
         "3MF konnte nicht geladen werden": "3MF could not be loaded",
         "Unbekannt": "Unknown",
-        "OpenSpoolMan": "m0BamboSpool",
-        "OpenSpoolMan Logo": "m0BamboSpool logo",
+        "m0BamboSpool": "m0BamboSpool",
+        "m0BamboSpool Logo": "m0BamboSpool logo",
         "Spool Details": "Spool details",
         "Spule ist bereits einem Fach zugeordnet": "Spool is already assigned to a tray",
         "Ja": "Yes",
         "Nein": "No",
         "ID": "ID",
-        "Livebild nicht aktiv – OpenSpoolMan @ moquai": "Live view inactive – m0BamboSpool @ moquai",
+        "Livebild nicht aktiv – m0BamboSpool @ moquai": "Live view inactive – m0BamboSpool @ moquai",
         "Unbekannte Bambu-Labs Spule erkannt – entferne die aktuelle Zuordnung und verknüpfe sie mit SpoolMan.": "Unknown Bambu Lab spool detected – remove the current assignment and link it to SpoolMan."
     }
 }

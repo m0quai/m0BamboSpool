@@ -1,4 +1,4 @@
-# Custom OpenSpoolMan entry point; keeps local extensions outside upstream app.py.
+# Custom m0BamboSpool entry point; keeps local extensions outside upstream app.py.
 import os
 import logging
 import builtins
@@ -8,6 +8,7 @@ import struct
 import threading
 from pathlib import Path
 from datetime import datetime
+import config as _m0bambospool_config
 
 # Waitress' startup banner is informational and duplicates the application
 # startup log; retain warnings/errors while keeping normal container logs tidy.
@@ -15,10 +16,10 @@ logging.getLogger("waitress").setLevel(logging.WARNING)
 logging.getLogger("waitress.queue").setLevel(logging.ERROR)
 
 # ---------------------------------------------------------------------------
-# OpenSpoolMan / Spoolman URL split
+# m0BamboSpool / Spoolman URL split
 #
 # Public URLs are for links opened by the browser/host.
-# SPOOLMAN_INTERNAL_BASE_URL is only for OpenSpoolMan -> Spoolman API traffic.
+# SPOOLMAN_INTERNAL_BASE_URL is only for m0BamboSpool -> Spoolman API traffic.
 #
 # Missing values are written automatically to config.env. Existing values are
 # never overwritten.
@@ -26,7 +27,7 @@ logging.getLogger("waitress.queue").setLevel(logging.ERROR)
 _CONFIG_ENV = Path(__file__).resolve().parent / "config.env"
 _URL_DEFAULTS = {
     "HOST_IP": "localhost",
-    "OPENSPOOLMAN_BASE_PORT": "8000",
+    "M0BAMBOSPOOL_BASE_PORT": "8000",
     "SPOOLMAN_BASE_PORT": "7912",
     "SPOOLMAN_INTERNAL_BASE_URL": "http://spoolman:8000",
 }
@@ -49,6 +50,9 @@ def _ensure_url_config():
         _CONFIG_ENV.write_text("", encoding="utf-8")
 
     values = _read_config_env(_CONFIG_ENV)
+    for key in _URL_DEFAULTS:
+        if os.getenv(key):
+            values[key] = os.environ[key]
     missing = [(k, v) for k, v in _URL_DEFAULTS.items() if not values.get(k)]
 
     if missing:
@@ -56,7 +60,7 @@ def _ensure_url_config():
         with _CONFIG_ENV.open("a", encoding="utf-8") as f:
             if current and not current.endswith("\r\n"):
                 f.write("\r\n")
-            f.write("\r\n# OpenSpoolMan public/internal URLs (automatically added)\r\n")
+            f.write("\r\n# m0BamboSpool public/internal URLs (automatically added)\r\n")
             for key, value in missing:
                 f.write(f"{key}={value}\r\n")
                 values[key] = value
@@ -66,13 +70,13 @@ def _ensure_url_config():
 _url_config = _ensure_url_config()
 
 _host = _url_config.get("HOST_IP", _URL_DEFAULTS["HOST_IP"])
-_openspoolman_port = _url_config.get("OPENSPOOLMAN_BASE_PORT", _URL_DEFAULTS["OPENSPOOLMAN_BASE_PORT"])
+_m0bambospool_port = _url_config.get("M0BAMBOSPOOL_BASE_PORT", _URL_DEFAULTS["M0BAMBOSPOOL_BASE_PORT"])
 _spoolman_port = _url_config.get("SPOOLMAN_BASE_PORT", _URL_DEFAULTS["SPOOLMAN_BASE_PORT"])
 _SPOOLMAN_PUBLIC_BASE_URL = f"http://{_host}:{_spoolman_port}".rstrip("/")
 _SPOOLMAN_DOCKER_BASE_URL = _url_config.get(
     "SPOOLMAN_INTERNAL_BASE_URL", _SPOOLMAN_PUBLIC_BASE_URL
 ).rstrip("/")
-_OPENSPOOLMAN_PUBLIC_BASE_URL = f"http://{_host}:{_openspoolman_port}".rstrip("/")
+_M0BAMBOSPOOL_PUBLIC_BASE_URL = f"http://{_host}:{_m0bambospool_port}".rstrip("/")
 
 def _running_inside_docker():
     if Path("/.dockerenv").exists():
@@ -110,26 +114,25 @@ _SPOOLMAN_RUNTIME_BASE_URL = (
     else _SPOOLMAN_PUBLIC_BASE_URL
 )
 
-os.environ["OPENSPOOLMAN_BASE_URL"] = _OPENSPOOLMAN_PUBLIC_BASE_URL
+os.environ["M0BAMBOSPOOL_BASE_URL"] = _M0BAMBOSPOOL_PUBLIC_BASE_URL
 os.environ["SPOOLMAN_BASE_URL"] = _SPOOLMAN_RUNTIME_BASE_URL
 
 from app import app
 
 os.environ["SPOOLMAN_BASE_URL"] = _SPOOLMAN_PUBLIC_BASE_URL
 
-import config as _openspoolman_config
-import app as _openspoolman_app_module
+import app as _m0bambospool_app_module
 
-_openspoolman_config.SPOOLMAN_BASE_URL = _SPOOLMAN_PUBLIC_BASE_URL
-_openspoolman_config.SPOOLMAN_INTERNAL_BASE_URL = _SPOOLMAN_DOCKER_BASE_URL
-_openspoolman_config.SPOOLMAN_RUNTIME_BASE_URL = _SPOOLMAN_RUNTIME_BASE_URL
-_openspoolman_config.SPOOLMAN_API_URL = f"{_SPOOLMAN_RUNTIME_BASE_URL}/api/v1"
-_openspoolman_app_module.SPOOLMAN_BASE_URL = _SPOOLMAN_PUBLIC_BASE_URL
+_m0bambospool_config.SPOOLMAN_BASE_URL = _SPOOLMAN_PUBLIC_BASE_URL
+_m0bambospool_config.SPOOLMAN_INTERNAL_BASE_URL = _SPOOLMAN_DOCKER_BASE_URL
+_m0bambospool_config.SPOOLMAN_RUNTIME_BASE_URL = _SPOOLMAN_RUNTIME_BASE_URL
+_m0bambospool_config.SPOOLMAN_API_URL = f"{_SPOOLMAN_RUNTIME_BASE_URL}/api/v1"
+_m0bambospool_app_module.SPOOLMAN_BASE_URL = _SPOOLMAN_PUBLIC_BASE_URL
 
 # Upstream only recognizes the base material PLA.  Keep the concrete PLA+
 # material in Spoolman while using a safe PLA range when no per-filament
 # nozzle-temperature extra field has been maintained.
-_original_generate_filament_temperatures = _openspoolman_app_module.generate_filament_temperatures
+_original_generate_filament_temperatures = _m0bambospool_app_module.generate_filament_temperatures
 
 def _generate_filament_temperatures_with_pla_plus(filament_type, filament_brand):
     normalized = str(filament_type or "").strip().upper().replace(" ", "")
@@ -137,11 +140,11 @@ def _generate_filament_temperatures_with_pla_plus(filament_type, filament_brand)
         return {"filament_min_temp": 190, "filament_max_temp": 240}
     return _original_generate_filament_temperatures(filament_type, filament_brand)
 
-_openspoolman_app_module.generate_filament_temperatures = _generate_filament_temperatures_with_pla_plus
+_m0bambospool_app_module.generate_filament_temperatures = _generate_filament_temperatures_with_pla_plus
 
 
 def _readonly_augment_tray(spool_list, tray_data, ams_id, tray_id):
-    _openspoolman_app_module.augmentTrayDataWithSpoolMan(
+    _m0bambospool_app_module.augmentTrayDataWithSpoolMan(
         spool_list, tray_data, ams_id, tray_id
     )
     # The upstream warning is based on transient/incomplete AMS material
@@ -190,7 +193,7 @@ def _readonly_augment_tray(spool_list, tray_data, ams_id, tray_id):
                 tray_data["ams_material_missing_message"] = ""
             return
 
-_openspoolman_app_module._augment_tray = _readonly_augment_tray
+_m0bambospool_app_module._augment_tray = _readonly_augment_tray
 
 
 if not app.secret_key:
@@ -236,7 +239,7 @@ from logger import log as _log
 spool_data.install_spoolman_compatibility_adapter()
 try:
     # Keep the local administration schema available even while Spoolman remains active.
-    spool_data._spoolman_api.SPOOLMAN_API_URL = _openspoolman_config.SPOOLMAN_API_URL
+    spool_data._spoolman_api.SPOOLMAN_API_URL = _m0bambospool_config.SPOOLMAN_API_URL
     spool_data.ensure_local_catalog()
 except Exception as exc:
     _log(f"Local inventory schema initialization failed: {exc!r}")
@@ -259,11 +262,11 @@ _AMS_REFRESH_MIN_INTERVAL_SECONDS = 5.0
 # upstream history view derives progress from layer counts, which can differ
 # noticeably for jobs with variable layer durations.  Enrich the rendered
 # history data in the custom entry point without modifying app.py.
-_openspoolman_app_module.LAYER_TRACKING_STATUS_DISPLAY.update({
+_m0bambospool_app_module.LAYER_TRACKING_STATUS_DISPLAY.update({
     "PREPARING": ("Preparing", "info"),
     "PAUSED": ("Paused", "secondary"),
 })
-_original_app_render_template = _openspoolman_app_module.render_template
+_original_app_render_template = _m0bambospool_app_module.render_template
 
 def _render_template_with_printer_progress(template_name, *args, **kwargs):
     if template_name == "print_history.html":
@@ -305,7 +308,7 @@ def _render_template_with_printer_progress(template_name, *args, **kwargs):
                 tracking["last_usage_event_at"] = row.get("last_usage_event_at")
     return _original_app_render_template(template_name, *args, **kwargs)
 
-_openspoolman_app_module.render_template = _render_template_with_printer_progress
+_m0bambospool_app_module.render_template = _render_template_with_printer_progress
 
 _UI_TRANSLATIONS = {
         "de": {"Home":"Home", "History":"History", "LiveCam":"LiveCam", "Inventory":"Inventar", "Settings":"Settings", "SpoolMan":"SpoolMan", "Spool":"Spule", "Hersteller":"Hersteller", "Material":"Material", "Filament":"Filament", "Farbe":"Farbe", "Restgewicht":"Restgewicht", "Drucke":"Drucke", "Alle":"Alle", "Status":"Status", "ausgewählt":"ausgewählt", "Datum":"Datum", "Auftrag":"Auftrag", "Verbrauch":"Verbrauch", "Ohne Namen":"Ohne Namen", "ungebraucht":"ungebraucht", "Keine Spulen gefunden":"Keine Spulen gefunden", "Sprache":"Sprache", "Deutsch":"Deutsch", "Englisch":"Englisch", "Speichern":"Speichern", "Print history":"Druckhistorie", "Jetzt aktualisieren":"Jetzt aktualisieren", "Druckname":"Druckname", "Aktive anzeigen":"Aktive anzeigen", "Gelöschte anzeigen":"Gelöschte anzeigen", "Previous":"Zurück", "Next":"Weiter", "Page":"Seite", "of":"von", "Abmelden":"Abmelden", "Drucker übernehmen":"Drucker übernehmen", "Code bestätigen":"Code bestätigen", "Bei Bambu anmelden":"Bei Bambu anmelden", "Drucker Verbindung":"Drucker Verbindung", "Verbindungsmodus":"Verbindungsmodus", "Lokaler LAN-Modus":"Lokaler LAN-Modus", "Online-Authentifizierung":"Online-Authentifizierung", "Direkte Verbindung zum Drucker im lokalen Netzwerk.":"Direkte Verbindung zum Drucker im lokalen Netzwerk.", "Drucker-IP":"Drucker-IP", "Seriennummer":"Seriennummer", "Druckername":"Druckername", "Printer Access LAN":"Printer Access LAN", "Drucker auswählen":"Drucker auswählen", "Keine gebundenen Drucker zurückgegeben.":"Keine gebundenen Drucker zurückgegeben."},
@@ -665,7 +668,7 @@ def home_status():
 @app.route("/ams")
 def ams():
     # Keep the AMS tray dashboard available under its explicit menu name.
-    return _openspoolman_app_module.home()
+    return _m0bambospool_app_module.home()
 
 
 @app.route("/about")
@@ -737,7 +740,7 @@ def home_state():
     return jsonify(_current_printer_status_payload())
 
 
-def _load_openspoolman_version():
+def _load_m0bambospool_version():
     from pathlib import Path
     import re
     version_file = Path(__file__).resolve().parent / "__version__.py"
@@ -798,11 +801,11 @@ def _printer_status_code():
 
 
 @app.context_processor
-def inject_openspoolman_version():
+def inject_m0bambospool_version():
     pending_nfc = nfc_pending_repository.has_pending_tags()
     return {
-        "openspoolman_version": _load_openspoolman_version(),
-        "openspoolman_build_number": _runtime_build_number,
+        "m0bambospool_version": _load_m0bambospool_version(),
+        "m0bambospool_build_number": _runtime_build_number,
         "printer_temperatures": _printer_temperature_status(),
         "printer_ams_environment": _ams_environment_status(),
         "printer_status": _ui_text(_printer_status_code()),
@@ -1192,7 +1195,7 @@ def _custom_tray_clear():
     if ams_id is None or tray_id is None:
         return render_template("error.html", exception="Missing AMS ID or Tray ID.")
 
-    if getattr(_openspoolman_app_module, "READ_ONLY_MODE", False):
+    if getattr(_m0bambospool_app_module, "READ_ONLY_MODE", False):
         return render_template(
             "error.html",
             exception="Live read-only mode: clearing tray assignments is disabled.",
@@ -1223,7 +1226,7 @@ def _custom_tray_clear():
             url_for(
                 "home",
                 success_message=(
-                    f"Tray cleared in OpenSpoolMan and on printer for AMS {ams_id}, "
+                    f"Tray cleared in m0BamboSpool and on printer for AMS {ams_id}, "
                     f"Tray {int(tray_id) + 1}."
                 ),
             )
@@ -1270,9 +1273,9 @@ def _block_mutating_tray_actions_while_pending():
     return None
 
 
-_original_set_active_spool = _openspoolman_app_module.setActiveSpool
+_original_set_active_spool = _m0bambospool_app_module.setActiveSpool
 _original_builtin_print = builtins.print
-_original_upstream_log = getattr(_openspoolman_app_module, "log", None)
+_original_upstream_log = getattr(_m0bambospool_app_module, "log", None)
 
 def _quiet_upstream_log(*args, **kwargs):
     # Suppress the verbose raw AMS command dump from upstream app.py.
@@ -1285,12 +1288,12 @@ def _quiet_upstream_log(*args, **kwargs):
     return None
 
 if _original_upstream_log is not None:
-    _openspoolman_app_module.log = _quiet_upstream_log
+    _m0bambospool_app_module.log = _quiet_upstream_log
 
 def _quiet_upstream_ams_print(*args, **kwargs):
     # Suppress legacy AMS detail dumps emitted by upstream app.py.
     text = " ".join(str(arg) for arg in args).lstrip()
-    if text.startswith("[OpenSpoolMan] AMS Fill v2:") or text.startswith("{'print':"):
+    if text.startswith("[m0BamboSpool] AMS Fill v2:") or text.startswith("{'print':"):
         return None
     return _original_builtin_print(*args, **kwargs)
 
@@ -1317,7 +1320,7 @@ def _set_active_spool_bambu_compatible(ams_id, tray_id, spool_data):
     inventory_service.SPOOLS = []
     return result
 
-_openspoolman_app_module.setActiveSpool = _set_active_spool_bambu_compatible
+_m0bambospool_app_module.setActiveSpool = _set_active_spool_bambu_compatible
 
 
 _original_mqtt_publish = mqtt_bambulab.publish

@@ -2,7 +2,7 @@
 
 > Einstieg: [START.md](../START.md) · Entscheidungen: [Design](../../DESIGN.md)
 
-Die NFC-Lösung verbindet Bambu-AMS-Slots über ESP32-S3 und NTAG215 mit OpenSpoolMan/Spoolman.
+Die NFC-Lösung verbindet Bambu-AMS-Slots über ESP32-S3 und NTAG215 mit m0BamboSpool/Spoolman.
 
 ## Festgelegtes Modell
 
@@ -11,7 +11,7 @@ Die NFC-Lösung verbindet Bambu-AMS-Slots über ESP32-S3 und NTAG215 mit OpenSpo
 - Hardware-UID ist die stabile Identität.
 - Bei einem neuen/leeren Tag wird NDEF geprüft und einmalig eine URL mit unveränderlicher UID geschrieben, z. B. `/nfc/<UID>`.
 - UID und URL bleiben bei späterer Wiederverwendung unverändert.
-- UID→Spule-Zuordnung liegt ausschließlich serverseitig in OpenSpoolMan/Spoolman.
+- UID→Spule-Zuordnung liegt ausschließlich serverseitig in m0BamboSpool/Spoolman.
 - Das iPhone öffnet die URL direkt vom NFC-Tag.
 - AMSHelper meldet NFC-UID und AMS-Slot sowie den Zustand „Tray leer“.
 - AMSHelper führt keine Spool-ID-Auflösung durch.

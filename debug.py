@@ -1,4 +1,4 @@
-# Local debug entry point for the OpenSpoolMan custom application.
+# Local debug entry point for the m0BamboSpool custom application.
 from app_custom import app
 
 if __name__ == "__main__":

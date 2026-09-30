@@ -1,4 +1,4 @@
-# OpenSpoolMan JSON API
+# m0BamboSpool JSON API
 
 > Einstieg: [START.md](../START.md)
 

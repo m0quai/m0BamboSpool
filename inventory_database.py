@@ -1,4 +1,4 @@
-"""Local, normalized spool inventory stored in the shared OpenSpoolMan DB."""
+"""Local, normalized spool inventory stored in the shared m0BamboSpool DB."""
 
 import sqlite3
 from datetime import datetime, timezone

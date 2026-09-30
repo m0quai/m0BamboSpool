@@ -125,7 +125,7 @@ jobs:
 
       - name: Package Helm chart(s)
         run: |
-          CHART_DIR="helm/openspoolman"
+          CHART_DIR="helm/m0bambospool"
 
           # Get chart name from Chart.yaml
           CHART_NAME=$(helm show chart "$CHART_DIR" | grep '^name:' | awk '{print $2}')
@@ -149,7 +149,7 @@ jobs:
 
       - name: Push Helm chart(s) to GHCR
         run: |
-          CHART_NAME=$(helm show chart helm/openspoolman | grep '^name:' | awk '{print $2}')
+          CHART_NAME=$(helm show chart helm/m0bambospool | grep '^name:' | awk '{print $2}')
 
           # Push main chart
           MAIN_FILE="${CHART_NAME}-${CHART_VERSION}.tgz"

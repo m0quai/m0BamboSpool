@@ -462,7 +462,7 @@ def get_active_3mf_print_id():
 
 
 def _reconcile_completed_printer_job(print_data: dict) -> None:
-  # Recover a completed job after OpenSpoolMan was offline during its finish.
+  # Recover a completed job after m0BamboSpool was offline during its finish.
   state = str(print_data.get("gcode_state") or "").upper()
   try:
     percent = float(print_data.get("mc_percent"))
@@ -1137,7 +1137,7 @@ def clear_ams_tray_assignment(ams_id, tray_id):
   #
   #   The P1/P1S can publish sparse/stale tray values after a write.  Therefore a
   #   successful Clear must invalidate the confirmed-material cache immediately so
-  #   the OpenSpoolMan header does not continue to show the previous material while
+  #   the m0BamboSpool header does not continue to show the previous material while
   #   we wait for the printer's next status packet.
   global LAST_CONFIRMED_AMS_FILAMENT_SETTINGS, LAST_AMS_CONFIG
 
@@ -1194,7 +1194,7 @@ def _merge_ams_status(incoming_ams):
   #   During RFID/material reads the printer sends tray objects such as
   #   ``{"id": "3"}`` or omits trays entirely.  Replacing the complete snapshot
   #   with that payload makes a still-loaded tray look empty and used to delete
-  #   the OpenSpoolMan ``active_tray`` assignment.  Fields explicitly present in
+  #   the m0BamboSpool ``active_tray`` assignment.  Fields explicitly present in
   #   a complete update still replace the cached values, including explicit empty
   #   values after a real Clear operation.
   previous_ams = {
@@ -1577,7 +1577,7 @@ def on_message(client, userdata, msg):
 
             if not tray_uuid or tray_uuid == zero_uuid:
               # Third-party/non-RFID spool: Bambu cannot identify the physical spool.
-              # OpenSpoolMan can, because Fill/assignment stores its tray in Spoolman's
+              # m0BamboSpool can, because Fill/assignment stores its tray in Spoolman's
               # active_tray extra field. Prefer that authoritative assignment.
               active_tray = json.dumps(f"{PRINTER_ID}_{ams['id']}_{tray['id']}")
               for spool in spool_list:
@@ -1624,7 +1624,7 @@ def on_message(client, userdata, msg):
               tray["issue"] = True
 
               # Read-only AMS synchronization:
-              # Never clear either the printer material or OpenSpoolMan's assignment
+              # Never clear either the printer material or m0BamboSpool's assignment
               # merely because this push_status has no/mismatched Bambu RFID UUID.
               # Fill and explicit Clear are the only operations allowed to mutate a tray.
               pass
