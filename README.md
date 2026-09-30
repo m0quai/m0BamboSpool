@@ -73,8 +73,13 @@ werden ausschließlich über `config.env` beziehungsweise
 `config.env.template` bereitgestellt.
 
 ```powershell
+Set-Location C:\Development\Docker\m0BamboSpool
 docker compose up -d --build
 ```
+
+Projektspezifische Konfigurationsschlüssel verwenden `M0BAMBOSPOOL_`.
+Bestehende Schlüssel mit dem früheren Präfix werden weiterhin akzeptiert;
+explizit gesetzte neue Schlüssel haben Vorrang.
 
 Danach ist die Oberfläche unter [http://localhost:8000](http://localhost:8000)
 erreichbar. Der Container heißt `m0BamboSpool`.

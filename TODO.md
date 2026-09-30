@@ -29,6 +29,14 @@ Erledigte Punkte werden entfernt und nicht als erledigt weitergeführt.
 - Inventar-Links zu Spool, Hersteller und Filament mit den jeweiligen Spoolman-IDs testen.
 - Mehrsprachigkeit auf allen Seiten und bei allen sichtbaren Buttons vollständig prüfen.
 
+## Eigene Verwaltung / Spulenbestand
+
+- Die am 30.09.2026 in der Inventaransicht dargestellten Spulen in die eigene
+  Verwaltung übernehmen. Bestehende Spulen-IDs, Filament-/Herstellerdaten,
+  Restgewichte und AMS-Zuordnungen erhalten.
+- Zugeordnete Drucke mit Datum, Verbrauch und Auftrag weiter bei der jeweiligen
+  Spule anzeigen. Bei der Übernahme keine Verbrauchsbuchungen erneut ausführen.
+
 ## Wartung / Betrieb
 
 - Docker-Log-Leerung beim Recreate dokumentieren und prüfen.
