@@ -48,7 +48,7 @@ from print_history import (
   find_open_print_for_printer_job,
   get_filament_usage_for_reconciliation,
   mark_print_reconciled,
-  set_estimated_duration_if_missing,
+  set_estimated_duration_from_remaining,
   update_printer_job_status,
   update_latest_printer_job_status,
   get_layer_tracking_for_prints,
@@ -99,6 +99,7 @@ _AMS_STATUS_FIELDS = (
 
 PRINTER_STATE = {}
 PRINTER_STATE_LAST = {}
+PRINTER_STATE_LAST_UPDATE_AT = None
 
 PENDING_PRINT_METADATA = {}
 ACTIVE_3MF_PRINTS = {}
@@ -350,8 +351,14 @@ def _on_3mf_job_complete(job_key, local_path, metadata, error):
   PENDING_PRINT_METADATA = metadata
   if metadata.get("image"):
     update_print_image(job["print_id"], metadata["image"])
-  if metadata.get("model_name"):
-    update_print_file_name(job["print_id"], metadata["model_name"])
+  display_name = (
+    metadata.get("source_file_name")
+    or metadata.get("snapshot_name")
+    or metadata.get("subtask_name")
+    or metadata.get("model_name")
+  )
+  if display_name:
+    update_print_file_name(job["print_id"], display_name)
 
   # Create/enrich usage rows before the tracker binds physical spools.
   for filament_id, filament in (metadata.get("filaments") or {}).items():
@@ -423,6 +430,8 @@ def _queue_3mf_job(print_data):
       "task_id": print_data.get("task_id"),
       "subtask_id": print_data.get("subtask_id"),
       "print_type": print_data.get("print_type"),
+      "snapshot_name": print_data.get("snapshot_name") or print_data.get("subtask_name"),
+      "subtask_name": print_data.get("subtask_name"),
       "ams_mapping": [mapping_value],
       "use_ams": mapping_value != EXTERNAL_SPOOL_ID,
       "file": os.path.basename(str(print_data.get("gcode_file") or print_data.get("url") or file_name).replace("\\", "/")),
@@ -475,10 +484,8 @@ def _reconcile_completed_printer_job(print_data: dict) -> None:
     # already aborted or failed.  Bambu reuses task/subtask keys and filenames,
     # so status is the final guard against cross-job completion.
     if candidate.get("status") not in {"PREPARING", "RUNNING", "PAUSED"}:
-      log(
-        f"[filament-tracker] Abschluss-Recovery übersprungen: Print "
-        f"{candidate.get('id')} steht bereits auf {candidate.get('status')}"
-      )
+      # Terminal jobs are intentionally ignored. FINISH packets repeat until
+      # the printer changes state, so logging this guard would flood the log.
       return
     print_id = int(candidate["id"])
     usage_rows = get_filament_usage_for_reconciliation(print_id)
@@ -642,11 +649,12 @@ def map_filament(tray_tar):
   return False
   
 def processMessage(data):
-  global LAST_AMS_CONFIG, PRINTER_STATE, PRINTER_STATE_LAST, PENDING_PRINT_METADATA
+  global LAST_AMS_CONFIG, PRINTER_STATE, PRINTER_STATE_LAST, PENDING_PRINT_METADATA, PRINTER_STATE_LAST_UPDATE_AT
 
    # Prepare AMS spending estimation
   if "print" in data:
     incoming_print = data.get("print", {})
+    PRINTER_STATE_LAST_UPDATE_AT = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     update_dict(PRINTER_STATE, data)
     if incoming_print.get("command") == "stop" and incoming_print.get("result") == "success":
       PRINTER_STATE.setdefault("print", {})["gcode_state"] = "STOP"
@@ -683,7 +691,7 @@ def processMessage(data):
         except (TypeError, ValueError):
           remaining_minutes = None
         if remaining_minutes is not None and remaining_minutes > 0:
-          set_estimated_duration_if_missing(active_job["print_id"], remaining_minutes)
+          set_estimated_duration_from_remaining(active_job["print_id"], remaining_minutes)
     try:
       current_percent = float(current_print.get("mc_percent"))
     except (TypeError, ValueError):

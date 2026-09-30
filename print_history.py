@@ -237,7 +237,8 @@ def update_print_file_name(print_id: int, file_name: str) -> None:
         return
     conn = connect_database(db_config["db_path"])
     conn.execute(
-        "UPDATE prints SET file_name = ?, file_name_source = 'model' WHERE id = ?",
+        "UPDATE prints SET file_name = ?, file_name_source = 'model' "
+        "WHERE id = ? AND file_name_source NOT IN ('metadata', 'manual')",
         (str(file_name).strip(), print_id),
     )
     conn.commit()
@@ -369,15 +370,25 @@ def get_filament_usage_for_reconciliation(print_id: int) -> list[dict]:
     return [dict(row) for row in rows]
 
 
-def set_estimated_duration_if_missing(print_id: int, minutes: float) -> None:
-    if print_id is None or minutes <= 0:
+def set_estimated_duration_from_remaining(print_id: int, remaining_minutes: float) -> None:
+    if print_id is None or remaining_minutes <= 0:
         return
     conn = connect_database(db_config["db_path"])
+    row = conn.execute(
+        "SELECT print_date FROM prints WHERE id = ?",
+        (int(print_id),),
+    ).fetchone()
+    elapsed_minutes = 0.0
+    if row and row[0]:
+        try:
+            started_at = datetime.fromisoformat(str(row[0]))
+            elapsed_minutes = max((datetime.now() - started_at).total_seconds() / 60.0, 0.0)
+        except ValueError:
+            elapsed_minutes = 0.0
+    estimated_total = max(float(remaining_minutes) + elapsed_minutes, float(remaining_minutes))
     conn.execute(
-        """UPDATE print_layer_tracking
-           SET estimated_duration_minutes = ?
-           WHERE print_id = ? AND estimated_duration_minutes IS NULL""",
-        (float(minutes), int(print_id)),
+        "UPDATE print_layer_tracking SET estimated_duration_minutes = ? WHERE print_id = ?",
+        (estimated_total, int(print_id)),
     )
     conn.commit()
     conn.close()

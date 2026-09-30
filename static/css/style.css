@@ -349,7 +349,9 @@ main.container {
     box-shadow: inset 0 0 0 1px rgba(0,0,0,.08);
 }
 .inventory-table {
-    min-width: 1120px;
+    width: 100%;
+    min-width: 0;
+    table-layout: fixed;
     margin-bottom: 0;
     border: 1px solid var(--bs-border-color);
     border-collapse: separate;
@@ -366,16 +368,20 @@ main.container {
 .inventory-table tbody tr:last-child > * { border-bottom: 0; }
 .inventory-table tbody tr > td { vertical-align: top; }
 .inventory-table thead th { background: var(--bs-tertiary-bg); white-space: nowrap; }
-.inventory-table thead th:nth-child(1) { width: 90px; }
-.inventory-table thead th:nth-child(2) { width: 150px; }
-.inventory-table thead th:nth-child(3) { width: 130px; }
-.inventory-table thead th:nth-child(4) { min-width: 260px; }
-.inventory-table thead th:nth-child(5) { width: 140px; }
-.inventory-table thead th:nth-child(6) { width: 130px; }
-.inventory-table thead th:nth-child(7) { width: 140px; }
-.inventory-table thead th:nth-child(8) { min-width: 300px; }
-.inventory-table.inventory-no-status thead th:nth-child(6) { width: 140px; }
-.inventory-table.inventory-no-status thead th:nth-child(7) { min-width: 300px; }
+.inventory-table thead th:nth-child(1) { width: 7%; }
+.inventory-table thead th:nth-child(2) { width: 12%; }
+.inventory-table thead th:nth-child(3) { width: 11%; }
+.inventory-table thead th:nth-child(4) { width: 17%; }
+.inventory-table thead th:nth-child(5) { width: 10%; }
+.inventory-table.inventory-has-status thead th:nth-child(6) { width: 9%; }
+.inventory-table.inventory-has-status thead th:nth-child(7) { width: 11%; }
+.inventory-table.inventory-has-status thead th:nth-child(8) { width: 14%; }
+.inventory-table.inventory-has-status thead th:nth-child(9) { width: 9%; }
+.inventory-table.inventory-no-status thead th:nth-child(6) { width: 12%; }
+.inventory-table.inventory-no-status thead th:nth-child(7) { width: 16%; }
+.inventory-table.inventory-no-status thead th:nth-child(8) { width: 15%; }
+.inventory-table tbody td { overflow-wrap: anywhere; }
+.inventory-table-container { width: 100%; overflow-x: hidden; }
 .inventory-color-code {
     display: inline-block;
     min-width: 68px;
@@ -404,7 +410,8 @@ main.container {
 .inventory-table td:last-child { text-align: left; }
 .inventory-print-table thead th { background: transparent; font-size: .8rem; }
 .inventory-print-details summary { cursor: pointer; color: var(--bs-primary); }
-.inventory-print-details[open] { min-width: 520px; }
+.inventory-print-details[open] { width: 100%; }
+.inventory-print-table { width: 100%; table-layout: fixed; }
 .inventory-filter-menu.show {
     position: fixed !important;
     transform: none !important;

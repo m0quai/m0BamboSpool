@@ -49,28 +49,37 @@ function initThumbnailHover() {
 }
 function initPrintHistoryRefresh() {
   const forceButton = document.getElementById('print-history-refresh-now');
-  const forceButtonLabel = document.getElementById('print-history-refresh-label');
-  const refreshNowText = {{ _('Jetzt aktualisieren')|tojson }};
-  const refreshCountdownTemplate = {{ _('Jetzt aktualisieren – nächste Aktualisierung in {seconds} s')|tojson }};
-  const hasActivePrint = {{ 'true' if active_print_id else 'false' }};
-  if (!hasActivePrint) {
-    if (forceButtonLabel) forceButtonLabel.textContent = refreshNowText;
-    forceButton?.addEventListener('click', () => window.location.reload());
-    return;
-  }
-  const intervalSeconds = 15;
-  let remaining = intervalSeconds;
-  const updateStatus = () => {
-    if (forceButtonLabel) forceButtonLabel.textContent = refreshCountdownTemplate.replace('{seconds}', remaining);
+  const refresh = async () => {
+    if (window.historyRefreshInFlight) return;
+    window.historyRefreshInFlight = true;
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set('_', Date.now());
+      const response = await fetch(url, { cache: 'no-store', headers: { 'Accept': 'text/html' } });
+      if (!response.ok) return;
+      const documentText = await response.text();
+      const parsed = new DOMParser().parseFromString(documentText, 'text/html');
+      const current = document.getElementById('history-live-content');
+      const incoming = parsed.getElementById('history-live-content');
+      if (!current || !incoming) return;
+      current.replaceWith(incoming);
+      document.getElementById('print-history-refresh-now')?.addEventListener('click', refresh);
+      initThumbnailHover();
+      initHistoryCollapsePersistence();
+      initHistoryTableControls();
+      formatExpectedEnd();
+      formatActualEnd();
+      formatPrintDurations();
+      formatEstimatedPrintDurations();
+      adjustPrintImages();
+    } finally {
+      window.historyRefreshInFlight = false;
+    }
   };
-  updateStatus();
+  forceButton?.addEventListener('click', refresh);
   window.setInterval(() => {
-    if (document.visibilityState !== 'visible') return;
-    remaining -= 1;
-    if (remaining <= 0) { window.location.reload(); return; }
-    updateStatus();
-  }, 1000);
-  forceButton?.addEventListener('click', () => window.location.reload());
+    if (document.visibilityState === 'visible') refresh();
+  }, 5000);
 }
 function initHistoryCollapsePersistence() {
   const key = 'openspoolman-history-open';
@@ -288,10 +297,11 @@ window.addEventListener('load', formatActualEnd);
 window.addEventListener('load', formatPrintDurations);
 window.addEventListener('load', formatEstimatedPrintDurations);
 </script>
+<div id="history-live-content">
 <h1 class="mb-4 text-center">{{ _('Print history') }}</h1>
 <div class="d-flex justify-content-center align-items-center gap-3 mb-3">
   <button id="print-history-refresh-now" type="button" class="btn btn-sm btn-primary rounded-pill px-2 py-1">
-    <i class="bi bi-arrow-clockwise me-1"></i><span id="print-history-refresh-label">{% if active_print_id %}{{ _('Jetzt aktualisieren – nächste Aktualisierung in {seconds} s').replace('{seconds}', '15') }}{% else %}{{ _('Jetzt aktualisieren') }}{% endif %}</span>
+    <i class="bi bi-arrow-clockwise me-1"></i><span id="print-history-refresh-label">{{ _('Jetzt aktualisieren') }}</span>
   </button>
   {% if has_deleted_prints %}<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('print_history', show_deleted=0 if show_deleted else 1) }}">{{ _('Aktive anzeigen') if show_deleted else _('Gelöschte anzeigen') }}</a>{% endif %}
 </div>
@@ -315,4 +325,5 @@ window.addEventListener('load', formatEstimatedPrintDurations);
 {% else %}
   <div class="text-center text-body-secondary py-5"><p class="mb-0 fs-5">{{ _('Keine Historie vorhanden.') }}</p></div>
 {% endif %}
+</div>
 {% endblock %}

@@ -9,8 +9,10 @@ import re
 import time
 import io
 import json
+import hashlib
 from datetime import datetime
 import config as app_config
+from database import delete_runtime_metadata, get_runtime_metadata, set_runtime_metadata
 from urllib.parse import urlparse
 from logger import log
 
@@ -19,6 +21,29 @@ _BBL_PATH_CACHE = {}
 FTP_LOW_SPEED_LIMIT = 1024
 FTP_LOW_SPEED_TIME = 120
 FTP_RECEIVE_BUFFER_SIZE = 512 * 1024
+RUNTIME_METADATA_NAMESPACE = "printer_3mf_paths"
+
+
+def thumbnail_filename(print_name: str | None, fallback: str = "print") -> str:
+    # Keep thumbnail files aligned with the user-facing print filename.
+    value = os.path.basename(str(print_name or "").replace("\\", "/"))
+    stem = os.path.splitext(value)[0].strip()
+    stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", stem)
+    stem = re.sub(r"\s+", " ", stem).strip(" .")
+    if not stem:
+        stem = fallback
+    return f"{stem[:180]}.png"
+
+
+def available_thumbnail_filename(print_name: str | None, image_dir: str, fallback: str = "print") -> str:
+    # Avoid overwriting an older print that has the same user-facing name.
+    candidate = thumbnail_filename(print_name, fallback)
+    stem, extension = os.path.splitext(candidate)
+    counter = 2
+    while os.path.exists(os.path.join(image_dir, candidate)):
+        candidate = f"{stem}_{counter}{extension}"
+        counter += 1
+    return candidate
 
 
 class DownloadCancelledError(RuntimeError):
@@ -106,6 +131,25 @@ def get_model_object_names(archive) -> list[str]:
         if value and value not in names:
             names.append(value)
     return names
+
+
+def get_source_file_name(archive) -> str | None:
+    # Bambu Studio stores the user-facing print filename in model_settings.config.
+    path = "Metadata/model_settings.config"
+    if path not in archive.namelist():
+        return None
+    try:
+        root = ET.fromstring(archive.read(path))
+    except (ET.ParseError, KeyError, UnicodeDecodeError):
+        return None
+    for metadata in root.iter():
+        tag_name = str(metadata.tag).rsplit("}", 1)[-1]
+        if metadata.attrib.get("key") != "source_file_name" and tag_name != "source_file_name":
+            continue
+        value = str(metadata.attrib.get("value") or metadata.text or "").strip()
+        if value:
+            return os.path.basename(value.replace("\\", "/"))
+    return None
 
 
 def setupPycurlConnection(ftp_user, ftp_pass):
@@ -201,6 +245,61 @@ def _normalize_printer_3mf_path(path):
     if not path.startswith("/"):
         path = "/" + path
     return path
+
+
+def _printer_3mf_metadata_key(filename, context=None):
+    context = context or _current_print_context()
+    source_name = os.path.basename(urllib.parse.unquote(str(filename or "")).strip()).casefold()
+    subtask_name = str(context.get("subtask_name") or "").strip().casefold()
+    printer = str(app_config.PRINTER_ID or app_config.PRINTER_IP or "unknown").strip().casefold()
+    material = "|".join((printer, source_name, subtask_name))
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _get_persisted_printer_3mf_path(filename, context=None):
+    try:
+        value = get_runtime_metadata(
+            RUNTIME_METADATA_NAMESPACE,
+            _printer_3mf_metadata_key(filename, context),
+        )
+    except Exception as exc:
+        log(f"[3MF][FTP] Persistenter Pfad konnte nicht gelesen werden: {exc!r}")
+        return None
+    if not isinstance(value, dict):
+        return None
+    path = _normalize_printer_3mf_path(value.get("remote_path"))
+    return path if path and path.lower().endswith(".3mf") else None
+
+
+def _remember_printer_3mf_path(filename, remote_path, context=None):
+    remote_path = _normalize_printer_3mf_path(remote_path)
+    if not remote_path or not remote_path.lower().endswith(".3mf"):
+        return
+    try:
+        set_runtime_metadata(
+            RUNTIME_METADATA_NAMESPACE,
+            _printer_3mf_metadata_key(filename, context),
+            {
+                "remote_path": remote_path,
+                "source_name": os.path.basename(str(filename or "")),
+                "subtask_name": str((context or _current_print_context()).get("subtask_name") or ""),
+                "updated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            },
+        )
+    except Exception as exc:
+        log(f"[3MF][FTP] Persistenter Pfad konnte nicht gespeichert werden: {exc!r}")
+        return
+    log(f"[3MF][FTP] Erfolgreichen Druckerpfad persistent gespeichert: {remote_path}")
+
+
+def _forget_printer_3mf_path(filename, context=None):
+    try:
+        delete_runtime_metadata(
+            RUNTIME_METADATA_NAMESPACE,
+            _printer_3mf_metadata_key(filename, context),
+        )
+    except Exception as exc:
+        log(f"[3MF][FTP] Persistenter Pfad konnte nicht entfernt werden: {exc!r}")
 
 
 def _find_bbl_for_subtask(subtask_name):
@@ -366,17 +465,27 @@ def download3mfFromFTP(filename, destFile, progress_callback=None, cancel_event=
         "verwende Einzeltransfer."
     )
     remote_paths = []
+    current_context = _current_print_context()
     if filename.startswith("/") and filename.lower().endswith(".3mf"):
         _append_unique_path(remote_paths, filename)
         log(f"[3MF][FTP] MQTT lieferte direkten 3MF-Pfad: {filename}")
     else:
         base_name = os.path.basename(filename)
-        resolve_started = time.monotonic()
-        bbl_resolved = _resolved_bbl_3mf_for_current_job()
-        log(
-            f"[3MF][FTP] BBL-Pfadauflösung beendet: ergebnis={bbl_resolved!r}, "
-            f"dauer={time.monotonic() - resolve_started:.3f}s"
-        )
+        persisted_path = _get_persisted_printer_3mf_path(filename, current_context)
+        if persisted_path:
+            _append_unique_path(remote_paths, persisted_path)
+            log(
+                f"[3MF][FTP] Persistierter Druckerpfad wird zuerst versucht; "
+                f"BBL-Pfadauflösung wird übersprungen: {persisted_path}"
+            )
+            bbl_resolved = None
+        else:
+            resolve_started = time.monotonic()
+            bbl_resolved = _resolved_bbl_3mf_for_current_job()
+            log(
+                f"[3MF][FTP] BBL-Pfadauflösung beendet: ergebnis={bbl_resolved!r}, "
+                f"dauer={time.monotonic() - resolve_started:.3f}s"
+            )
         _append_unique_path(remote_paths, bbl_resolved)
         _append_unique_path(remote_paths, f"/cache/{base_name}")
         _append_unique_path(remote_paths, f"/{base_name}")
@@ -472,6 +581,7 @@ def download3mfFromFTP(filename, destFile, progress_callback=None, cancel_event=
                             f"gesamt={time.monotonic() - overall_started:.3f}s, "
                             f"curl={_curl_diagnostics(c)}"
                         )
+                        _remember_printer_3mf_path(filename, remote_path, current_context)
                         return remote_path
 
                     except pycurl.error as exc:
@@ -503,6 +613,7 @@ def download3mfFromFTP(filename, destFile, progress_callback=None, cancel_event=
                             log(f"[3MF][FTP] Zugriff verweigert: {remote_path}")
                         elif err_code == 78:
                             log(f"[3MF][FTP] Pfadkandidat nicht vorhanden: {remote_path}")
+                            _forget_printer_3mf_path(filename, current_context)
                         break
                     except Exception as exc:
                         last_error = exc
@@ -604,8 +715,12 @@ def getMetaDataFrom3mf(url):
             )
 
             with zipfile.ZipFile(temp_file_name, 'r') as z:
+                source_file_name = get_source_file_name(z)
+                if source_file_name:
+                    metadata["source_file_name"] = source_file_name
+                    metadata["model_name"] = source_file_name
                 object_names = get_model_object_names(z)
-                if object_names:
+                if object_names and not source_file_name:
                     metadata["model_name"] = " + ".join(object_names)
                 slice_info_path = "Metadata/slice_info.config"
                 if slice_info_path not in z.namelist():
@@ -642,10 +757,16 @@ def getMetaDataFrom3mf(url):
                     log("[3MF] Keine Plate-ID in slice_info.config gefunden.")
                     return {}
 
-                metadata["image"] = time.strftime('%Y%m%d%H%M%S') + ".png"
+                image_dir = os.path.join(os.getcwd(), 'static', 'prints')
+                metadata["image"] = available_thumbnail_filename(
+                    metadata.get("source_file_name")
+                    or metadata.get("model_name")
+                    or metadata.get("file"),
+                    image_dir,
+                )
                 image_path = "Metadata/plate_" + metadata["plateID"] + ".png"
                 if image_path in z.namelist():
-                    os.makedirs(os.path.join(os.getcwd(), 'static', 'prints'), exist_ok=True)
+                    os.makedirs(image_dir, exist_ok=True)
                     with z.open(image_path) as source_file:
                         with open(os.path.join(os.getcwd(), 'static', 'prints', metadata["image"]), 'wb') as target_file:
                             target_file.write(source_file.read())
@@ -689,8 +810,12 @@ def getMetaDataFromLocal3mf(path: str, model_path: str | None = None) -> dict:
     }
     try:
         with zipfile.ZipFile(path, "r") as z:
+            source_file_name = get_source_file_name(z)
+            if source_file_name:
+                metadata["source_file_name"] = source_file_name
+                metadata["model_name"] = source_file_name
             object_names = get_model_object_names(z)
-            if object_names:
+            if object_names and not source_file_name:
                 metadata["model_name"] = " + ".join(object_names)
             slice_info_path = "Metadata/slice_info.config"
             if slice_info_path not in z.namelist():
@@ -727,10 +852,15 @@ def getMetaDataFromLocal3mf(path: str, model_path: str | None = None) -> dict:
                 log("[3MF] Keine Plate-ID in lokalem slice_info.config gefunden.")
                 return {}
 
-            metadata["image"] = time.strftime("%Y%m%d%H%M%S") + ".png"
+            image_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "prints")
+            metadata["image"] = available_thumbnail_filename(
+                metadata.get("source_file_name")
+                or metadata.get("model_name")
+                or metadata.get("file"),
+                image_dir,
+            )
             image_path = "Metadata/plate_" + metadata["plateID"] + ".png"
             if image_path in z.namelist():
-                image_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "prints")
                 os.makedirs(image_dir, exist_ok=True)
                 with z.open(image_path) as source_file:
                     with open(os.path.join(image_dir, metadata["image"]), "wb") as target_file:

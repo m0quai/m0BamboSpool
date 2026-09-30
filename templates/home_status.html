@@ -43,12 +43,14 @@
               <dd class="col-sm-7 mb-1" id="home-last-print-progress">{% if last_print and last_print.printer_percent is not none %}{{ '%.0f'|format(last_print.printer_percent) }}%{% elif last_print and last_print.total_layers %}{{ '%.0f'|format((last_print.layers_printed or 0) * 100 / last_print.total_layers) }}%{% else %}–{% endif %}</dd>
               <dt class="col-sm-5 fw-normal">{{ _('Layers') }}</dt>
               <dd class="col-sm-7 mb-1" id="home-last-print-layers">{% if last_print and last_print.total_layers %}{{ last_print.layers_printed or 0 }} / {{ last_print.total_layers }}{% else %}–{% endif %}</dd>
+              <dt class="col-sm-5 fw-normal">{{ _('Erwartetes Ende:') }}</dt>
+              <dd class="col-sm-7 mb-1" id="home-last-print-expected-end">{% if last_print and last_print.predicted_end_time %}{{ format_datetime(last_print.predicted_end_time) }}{% else %}–{% endif %}</dd>
+              <dt class="col-sm-5 fw-normal">{{ _('Restlaufzeit:') }}</dt>
+              <dd class="col-sm-7 mb-1" id="home-last-print-remaining">–</dd>
               <dt class="col-sm-5 fw-normal">{{ _('Consumed') }}</dt>
               <dd class="col-sm-7 mb-1" id="home-last-print-consumed">{% if last_print and last_print.filament_grams_billed is not none %}{{ '%.2f'|format(last_print.filament_grams_billed) }} g{% else %}–{% endif %}</dd>
               <dt class="col-sm-5 fw-normal">{{ _('Last status') }}</dt>
               <dd class="col-sm-7 mb-1" id="home-last-print-status-at">{% if last_print and last_print.last_status_at %}{{ format_datetime(last_print.last_status_at) }}{% else %}–{% endif %}</dd>
-              <dt class="col-sm-5 fw-normal">{{ _('Last booking') }}</dt>
-              <dd class="col-sm-7 mb-0" id="home-last-print-usage-at">{% if last_print and (last_print.last_usage_event_at or last_print.predicted_end_time) %}{{ format_datetime(last_print.last_usage_event_at or last_print.predicted_end_time) }}{% if not last_print.last_usage_event_at %} {{ _('(geschätzt)') }}{% endif %}{% else %}–{% endif %}</dd>
             </dl>
           </div>
           <div id="home-3mf-status" class="small text-body-secondary mt-3 d-none"></div>
@@ -84,9 +86,10 @@
   const lastPrintName = document.getElementById('home-last-print-name');
   const lastPrintProgress = document.getElementById('home-last-print-progress');
   const lastPrintLayers = document.getElementById('home-last-print-layers');
+  const lastPrintExpectedEnd = document.getElementById('home-last-print-expected-end');
+  const lastPrintRemaining = document.getElementById('home-last-print-remaining');
   const lastPrintConsumed = document.getElementById('home-last-print-consumed');
   const lastPrintStatusAt = document.getElementById('home-last-print-status-at');
-  const lastPrintUsageAt = document.getElementById('home-last-print-usage-at');
   const downloadStatus = document.getElementById('home-3mf-status');
   const loadingLabel = {{ _('3MF wird geladen')|tojson }};
   const processingLabel = {{ _('3MF wird verarbeitet')|tojson }};
@@ -118,12 +121,10 @@
       if (lastPrintName) lastPrintName.textContent = item.file_name || '';
       if (lastPrintProgress) lastPrintProgress.textContent = item.printer_percent != null ? `${Math.round(Number(item.printer_percent))}%` : (item.total_layers ? `${Math.round(Number(item.layers_printed || 0) * 100 / Number(item.total_layers))}%` : '–');
       if (lastPrintLayers) lastPrintLayers.textContent = item.total_layers ? `${item.layers_printed || 0} / ${item.total_layers}` : '–';
+      if (lastPrintExpectedEnd) lastPrintExpectedEnd.textContent = item.predicted_end_time ? formatUiDateTime(item.predicted_end_time) : '–';
+      if (lastPrintRemaining) lastPrintRemaining.textContent = formatRemaining(item.predicted_end_time);
       if (lastPrintConsumed) lastPrintConsumed.textContent = item.filament_grams_billed != null ? `${Number(item.filament_grams_billed).toFixed(2)} g` : '–';
       if (lastPrintStatusAt) lastPrintStatusAt.textContent = formatUiDateTime(item.last_status_at);
-      if (lastPrintUsageAt) {
-        const bookingAt = item.last_usage_event_at || item.predicted_end_time;
-        lastPrintUsageAt.textContent = bookingAt ? formatUiDateTime(bookingAt) + (item.last_usage_event_at ? '' : ` ${estimatedLabel}`) : '–';
-      }
     }
 
     const download = data.download || {};
@@ -149,6 +150,16 @@
     return new Intl.DateTimeFormat(isGerman ? 'de-DE' : 'en-US', {
       day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: !isGerman
     }).format(date);
+  }
+
+  function formatRemaining(value) {
+    if (!value) return '–';
+    const end = new Date(String(value).replace(' ', 'T'));
+    if (Number.isNaN(end.getTime())) return '–';
+    const seconds = Math.max(0, Math.round((end.getTime() - Date.now()) / 1000));
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    return hours > 0 ? `${hours} h ${minutes} min` : `${minutes} min`;
   }
 
   async function refresh() {

@@ -14,8 +14,8 @@ from urllib.parse import urlparse
 from config import EXTERNAL_SPOOL_AMS_ID, EXTERNAL_SPOOL_ID, TRACK_LAYER_USAGE
 from inventory_repository import record_consumption
 from inventory_service import fetchSpools, getAMSFromTray, trayUid
-from tools_3mf import download3mfFromCloud, download3mfFromFTP, download3mfFromLocalFilesystem, getMetaDataFrom3mf
-from print_history import bind_filament_usage_spool, record_filament_usage_segment, claim_filament_usage_event, set_filament_usage_event_status, finalize_filament_usage_events, get_all_filament_usage_for_print, update_layer_tracking, update_print_image, get_print_image, get_latest_running_print_id, find_latest_print_id, printer_state_to_history_status
+from tools_3mf import available_thumbnail_filename, download3mfFromCloud, download3mfFromFTP, download3mfFromLocalFilesystem, getMetaDataFrom3mf, getMetaDataFromLocal3mf, get_source_file_name
+from print_history import bind_filament_usage_spool, record_filament_usage_segment, claim_filament_usage_event, set_filament_usage_event_status, finalize_filament_usage_events, get_all_filament_usage_for_print, update_layer_tracking, update_print_image, update_print_file_name, get_print_image, get_latest_running_print_id, find_latest_print_id, printer_state_to_history_status
 
 GCODE_STATE_LABELS = {
     "IDLE": "Drucker bereit",
@@ -248,13 +248,14 @@ def _restore_thumbnail(model_path: str, print_id: int) -> None:
       return
     log(f"[filament-tracker] Thumbnail restore: print_id={print_id}, model={model_path!r}")
     with zipfile.ZipFile(model_path) as archive:
+      source_name = get_source_file_name(archive)
       candidates = [name for name in archive.namelist() if name.startswith("Metadata/plate_") and name.endswith(".png")]
       log(f"[filament-tracker] Thumbnail restore: found {len(candidates)} PNG candidate(s)")
       if not candidates:
         return
       target_dir = Path(__file__).resolve().parent / "static" / "prints"
       target_dir.mkdir(parents=True, exist_ok=True)
-      image_name = f"{datetime.now().strftime('%Y%m%d%H%M%S')}.png"
+      image_name = available_thumbnail_filename(source_name, str(target_dir), f"print_{print_id}")
       (target_dir / image_name).write_bytes(archive.read(candidates[0]))
       update_print_image(print_id, image_name)
       log(f"[filament-tracker] Restored print thumbnail {image_name} at {target_dir / image_name}")
@@ -1229,6 +1230,18 @@ class FilamentUsageTracker:
       if model_path is None:
         log("[filament-tracker] Resume reconstruction failed: 3MF could not be retrieved")
         return
+
+      # Recover the user-facing name from the downloaded 3MF before the
+      # temporary model is consumed by the layer tracker.
+      recovered_metadata = getMetaDataFromLocal3mf(model_path, model_url)
+      recovered_name = (
+        recovered_metadata.get("source_file_name")
+        or print_obj.get("snapshot_name")
+        or print_obj.get("subtask_name")
+        or recovered_metadata.get("model_name")
+      )
+      if self.print_id and recovered_name:
+        update_print_file_name(self.print_id, recovered_name)
 
       ams_mapping = print_obj.get("ams_mapping") or []
       current_tray = self._active_ams_tray(print_obj)

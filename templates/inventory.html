@@ -3,7 +3,7 @@
 <h1 class="mb-4 text-center">{{ _('Inventory') }}</h1>
 <div class="alert {{ 'alert-primary' if local_inventory else 'alert-secondary' }} d-flex justify-content-between align-items-center gap-3">
 </div>
-<div class="table-responsive">
+<div class="inventory-table-container">
   <table class="table table-hover align-middle inventory-table {{ 'inventory-has-status' if show_status_column else 'inventory-no-status' }}" id="inventory-table">
     <thead>
       <tr class="inventory-sort-row"><th><button type="button" class="history-sort-button" data-inventory-sort="id">{{ _('Spool') }} <i class="bi bi-arrow-down-up"></i></button></th><th><button type="button" class="history-sort-button" data-inventory-sort="vendor">{{ _('Hersteller') }} <i class="bi bi-arrow-down-up"></i></button></th><th><button type="button" class="history-sort-button" data-inventory-sort="material">{{ _('Material') }} <i class="bi bi-arrow-down-up"></i></button></th><th><button type="button" class="history-sort-button" data-inventory-sort="filament">{{ _('Filament') }} <i class="bi bi-arrow-down-up"></i></button></th><th>{{ _('Farbe') }}</th>{% if show_status_column %}<th>{{ _('Status') }}</th>{% endif %}<th>{{ _('Restgewicht') }}</th><th><button type="button" class="history-sort-button" data-inventory-sort="last-used">{{ _('Letzte Benutzung') }} <i class="bi bi-arrow-down-up"></i></button></th><th>{{ _('Drucke') }}</th></tr>

@@ -677,12 +677,25 @@ def _current_printer_status_payload():
     last_print = print_history_service.get_latest_print_summary()
     # Overlay live MQTT values so Home does not wait for the next persisted
     # layer checkpoint before showing the current printer progress.
-    if last_print and active_print_id is not None and int(last_print["id"]) == int(active_print_id):
-        live_state = str(print_state.get("gcode_state") or "").upper()
-        live_status = print_history_service.printer_state_to_history_status(live_state, print_state.get("print_error"))
+    live_state = str(print_state.get("gcode_state") or "").upper()
+    live_status = print_history_service.printer_state_to_history_status(live_state, print_state.get("print_error"))
+    live_print_matches_latest = (
+        last_print is not None
+        and (
+            active_print_id is not None
+            and int(last_print["id"]) == int(active_print_id)
+            or active_print_id is None
+            and live_status in {"COMPLETED", "ABORTED", "FAILED"}
+        )
+    )
+    if live_print_matches_latest:
         if live_status in {"PREPARING", "RUNNING", "PAUSED", "COMPLETED", "ABORTED", "FAILED"}:
             last_print = dict(last_print)
             last_print["status"] = live_status
+        live_status_at = getattr(mqtt_bambulab, "PRINTER_STATE_LAST_UPDATE_AT", None)
+        if live_status_at:
+            last_print = dict(last_print)
+            last_print["last_status_at"] = live_status_at
         try:
             if print_state.get("mc_percent") is not None:
                 last_print = dict(last_print)
