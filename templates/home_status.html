@@ -55,7 +55,7 @@
         </div>
         {% if mqtt_connected|default(false) %}
         <div class="card-footer text-center">
-          <form method="post" action="{{ url_for('refresh_ams') }}" class="d-inline" onsubmit="this.querySelector('button').disabled = true;">
+          <form method="post" action="{{ url_for('refresh_ams') }}" class="d-inline" id="home-refresh-form">
             <input type="hidden" name="next_endpoint" value="home_status">
             <button type="submit" class="btn btn-sm btn-primary rounded-pill px-3">
               <i class="bi bi-arrow-clockwise me-1"></i> {{ _('Jetzt aktualisieren') }}
@@ -92,6 +92,7 @@
   const processingLabel = {{ _('3MF wird verarbeitet')|tojson }};
   const errorLabel = {{ _('3MF konnte nicht geladen werden')|tojson }};
   const estimatedLabel = {{ _('(geschätzt)')|tojson }};
+  const refreshForm = document.getElementById('home-refresh-form');
 
   function update(data) {
     if (name && data.printer_name) name.textContent = data.printer_name;
@@ -152,11 +153,25 @@
 
   async function refresh() {
     try {
-      const response = await fetch(endpoint, { cache: 'no-store', headers: { 'Accept': 'application/json' } });
+      const response = await fetch(`${endpoint}?_=${Date.now()}`, { cache: 'no-store', headers: { 'Accept': 'application/json' } });
       if (response.ok) update(await response.json());
     } catch (_) {
       // Keep the last known status visible during a short network interruption.
     }
+  }
+
+  if (refreshForm) {
+    refreshForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      const button = refreshForm.querySelector('button');
+      if (button) button.disabled = true;
+      try {
+        await fetch(refreshForm.action, { method: 'POST', body: new FormData(refreshForm), cache: 'no-store' });
+        await refresh();
+      } finally {
+        if (button) button.disabled = false;
+      }
+    });
   }
 
   refresh();

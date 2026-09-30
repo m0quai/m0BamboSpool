@@ -6,15 +6,16 @@
 <div class="table-responsive">
   <table class="table table-hover align-middle inventory-table {{ 'inventory-has-status' if show_status_column else 'inventory-no-status' }}" id="inventory-table">
     <thead>
-      <tr class="inventory-sort-row"><th><button type="button" class="history-sort-button" data-inventory-sort="id">{{ _('Spool') }} <i class="bi bi-arrow-down-up"></i></button></th><th><button type="button" class="history-sort-button" data-inventory-sort="vendor">{{ _('Hersteller') }} <i class="bi bi-arrow-down-up"></i></button></th><th><button type="button" class="history-sort-button" data-inventory-sort="material">{{ _('Material') }} <i class="bi bi-arrow-down-up"></i></button></th><th><button type="button" class="history-sort-button" data-inventory-sort="filament">{{ _('Filament') }} <i class="bi bi-arrow-down-up"></i></button></th><th>{{ _('Farbe') }}</th>{% if show_status_column %}<th>{{ _('Status') }}</th>{% endif %}<th>{{ _('Restgewicht') }}</th><th>{{ _('Drucke') }}</th></tr>
-      <tr class="history-filter-row"><th><input type="search" class="form-control form-control-sm inventory-filter" data-inventory-filter="id" placeholder="{{ _('ID') }}"></th><th>{% for key, label in [('vendor', _('Hersteller'))] %}<div class="dropdown"><button class="btn btn-sm btn-outline-secondary dropdown-toggle w-100 text-start" data-bs-toggle="dropdown" data-inventory-filter-button="{{ key }}" data-inventory-filter-label="{{ label }}">{{ _('Alle') }} {{ label }}</button><div class="dropdown-menu p-2 inventory-filter-menu" data-inventory-filter-menu="{{ key }}"></div></div>{% endfor %}</th><th><div class="dropdown"><button class="btn btn-sm btn-outline-secondary dropdown-toggle w-100 text-start" data-bs-toggle="dropdown" data-inventory-filter-button="material" data-inventory-filter-label="{{ _('Material') }}">{{ _('Alle') }} {{ _('Material') }}</button><div class="dropdown-menu p-2 inventory-filter-menu" data-inventory-filter-menu="material"></div></div></th><th><div class="dropdown"><button class="btn btn-sm btn-outline-secondary dropdown-toggle w-100 text-start" data-bs-toggle="dropdown" data-inventory-filter-button="filament" data-inventory-filter-label="{{ _('Filament') }}">{{ _('Alle') }} {{ _('Filament') }}</button><div class="dropdown-menu p-2 inventory-filter-menu" data-inventory-filter-menu="filament"></div></div></th><th></th>{% if show_status_column %}<th><div class="dropdown"><button class="btn btn-sm btn-outline-secondary dropdown-toggle w-100 text-start" data-bs-toggle="dropdown" data-inventory-filter-button="status" data-inventory-filter-label="{{ _('Status') }}">{{ _('Aktiv') }}</button><div class="dropdown-menu p-2 inventory-filter-menu" data-inventory-filter-menu="status"></div></div></th>{% endif %}<th></th><th></th></tr>
+      <tr class="inventory-sort-row"><th><button type="button" class="history-sort-button" data-inventory-sort="id">{{ _('Spool') }} <i class="bi bi-arrow-down-up"></i></button></th><th><button type="button" class="history-sort-button" data-inventory-sort="vendor">{{ _('Hersteller') }} <i class="bi bi-arrow-down-up"></i></button></th><th><button type="button" class="history-sort-button" data-inventory-sort="material">{{ _('Material') }} <i class="bi bi-arrow-down-up"></i></button></th><th><button type="button" class="history-sort-button" data-inventory-sort="filament">{{ _('Filament') }} <i class="bi bi-arrow-down-up"></i></button></th><th>{{ _('Farbe') }}</th>{% if show_status_column %}<th>{{ _('Status') }}</th>{% endif %}<th>{{ _('Restgewicht') }}</th><th><button type="button" class="history-sort-button" data-inventory-sort="last-used">{{ _('Letzte Benutzung') }} <i class="bi bi-arrow-down-up"></i></button></th><th>{{ _('Drucke') }}</th></tr>
+      <tr class="history-filter-row"><th><input type="search" class="form-control form-control-sm inventory-filter" data-inventory-filter="id" placeholder="{{ _('ID') }}"></th><th>{% for key, label in [('vendor', _('Hersteller'))] %}<div class="dropdown"><button class="btn btn-sm btn-outline-secondary dropdown-toggle w-100 text-start" data-bs-toggle="dropdown" data-inventory-filter-button="{{ key }}" data-inventory-filter-label="{{ label }}">{{ _('Alle') }} {{ label }}</button><div class="dropdown-menu p-2 inventory-filter-menu" data-inventory-filter-menu="{{ key }}"></div></div>{% endfor %}</th><th><div class="dropdown"><button class="btn btn-sm btn-outline-secondary dropdown-toggle w-100 text-start" data-bs-toggle="dropdown" data-inventory-filter-button="material" data-inventory-filter-label="{{ _('Material') }}">{{ _('Alle') }} {{ _('Material') }}</button><div class="dropdown-menu p-2 inventory-filter-menu" data-inventory-filter-menu="material"></div></div></th><th><div class="dropdown"><button class="btn btn-sm btn-outline-secondary dropdown-toggle w-100 text-start" data-bs-toggle="dropdown" data-inventory-filter-button="filament" data-inventory-filter-label="{{ _('Filament') }}">{{ _('Alle') }} {{ _('Filament') }}</button><div class="dropdown-menu p-2 inventory-filter-menu" data-inventory-filter-menu="filament"></div></div></th><th></th>{% if show_status_column %}<th><div class="dropdown"><button class="btn btn-sm btn-outline-secondary dropdown-toggle w-100 text-start" data-bs-toggle="dropdown" data-inventory-filter-button="status" data-inventory-filter-label="{{ _('Status') }}">{{ _('Aktiv') }}</button><div class="dropdown-menu p-2 inventory-filter-menu" data-inventory-filter-menu="status"></div></div></th>{% endif %}<th></th><th></th><th></th></tr>
     </thead>
     <tbody>
     {% for item in inventory_rows %}
       {% set spool = item.spool %}
       {% set filament = spool.filament or {} %}
+      {% set last_used_value = item.last_used or '' %}
       {% set spool_status = 'archived' if spool.archived else 'active' %}{% set spool_status_label = _('Archiviert') if spool.archived else _('Aktiv') %}
-      <tr data-inventory-row data-inventory-id="{{ spool.id }}" data-inventory-vendor="{{ (filament.vendor.name if filament.vendor else '')|lower }}" data-inventory-vendor-label="{{ filament.vendor.name if filament.vendor else _('Unbekannt') }}" data-inventory-filament="{{ (filament.name or '')|lower }}" data-inventory-filament-label="{{ filament.name or _('Ohne Namen') }}" data-inventory-material="{{ (filament.material or '')|lower }}" data-inventory-material-label="{{ filament.material or _('Unbekannt') }}" data-inventory-status="{{ spool_status }}" data-inventory-status-label="{{ spool_status_label }}" data-inventory-color="{{ (filament.color_hex or '')|lower }}" data-inventory-color-label="{{ filament.color_hex or '' }}" data-inventory-weight="{{ spool.remaining_weight|float }}">
+      <tr data-inventory-row data-inventory-id="{{ spool.id }}" data-inventory-vendor="{{ (filament.vendor.name if filament.vendor else '')|lower }}" data-inventory-vendor-label="{{ filament.vendor.name if filament.vendor else _('Unbekannt') }}" data-inventory-filament="{{ (filament.name or '')|lower }}" data-inventory-filament-label="{{ filament.name or _('Ohne Namen') }}" data-inventory-material="{{ (filament.material or '')|lower }}" data-inventory-material-label="{{ filament.material or _('Unbekannt') }}" data-inventory-status="{{ spool_status }}" data-inventory-status-label="{{ spool_status_label }}" data-inventory-color="{{ (filament.color_hex or '')|lower }}" data-inventory-color-label="{{ filament.color_hex or '' }}" data-inventory-weight="{{ spool.remaining_weight|float }}" data-inventory-last-used="{{ last_used_value }}">
         <td class="text-nowrap">{% if local_inventory %}<strong>#{{ spool.id }}</strong>{% else %}<a class="inventory-spool-link" href="{{ SPOOLMAN_BASE_URL }}/?sel=spool:{{ spool.id }}" target="openspoolman-spoolman" data-spoolman-window="true" title="{{ _('view in spoolman') }}"><strong>#{{ spool.id }}</strong></a>{% endif %}</td>
         <td>{% if filament.vendor and filament.vendor.id %}{% if local_inventory %}{{ filament.vendor.name }}{% else %}<a class="inventory-entity-link" href="{{ SPOOLMAN_BASE_URL }}/?sel=vendor:{{ filament.vendor.id }}" target="openspoolman-spoolman" data-spoolman-window="true">{{ filament.vendor.name }}</a>{% endif %}{% else %}{{ _('Unbekannt') }}{% endif %}</td>
         <td>{{ filament.material or _('Unbekannt') }}</td>
@@ -22,6 +23,7 @@
         {% set color_value = filament.color_hex or '000000' %}<td><span class="inventory-color-code" style="background-color: #{{ color_value }}; color: {{ '#fff' if color_is_dark(color_value) else '#111' }}; text-shadow: {{ '0 1px 1px rgba(0,0,0,.65)' if color_is_dark(color_value) else 'none' }};">#{{ color_value }}</span></td>
         {% if show_status_column %}<td><span class="badge {{ 'text-bg-secondary' if spool.archived else 'text-bg-success' }}">{{ spool_status_label }}</span></td>{% endif %}
         <td class="text-nowrap">{{ '%.1f'|format(spool.remaining_weight|float) }} g</td>
+        <td class="text-nowrap">{{ format_datetime(last_used_value) if last_used_value else '—' }}</td>
         <td>
           {% if item.prints %}
           <details class="inventory-print-details"><summary>{{ item.prints|length }} {{ _('Drucke') }}</summary>
@@ -32,7 +34,7 @@
           {% else %}<span class="text-muted">{{ _('ungebraucht') }}</span>{% endif %}
         </td>
       </tr>
-    {% else %}<tr><td colspan="{{ 8 if show_status_column else 7 }}" class="text-center text-muted py-4">{{ _('Keine Spulen gefunden') }}</td></tr>{% endfor %}
+    {% else %}<tr><td colspan="{{ 9 if show_status_column else 8 }}" class="text-center text-muted py-4">{{ _('Keine Spulen gefunden') }}</td></tr>{% endfor %}
     </tbody>
   </table>
 </div>
@@ -137,14 +139,20 @@ document.addEventListener('DOMContentLoaded', () => {
   const filterSets = Object.fromEntries(filterMenus.map(menu => [menu.dataset.inventoryFilterMenu, new Set()]));
   if (filterSets.status) filterSets.status.add('active');
   const buttons = Array.from(document.querySelectorAll('[data-inventory-sort]'));
-  let field = 'id'; let direction = 'asc';
+  const storageKey = 'openspoolman-inventory-table-state';
+  let savedState = {};
+  try { savedState = JSON.parse(localStorage.getItem(storageKey) || '{}'); } catch (_) { savedState = {}; }
+  const validFields = ['id', 'vendor', 'material', 'filament', 'last-used'];
+  let field = validFields.includes(savedState.field) ? savedState.field : 'id';
+  let direction = savedState.direction === 'desc' ? 'desc' : 'asc';
   const inventorySelectedLabel = "{{ _('ausgewählt') }}";
   const inventoryAllLabel = {{ _('Alle')|tojson }};
   const apply = () => {
     const active = Object.fromEntries(textFilters.map(input => [input.dataset.inventoryFilter, input.value.trim().toLowerCase()]));
     rows.forEach(row => { row.hidden = Object.entries(active).some(([key, value]) => value && !row.dataset['inventory' + key.charAt(0).toUpperCase() + key.slice(1)].includes(value)) || Object.entries(filterSets).some(([key, values]) => values.size && !values.has(row.dataset['inventory' + key.charAt(0).toUpperCase() + key.slice(1)])); });
     const visible = rows.filter(row => !row.hidden);
-    visible.sort((a, b) => { const key = 'inventory' + field.charAt(0).toUpperCase() + field.slice(1); const left = field === 'id' || field === 'weight' ? Number(a.dataset[key]) : a.dataset[key]; const right = field === 'id' || field === 'weight' ? Number(b.dataset[key]) : b.dataset[key]; const result = left < right ? -1 : left > right ? 1 : 0; return direction === 'asc' ? result : -result; });
+    try { localStorage.setItem(storageKey, JSON.stringify({ field, direction })); } catch (_) {}
+    visible.sort((a, b) => { const key = 'inventory' + field.charAt(0).toUpperCase() + field.slice(1); let left; let right; if (field === 'last-used') { const leftRaw = a.dataset.inventoryLastUsed || ''; const rightRaw = b.dataset.inventoryLastUsed || ''; if (!leftRaw || !rightRaw) { if (!leftRaw && !rightRaw) return 0; return leftRaw ? -1 : 1; } left = Date.parse(leftRaw) || 0; right = Date.parse(rightRaw) || 0; } else { left = field === 'id' || field === 'weight' ? Number(a.dataset[key]) : a.dataset[key]; right = field === 'id' || field === 'weight' ? Number(b.dataset[key]) : b.dataset[key]; } const result = left < right ? -1 : left > right ? 1 : 0; return direction === 'asc' ? result : -result; });
     visible.forEach(row => body.appendChild(row));
   };
   textFilters.forEach(input => input.addEventListener('input', apply));
@@ -204,7 +212,9 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     }
   });
-  buttons.forEach(button => button.addEventListener('click', () => { const next = button.dataset.inventorySort; direction = next === field && direction === 'asc' ? 'desc' : 'asc'; field = next; apply(); }));
+  buttons.forEach(button => button.addEventListener('click', () => { const next = button.dataset.inventorySort; direction = next === field && direction === 'asc' ? 'desc' : 'asc'; field = next; buttons.forEach(item => { const icon = item.querySelector('.bi'); if (icon) icon.className = `bi bi-arrow-${item === button ? (direction === 'asc' ? 'up' : 'down') : 'down-up'}`; }); apply(); }));
+  const activeButton = buttons.find(button => button.dataset.inventorySort === field);
+  if (activeButton) { const icon = activeButton.querySelector('.bi'); if (icon) icon.className = `bi bi-arrow-${direction === 'asc' ? 'up' : 'down'}`; }
   apply();
 });
 </script>

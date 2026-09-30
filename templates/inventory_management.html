@@ -27,15 +27,31 @@
 <script>
 document.addEventListener('DOMContentLoaded', () => {
   const rows = [...document.querySelectorAll('[data-management-row]')];
+  const entity = {{ management_entity|tojson }};
+  const storageKey = `openspoolman-management-table-state:${entity}`;
+  let savedState = {};
+  try { savedState = JSON.parse(localStorage.getItem(storageKey) || '{}'); } catch (_) { savedState = {}; }
   const apply = () => {
     const filters = [...document.querySelectorAll('[data-management-filter]')];
     rows.forEach(row => { row.hidden = filters.some(input => input.value.trim() && !(row.dataset[input.dataset.managementFilter] || '').includes(input.value.trim().toLowerCase())); });
   };
   document.querySelectorAll('[data-management-filter]').forEach(input => input.addEventListener('input', apply));
-  document.querySelectorAll('[data-management-sort]').forEach(button => button.addEventListener('click', () => {
-    const key = button.dataset.managementSort; const body = document.querySelector('table tbody'); const direction = button.dataset.direction === 'asc' ? 'desc' : 'asc'; button.dataset.direction = direction;
+  const sortButtons = [...document.querySelectorAll('[data-management-sort]')];
+  const allowedFields = sortButtons.map(button => button.dataset.managementSort);
+  let sortField = allowedFields.includes(savedState.field) ? savedState.field : (allowedFields[0] || '');
+  let direction = savedState.direction === 'desc' ? 'desc' : 'asc';
+  const applySort = () => {
+    const button = sortButtons.find(item => item.dataset.managementSort === sortField);
+    if (!button) return;
+    const key = sortField; const body = document.querySelector('table tbody');
     [...body.querySelectorAll('[data-management-row]')].sort((a, b) => { const left = a.dataset[key] || ''; const right = b.dataset[key] || ''; const result = left.localeCompare(right, undefined, {numeric: true, sensitivity: 'base'}); return direction === 'asc' ? result : -result; }).forEach(row => body.appendChild(row));
+    sortButtons.forEach(item => { const icon = item.querySelector('.bi'); if (icon) icon.className = `bi bi-arrow-${item === button ? (direction === 'asc' ? 'up' : 'down') : 'down-up'}`; });
+    try { localStorage.setItem(storageKey, JSON.stringify({ field: sortField, direction })); } catch (_) {}
+  };
+  sortButtons.forEach(button => button.addEventListener('click', () => {
+    const nextField = button.dataset.managementSort; direction = nextField === sortField && direction === 'asc' ? 'desc' : 'asc'; sortField = nextField; applySort();
   }));
+  applySort();
   const colorInput = document.querySelector('[name=color_hex]'); const colorPreview = document.querySelector('[data-management-color-preview]');
   if (colorInput && colorPreview) { const updateColor = () => { const color = colorInput.value.toUpperCase(); colorPreview.textContent = color; colorPreview.style.backgroundColor = color; colorPreview.style.color = '#111'; }; colorInput.addEventListener('input', updateColor); updateColor(); }
   const vendor = document.querySelector('[data-filament-vendor]'); const sunluColor = document.querySelector('[data-sunlu-color]');

@@ -674,6 +674,28 @@ def _current_printer_status_payload():
     active_print_id = print_history_service.get_latest_active_print_id()
     if active_print_id is None:
         active_print_id = mqtt_bambulab.get_active_3mf_print_id()
+    last_print = print_history_service.get_latest_print_summary()
+    # Overlay live MQTT values so Home does not wait for the next persisted
+    # layer checkpoint before showing the current printer progress.
+    if last_print and active_print_id is not None and int(last_print["id"]) == int(active_print_id):
+        live_state = str(print_state.get("gcode_state") or "").upper()
+        live_status = print_history_service.printer_state_to_history_status(live_state, print_state.get("print_error"))
+        if live_status in {"PREPARING", "RUNNING", "PAUSED", "COMPLETED", "ABORTED", "FAILED"}:
+            last_print = dict(last_print)
+            last_print["status"] = live_status
+        try:
+            if print_state.get("mc_percent") is not None:
+                last_print = dict(last_print)
+                last_print["printer_percent"] = float(print_state["mc_percent"])
+        except (TypeError, ValueError):
+            pass
+        for source, target in (("layer_num", "layers_printed"), ("total_layer_num", "total_layers")):
+            if print_state.get(source) is not None:
+                try:
+                    last_print = dict(last_print)
+                    last_print[target] = int(print_state[source])
+                except (TypeError, ValueError):
+                    pass
     return {
         "printer_name": PRINTER_NAME or (getattr(mqtt_bambulab, "getPrinterModel", lambda: {})() or {}).get("devicename") or PRINTER_ID,
         "mqtt_connected": connected,
@@ -681,7 +703,7 @@ def _current_printer_status_payload():
         "printer_state": print_state.get("gcode_state") or "OFFLINE",
         "printer_status": _ui_text(_printer_status_code()),
         "print_id": active_print_id,
-        "last_print": print_history_service.get_latest_print_summary(),
+        "last_print": last_print,
         "temperatures": _printer_temperature_status(),
         "ams_environment": _ams_environment_status(),
         "download": {
@@ -817,9 +839,14 @@ def inventory():
         spool_id = spool.get("id")
         if spool_id is None:
             continue
+        prints = print_history_service.get_spool_print_usage(spool_id)
+        # Spoolman owns the authoritative timestamp.  The local print history
+        # is a fallback for older/local records that do not expose last_used.
+        last_used = spool.get("last_used") or (prints[0].get("print_date") if prints else None)
         inventory_rows.append({
             "spool": spool,
-            "prints": print_history_service.get_spool_print_usage(spool_id),
+            "prints": prints,
+            "last_used": last_used,
         })
     show_status_column = any(bool(item["spool"].get("archived")) for item in inventory_rows)
     local_mode = not USE_SPOOLMAN
