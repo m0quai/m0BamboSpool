@@ -1,5 +1,7 @@
+name: m0bambospool
+
 services:
-  openspoolman:
+  m0bambospool:
     build:
       context: .
       no_cache: true

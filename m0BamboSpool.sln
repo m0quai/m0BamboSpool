@@ -3,7 +3,7 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{888888A0-9F3D-457C-B088-3A5042F75D52}") = "OpenSpoolMan", "OpenSpoolMan.pyproj", "{F3596A78-EC0B-4F41-9AE0-88E0CFF7EC7D}"
+Project("{888888A0-9F3D-457C-B088-3A5042F75D52}") = "m0BamboSpool", "m0BamboSpool.pyproj", "{F3596A78-EC0B-4F41-9AE0-88E0CFF7EC7D}"
 EndProject
 Project("{11A8DD76-328B-46DF-9F39-F559912D0360}") = "AMSHelper", "AMSHelper\AMSHelper.nfproj", "{B5E8E335-810B-4B88-9B48-6A860B509207}"
 EndProject
@@ -11,6 +11,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution 
 	ProjectSection(SolutionItems) = preProject
 		.editorconfig = .editorconfig
 		AGENTS.md = AGENTS.md
+		README.md = README.md
 		OSM-PROJEKTKONTEXT.md = OSM-PROJEKTKONTEXT.md
 		DESIGN.md = DESIGN.md
 		TODO.md = TODO.md

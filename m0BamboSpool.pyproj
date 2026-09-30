@@ -9,8 +9,8 @@
     <SearchPath>.</SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
     <OutputPath>.</OutputPath>
-    <Name>OpenSpoolMan</Name>
-    <RootNamespace>OpenSpoolMan</RootNamespace>
+    <Name>m0BamboSpool</Name>
+    <RootNamespace>m0BamboSpool</RootNamespace>
     <LaunchProvider>Standard Python launcher</LaunchProvider>
     <InterpreterId>MSBuild|.env|$(MSBuildProjectFullPath)</InterpreterId>
     <TestFramework>Pytest</TestFramework>
