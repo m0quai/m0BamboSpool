@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="about-page">
+  <section class="about-hero card">
+    <div class="about-hero-icon"><i class="bi bi-info-circle" aria-hidden="true"></i></div>
+    <div>
+      <h1>{{ _('m0BamboSpool by m0quai') }}</h1>
+      <p class="mb-0">{{ _('A focused dashboard for Bambu Lab printers, AMS trays and filament usage.') }}</p>
+    </div>
+  </section>
+
+  <div class="about-grid">
+    <article class="about-card card">
+      <div class="about-card-icon"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i></div>
+      <h2>{{ _('Original OpenSpoolMan') }}</h2>
+      <p>{{ _('The original OpenSpoolMan project this application extends.') }}</p>
+      <a class="btn btn-outline-primary" href="https://github.com/drndos/openspoolman" target="_blank" rel="noopener noreferrer">
+        {{ _('Open original project') }} <i class="bi bi-arrow-up-right" aria-hidden="true"></i>
+      </a>
+    </article>
+
+    <article class="about-card card">
+      <div class="about-card-icon"><i class="bi bi-database" aria-hidden="true"></i></div>
+      <h2>{{ _('SpoolMan as the data foundation') }}</h2>
+      <p>{{ _('Filament and spool administration is based on SpoolMan.') }}</p>
+      <a class="btn btn-outline-primary" href="https://github.com/Donkie/Spoolman" target="_blank" rel="noopener noreferrer">
+        {{ _('Open SpoolMan') }} <i class="bi bi-arrow-up-right" aria-hidden="true"></i>
+      </a>
+    </article>
+
+    <article class="about-card card">
+      <div class="about-card-icon"><i class="bi bi-git" aria-hidden="true"></i></div>
+      <h2>{{ _('Current project') }}</h2>
+      <p>{{ _('The m0BambuSpool project adds the Bambu Lab and AMS-focused workflow.') }}</p>
+      <a class="btn btn-primary" href="https://github.com/m0quai/m0BambuSpool" target="_blank" rel="noopener noreferrer">
+        {{ _('Open current project') }} <i class="bi bi-arrow-up-right" aria-hidden="true"></i>
+      </a>
+    </article>
+  </div>
+</div>
+{% endblock %}

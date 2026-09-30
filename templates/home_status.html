@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="container py-4">
+<div class="home-page">
   <div class="row justify-content-center g-3" id="printer-status-page">
-    <div class="col-12 col-md-8 col-xl-6">
-      <div class="card shadow-sm">
+    <div class="col-12">
+      <div class="card shadow-sm home-dashboard-card">
         <div class="card-header">
           <h2 class="h5 mb-0" id="home-printer-name">{{ PRINTER_NAME or PRINTER_MODEL.get('devicename') or PRINTER_MODEL.get('model') or PRINTER_ID }}</h2>
         </div>

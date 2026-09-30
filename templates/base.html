@@ -12,14 +12,14 @@
   <meta name="viewport" content="initial-scale=0.8, shrink-to-fit=yes, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="OpenSpoolMan">
+  <meta name="apple-mobile-web-app-title" content="m0BambuSpool">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>{{ _('OpenSpoolMan') }}</title>
+  <title>m0BambuSpool</title>
   <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}">
   <link href="{{ url_for('static', filename='css/bootstrap.min.css') }}" rel="stylesheet">
   <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
   <link href="{{ url_for('static', filename='css/bootstrap-icons.css') }}" rel="stylesheet">
-  <link rel="apple-touch-icon" href="{{ url_for('static', filename='logo.png') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='m0bambuspool-logo.png') }}">
   <style>
     .bi {
       vertical-align: -.125em;
@@ -46,41 +46,56 @@
 
 </head>
 <body class="page-shell">
-<header class="app-navigation p-1 mb-3 border-bottom">
-  <div class="container">
-    <div class="d-flex align-items-center">
-      <a href="{{ url_for('home_status') }}" class="d-flex align-items-center me-2 link-body-emphasis text-decoration-none">
-        <img width="40" height="40" alt="{{ _('OpenSpoolMan Logo') }}" src="{{ url_for('static', filename='logo.png') }}"/>
-      </a>
-      
-      <ul class="nav app-navigation-links flex-grow-1 align-items-center">
-        <li><a href="{{ url_for('home_status') }}" class="nav-link px-2 link-body-emphasis">{{ _('Home') }}</a></li>
-        <li><a href="{{ url_for('ams') }}" class="nav-link px-2 link-body-emphasis">{{ _('AMS') }}</a></li>
-        <li><a href="{{ url_for('print_history') }}" class="nav-link px-2 link-body-emphasis">{{ _('History') }}</a></li>
-        <li><a href="{{ url_for('inventory') }}" class="nav-link px-2 link-body-emphasis">{{ _('Inventory') }}</a></li>
-        <li><a href="{{ url_for('livecam') }}" class="nav-link px-2 link-body-emphasis">{{ _('LiveCam') }}</a></li>
-        <li><a href="{{ url_for('bambu_cloud.index') }}" class="nav-link px-2 link-body-emphasis">{{ _('Settings') }}{% if not mqtt_connected|default(false) %}<span class="mqtt-menu-status-dot disconnected" title="{{ _('MQTT not connected') }}"></span>{% endif %}</a></li>
-        <li><a href="{{ SPOOLMAN_BASE_URL }}" target="openspoolman-spoolman" data-spoolman-window="true" class="nav-link px-2 link-body-emphasis d-inline-flex align-items-center"><i class="bi bi-box-arrow-up-right me-1" aria-hidden="true"></i>{{ _('SpoolMan') }}</a></li>
-        <li class="nav-item dropdown ms-auto">
-          <button class="nav-link dropdown-toggle px-2 link-body-emphasis language-menu-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="{{ _('Sprache') }}">
-            {{ language_flag(current_language) }}
-          </button>
-          <ul class="dropdown-menu dropdown-menu-end language-menu">
-            {% for language in available_languages %}
-              <li>
-                <form method="post" action="{{ url_for('set_language') }}" class="m-0">
-                  <input type="hidden" name="language" value="{{ language }}">
-                  <input type="hidden" name="next" value="{{ request.full_path }}">
-                  <button type="submit" class="dropdown-item d-flex align-items-center gap-2{% if current_language == language %} active{% endif %}">{{ language_flag(language) }}{{ language_metadata[language]['Name'] }}</button>
-                </form>
-              </li>
-            {% endfor %}
-          </ul>
-        </li>
+<header class="app-topbar">
+  <button class="btn btn-sm app-sidebar-toggle" type="button" aria-controls="app-sidebar" aria-expanded="false" aria-label="{{ _('Menü') }}">
+    <i class="bi bi-list" aria-hidden="true"></i>
+  </button>
+  <div class="app-topbar-context">
+    <i class="bi bi-printer" aria-hidden="true"></i>
+    <span class="app-topbar-printer">{{ PRINTER_NAME or PRINTER_MODEL.get('devicename') or PRINTER_MODEL.get('model') or PRINTER_ID }}</span>
+    <span class="app-topbar-status{% if mqtt_connected|default(false) %} connected{% endif %}">
+      <span class="mqtt-menu-status-dot{% if mqtt_connected|default(false) %} connected{% else %} disconnected{% endif %}"></span>
+      {{ _('Verbunden') if mqtt_connected|default(false) else _('Nicht verbunden') }}
+    </span>
+  </div>
+  <div class="app-topbar-actions">
+    <div class="nav-item dropdown">
+      <button class="btn btn-sm language-menu-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="{{ _('Sprache') }}">
+        {{ language_flag(current_language) }} <i class="bi bi-chevron-down" aria-hidden="true"></i>
+      </button>
+      <ul class="dropdown-menu dropdown-menu-end language-menu">
+        {% for language in available_languages %}
+          <li>
+            <form method="post" action="{{ url_for('set_language') }}" class="m-0">
+              <input type="hidden" name="language" value="{{ language }}">
+              <input type="hidden" name="next" value="{{ request.full_path }}">
+              <button type="submit" class="dropdown-item d-flex align-items-center gap-2{% if current_language == language %} active{% endif %}">{{ language_flag(language) }}{{ language_metadata[language]['Name'] }}</button>
+            </form>
+          </li>
+        {% endfor %}
       </ul>
     </div>
   </div>
 </header>
+<div class="app-layout">
+  <aside class="app-sidebar" id="app-sidebar">
+    <a href="{{ url_for('home_status') }}" class="app-brand">
+      <img src="{{ url_for('static', filename='m0bambuspool-logo.png') }}" alt="m0BambuSpool">
+    </a>
+    <nav class="app-sidebar-nav" aria-label="{{ _('Hauptmenü') }}">
+      <a href="{{ url_for('home_status') }}" class="app-nav-link{% if request.endpoint == 'home_status' %} active{% endif %}"><i class="bi bi-house-door" aria-hidden="true"></i><span>{{ _('Home') }}</span></a>
+      <a href="{{ url_for('ams') }}" class="app-nav-link{% if request.endpoint == 'ams' %} active{% endif %}"><i class="bi bi-circle-half" aria-hidden="true"></i><span>{{ _('AMS') }}</span></a>
+      <a href="{{ url_for('print_history') }}" class="app-nav-link{% if request.endpoint == 'print_history' %} active{% endif %}"><i class="bi bi-clock-history" aria-hidden="true"></i><span>{{ _('History') }}</span></a>
+      <a href="{{ url_for('inventory') }}" class="app-nav-link{% if request.endpoint == 'inventory' %} active{% endif %}"><i class="bi bi-box-seam" aria-hidden="true"></i><span>{{ _('Inventory') }}</span></a>
+      <a href="{{ url_for('livecam') }}" class="app-nav-link{% if request.endpoint == 'livecam' %} active{% endif %}"><i class="bi bi-camera-video" aria-hidden="true"></i><span>{{ _('LiveCam') }}</span></a>
+      <span class="app-nav-divider"></span>
+      <a href="{{ url_for('bambu_cloud.index') }}" class="app-nav-link{% if request.endpoint and request.endpoint.startswith('bambu_cloud.') %} active{% endif %}"><i class="bi bi-gear" aria-hidden="true"></i><span>{{ _('Settings') }}</span>{% if not mqtt_connected|default(false) %}<span class="mqtt-menu-status-dot disconnected"></span>{% endif %}</a>
+      <a href="{{ url_for('about') }}" class="app-nav-link{% if request.endpoint == 'about' %} active{% endif %}"><i class="bi bi-info-circle" aria-hidden="true"></i><span>{{ _('About') }}</span></a>
+      <a href="{{ SPOOLMAN_BASE_URL }}" target="openspoolman-spoolman" data-spoolman-window="true" class="app-nav-link"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i><span>{{ _('SpoolMan') }}</span></a>
+    </nav>
+    <div class="app-sidebar-footer">m0BambuSpool</div>
+  </aside>
+  <main class="app-main">
 <script>
   if (window.navigator.standalone) {
     document.addEventListener("DOMContentLoaded", function () {
@@ -151,7 +166,7 @@
     }
 });
   </script>
-<main class="container">
+<div class="container page-content">
   {% if success_message %}
   <div id="success-alert" class="alert alert-success alert-dismissible fade show" role="alert">
     <strong>{{ _('Success!') }}</strong> {{ success_message }}
@@ -169,20 +184,23 @@
     });
   </script>
   {% block content %}{% endblock %}
-</main>
+</div>
 
-<div class="container">
-  <footer class="d-flex flex-wrap justify-content-between align-items-center py-3 my-4 border-top">
+  </main>
+</div>
+
+<footer class="app-footer">
+  <div class="container-fluid d-flex flex-wrap justify-content-between align-items-center">
     <ul class="nav col-md-12 justify-content-end list-unstyled d-flex">
       <li class="nav-item d-flex align-items-center me-2">
         <span class="text-body-secondary">v{{ openspoolman_version }} ({{ _('Build') }} {{ openspoolman_build_number }}) @m0quai</span>
       </li>
-      <li class="ms-3"><a class="link-body-emphasis" href="https://github.com/m0quai/openspoolman" target="_blank" rel="noopener noreferrer">
+      <li class="ms-3"><a class="link-body-emphasis" href="https://github.com/m0quai/m0BambuSpool" target="_blank" rel="noopener noreferrer">
         <i class="bi bi-github"></i>
       </a></li>
     </ul>
-  </footer>
-</div>
+  </div>
+</footer>
 
 <script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"></script>
 <script>
@@ -199,6 +217,20 @@
     }
   })()
   document.addEventListener('DOMContentLoaded', function () {
+    const sidebar = document.getElementById('app-sidebar');
+    const sidebarToggle = document.querySelector('.app-sidebar-toggle');
+    if (sidebar && sidebarToggle) {
+      sidebarToggle.addEventListener('click', function () {
+        const isOpen = sidebar.classList.toggle('is-open');
+        sidebarToggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+      });
+      document.addEventListener('click', function (event) {
+        if (window.innerWidth < 992 && sidebar.classList.contains('is-open') && !sidebar.contains(event.target) && !sidebarToggle.contains(event.target)) {
+          sidebar.classList.remove('is-open');
+          sidebarToggle.setAttribute('aria-expanded', 'false');
+        }
+      });
+    }
     document.querySelectorAll('a[data-spoolman-window]').forEach(function (link) {
       link.addEventListener('click', function (event) {
         const spoolmanWindow = window.open(link.href, 'openspoolman-spoolman');

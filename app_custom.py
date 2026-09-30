@@ -668,6 +668,12 @@ def ams():
     return _openspoolman_app_module.home()
 
 
+@app.route("/about")
+def about():
+    # Keep project provenance and external references in one translated page.
+    return render_template("about.html")
+
+
 def _current_printer_status_payload():
     connected = bool(mqtt_bambulab.isMqttClientConnected())
     print_state = getattr(mqtt_bambulab, "PRINTER_STATE", {}).get("print", {}) or {}
