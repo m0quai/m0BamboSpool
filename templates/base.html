@@ -12,14 +12,14 @@
   <meta name="viewport" content="initial-scale=0.8, shrink-to-fit=yes, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="m0BambuSpool">
+  <meta name="apple-mobile-web-app-title" content="m0BamboSpool">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>m0BambuSpool</title>
+  <title>m0BamboSpool</title>
   <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}">
   <link href="{{ url_for('static', filename='css/bootstrap.min.css') }}" rel="stylesheet">
   <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
   <link href="{{ url_for('static', filename='css/bootstrap-icons.css') }}" rel="stylesheet">
-  <link rel="apple-touch-icon" href="{{ url_for('static', filename='m0bambuspool-logo.png') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='m0bambospool-logo.png') }}">
   <style>
     .bi {
       vertical-align: -.125em;
@@ -80,7 +80,7 @@
 <div class="app-layout">
   <aside class="app-sidebar" id="app-sidebar">
     <a href="{{ url_for('home_status') }}" class="app-brand">
-      <img src="{{ url_for('static', filename='m0bambuspool-logo.png') }}" alt="m0BambuSpool">
+      <img src="{{ url_for('static', filename='m0bambospool-logo.png') }}" alt="m0BamboSpool">
     </a>
     <nav class="app-sidebar-nav" aria-label="{{ _('Hauptmenü') }}">
       <a href="{{ url_for('home_status') }}" class="app-nav-link{% if request.endpoint == 'home_status' %} active{% endif %}"><i class="bi bi-house-door" aria-hidden="true"></i><span>{{ _('Home') }}</span></a>
@@ -93,7 +93,7 @@
       <a href="{{ url_for('about') }}" class="app-nav-link{% if request.endpoint == 'about' %} active{% endif %}"><i class="bi bi-info-circle" aria-hidden="true"></i><span>{{ _('About') }}</span></a>
       <a href="{{ SPOOLMAN_BASE_URL }}" target="openspoolman-spoolman" data-spoolman-window="true" class="app-nav-link"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i><span>{{ _('SpoolMan') }}</span></a>
     </nav>
-    <div class="app-sidebar-footer">m0BambuSpool</div>
+    <div class="app-sidebar-footer">m0BamboSpool</div>
   </aside>
   <main class="app-main">
 <script>
@@ -195,7 +195,7 @@
       <li class="nav-item d-flex align-items-center me-2">
         <span class="text-body-secondary">v{{ openspoolman_version }} ({{ _('Build') }} {{ openspoolman_build_number }}) @m0quai</span>
       </li>
-      <li class="ms-3"><a class="link-body-emphasis" href="https://github.com/m0quai/m0BambuSpool" target="_blank" rel="noopener noreferrer">
+      <li class="ms-3"><a class="link-body-emphasis" href="https://github.com/m0quai/m0BamboSpool" target="_blank" rel="noopener noreferrer">
         <i class="bi bi-github"></i>
       </a></li>
     </ul>
