@@ -510,6 +510,7 @@ class FilamentUsageTracker:
       ams_mapping=ams_mapping,
       task_id=print_obj.get("task_id"),
       subtask_id=print_obj.get("subtask_id"),
+      resume_layer=print_obj.get("_resume_layer"),
     )
     metadata = _get_checkpoint_metadata()
     metadata["model_url"] = model_url
@@ -525,12 +526,19 @@ class FilamentUsageTracker:
       ams_mapping: list[int] | None,
       task_id,
       subtask_id,
+      resume_layer=None,
   ) -> None:
     self._reset_layer_tracking_state()
     clear_checkpoint()
     self.spent_layers = set()
     self.cumulative_grams_used = {}
     self.cumulative_length_used = {}
+    if resume_layer is not None:
+      self.current_layer = resume_layer
+      self.spent_layers.update(range(resume_layer + 1))
+      for slot, usage in get_all_filament_usage_for_print(self.print_id).items():
+        self.cumulative_grams_used[slot] = usage.get("grams_used") or 0.0
+        self.cumulative_length_used[slot] = usage.get("length_used") or 0.0
 
     if use_ams:
       self.ams_mapping = ams_mapping or []
@@ -561,7 +569,7 @@ class FilamentUsageTracker:
 
     save_checkpoint(
       model_path=model_path,
-      current_layer=0,
+      current_layer=resume_layer or 0,
       task_id=task_id,
       subtask_id=subtask_id,
       ams_mapping=self.ams_mapping,
@@ -623,6 +631,10 @@ class FilamentUsageTracker:
     current_print["use_ams"] = bool(current_print["ams_mapping"])
     current_print["task_id"] = metadata.get("task_id", current_print.get("task_id"))
     current_print["subtask_id"] = metadata.get("subtask_id", current_print.get("subtask_id"))
+    try:
+      current_print["_resume_layer"] = max(0, int(current_print.get("layer_num") or 0))
+    except (TypeError, ValueError):
+      current_print["_resume_layer"] = 0
     self.set_print_metadata(metadata)
     self._handle_print_start(current_print)
     if self.active_model is None:
@@ -1180,14 +1192,16 @@ class FilamentUsageTracker:
     except Exception as worker_error:
       log(f"[filament-tracker] 3MF-Workerstatus nicht verfügbar: {worker_error}")
     if self.print_id is None:
-      self.print_id = get_latest_running_print_id()
-    if self.print_id is None:
-      history_name = print_obj.get("subtask_name") or print_obj.get("gcode_file")
-      self.print_id = find_latest_print_id(history_name)
-      log(
-        f"[filament-tracker] Resume history fallback: name={history_name!r}, "
-        f"resolved_print_id={self.print_id}"
+      from print_history import find_active_print_for_printer_job
+      from jobs_3mf import make_job_key
+      candidate = find_active_print_for_printer_job(
+        print_obj.get("subtask_name"), print_obj.get("gcode_file"), model_url,
+        job_key=make_job_key(task_id, subtask_id),
       )
+      self.print_id = int(candidate["id"]) if candidate else None
+      if self.print_id is None:
+        log("[filament-tracker] Kein passender aktiver Druck; alte History wird nicht wiederverwendet.")
+        return
     checkpoint_metadata = _get_checkpoint_metadata()
     previous_version = checkpoint_metadata.get("checkpoint_version")
     if checkpoint_metadata and previous_version != CHECKPOINT_VERSION:

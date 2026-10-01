@@ -34,6 +34,10 @@ Erledigte Punkte werden entfernt und nicht als erledigt weitergeführt.
 - Die am 30.09.2026 in der Inventaransicht dargestellten Spulen in die eigene
   Verwaltung übernehmen. Bestehende Spulen-IDs, Filament-/Herstellerdaten,
   Restgewichte und AMS-Zuordnungen erhalten.
+- Referenzbestand aus der geprüften Inventaransicht: Spulen #1, #2, #3, #4,
+  #9, #10, #11, #12, #13, #14 und #15. Vor der tatsächlichen Übernahme den
+  aktuellen Bestand erneut abgleichen; die eigene Verwaltung soll diese
+  Spulen weiterführen und keine parallelen Duplikate anlegen.
 - Zugeordnete Drucke mit Datum, Verbrauch und Auftrag weiter bei der jeweiligen
   Spule anzeigen. Bei der Übernahme keine Verbrauchsbuchungen erneut ausführen.
 

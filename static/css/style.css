@@ -543,8 +543,12 @@ main.container {
     border-bottom-right-radius: 6px
 }
 
+.ams-card > .card,
+.printer-card,
 .ams-card .tray-card {
     height: 100%;
+    /* Clip each header background to the rounded outer card corners. */
+    overflow: hidden;
 }
 
 .ams-card .tray-card .tray-empty {
@@ -740,16 +744,16 @@ main.container {
 }
 .inventory-table {
     width: 100%;
-    min-width: 0;
-    table-layout: fixed;
+    min-width: 980px;
+    table-layout: auto;
     margin-bottom: 0;
-    border: 1px solid var(--bs-border-color);
     border-collapse: separate;
     border-spacing: 0;
+    font-size: .88rem;
 }
 .inventory-table > thead > tr > th,
 .inventory-table > tbody > tr > td {
-    padding: .75rem .85rem;
+    padding: .55rem .65rem;
     vertical-align: middle;
     border-right: 1px solid var(--bs-border-color);
     border-bottom: 1px solid var(--bs-border-color);
@@ -757,7 +761,12 @@ main.container {
 .inventory-table > :is(thead, tbody) > tr > :last-child { border-right: 0; }
 .inventory-table > tbody > tr:last-child > * { border-bottom: 0; }
 .inventory-table > tbody > tr > td { vertical-align: top; }
-.inventory-table > thead > tr > th { background: var(--bs-tertiary-bg); white-space: nowrap; }
+.inventory-table > thead > tr > th {
+    background: var(--bs-tertiary-bg);
+    color: var(--bs-secondary-color);
+    font-size: .8rem;
+    white-space: nowrap;
+}
 .inventory-table > thead > tr > th:nth-child(1) { width: 7%; }
 .inventory-table > thead > tr > th:nth-child(2) { width: 12%; }
 .inventory-table > thead > tr > th:nth-child(3) { width: 11%; }
@@ -771,7 +780,14 @@ main.container {
 .inventory-table.inventory-no-status > thead > tr > th:nth-child(7) { width: 16%; }
 .inventory-table.inventory-no-status > thead > tr > th:nth-child(8) { width: 15%; }
 .inventory-table > tbody > tr > td { overflow-wrap: anywhere; }
-.inventory-table-container { width: 100%; overflow-x: hidden; }
+.inventory-table-container {
+    width: 100%;
+    overflow-x: auto;
+    border: 1px solid var(--bs-border-color);
+    border-radius: .375rem;
+}
+.page-content > .alert:empty { display: none !important; }
+.page-content:has(.inventory-table-container) > .alert { display: none !important; }
 .inventory-color-code {
     display: inline-block;
     min-width: 68px;

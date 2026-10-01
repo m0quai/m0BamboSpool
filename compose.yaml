@@ -8,7 +8,7 @@ services:
       args:
         BUILD_NUMBER: ${BUILD_NUMBER:-dev}
         BUILD_COMMIT: ${BUILD_COMMIT:-dev}
-    container_name: m0BamboSpool
+    container_name: MOS
     restart: unless-stopped
     env_file:
       - config.env

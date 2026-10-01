@@ -354,6 +354,54 @@ def find_open_print_for_printer_job(*names: str | None, job_key: str | None = No
     return None
 
 
+def find_active_print_for_printer_job(*names: str | None, job_key: str | None = None) -> dict | None:
+    # Local printers reuse 0:0 and filenames. Only an active, matching attempt
+    # can be resumed; terminal history rows must never become the current job.
+    def normalise(value):
+        return _normalise_print_name(str(value or "").replace("\\", "/").rsplit("/", 1)[-1])
+
+    wanted = {normalise(name) for name in names if name}
+    meaningful_key = bool(job_key and any(part not in {"", "0"} for part in str(job_key).split(":")))
+    with connect_database(db_config["db_path"]) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """SELECT p.id, p.file_name, t.status, t.printer_job_key, t.remote_3mf_path
+               FROM prints p JOIN print_layer_tracking t ON t.print_id = p.id
+               WHERE COALESCE(p.is_deleted, 0) = 0
+                 AND t.status IN ('PREPARING', 'RUNNING', 'PAUSED')
+               ORDER BY p.id DESC"""
+        ).fetchall()
+    for row in rows:
+        if meaningful_key and str(row["printer_job_key"]) == str(job_key):
+            return dict(row)
+        if wanted.intersection({normalise(row["file_name"]), normalise(row["remote_3mf_path"])}):
+            return dict(row)
+    return None
+
+
+def find_previous_metadata_print_name(remote_3mf_path: str, current_print_id: int) -> str | None:
+    # Reuse a user-facing name already extracted from metadata for this exact
+    # printer file when a later attempt contains only its generated filename.
+    if not remote_3mf_path:
+        return None
+    with connect_database(db_config["db_path"]) as conn:
+        row = conn.execute(
+            """SELECT p.file_name
+               FROM prints p
+               JOIN print_layer_tracking t ON t.print_id = p.id
+               WHERE p.id != ?
+                 AND COALESCE(p.is_deleted, 0) = 0
+                 AND t.remote_3mf_path = ?
+                 AND p.file_name_source IN ('metadata', 'manual')
+                 AND TRIM(COALESCE(p.file_name, '')) != ''
+               ORDER BY CASE p.file_name_source WHEN 'manual' THEN 0 ELSE 1 END,
+                        p.id DESC
+               LIMIT 1""",
+            (int(current_print_id), str(remote_3mf_path)),
+        ).fetchone()
+    return str(row[0]) if row else None
+
+
 def get_filament_usage_for_reconciliation(print_id: int) -> list[dict]:
     conn = connect_database(db_config["db_path"])
     conn.row_factory = sqlite3.Row
@@ -399,6 +447,7 @@ def update_printer_job_status(
     *,
     percent: float | None = None,
     status_at: str | None = None,
+    predicted_end_time: str | None = None,
 ) -> None:
     if print_id is None:
         return
@@ -410,6 +459,9 @@ def update_printer_job_status(
     if status_at:
         fields.append("last_status_at = ?")
         values.append(status_at)
+    if predicted_end_time:
+        fields.append("predicted_end_time = ?")
+        values.append(predicted_end_time)
     if not fields:
         return
     values.append(int(print_id))
@@ -535,11 +587,11 @@ def insert_filament_usage(
         """UPDATE filament_usage
            SET filament_type = ?,
                color = ?,
-               grams_used = ?,
-               estimated_grams = ?,
-               length_used = ?,
-               estimated_length = ?,
-               calculated_length = ?,
+               grams_used = MAX(COALESCE(grams_used, 0), ?),
+               estimated_grams = COALESCE(?, estimated_grams),
+               length_used = MAX(COALESCE(length_used, 0), ?),
+               estimated_length = COALESCE(?, estimated_length),
+               calculated_length = MAX(COALESCE(calculated_length, 0), ?),
                physical_ams_slot = COALESCE(?, physical_ams_slot)
            WHERE print_id = ? AND ams_slot = ?""",
         (

@@ -35,7 +35,7 @@ from tools_3mf import getMetaDataFrom3mf, delete3mfFromFTP
 import time
 import threading
 import copy
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections.abc import Mapping
 from logger import application_log_file, append_to_rotating_file, log
 from print_history import (
@@ -46,6 +46,8 @@ from print_history import (
   update_print_image,
   update_layer_tracking,
   find_open_print_for_printer_job,
+  find_active_print_for_printer_job,
+  find_previous_metadata_print_name,
   get_filament_usage_for_reconciliation,
   mark_print_reconciled,
   set_estimated_duration_from_remaining,
@@ -357,6 +359,12 @@ def _on_3mf_job_complete(job_key, local_path, metadata, error):
     or metadata.get("subtask_name")
     or metadata.get("model_name")
   )
+  if remote_3mf_path:
+    previous_metadata_name = find_previous_metadata_print_name(
+      remote_3mf_path, job["print_id"]
+    )
+    if previous_metadata_name:
+      display_name = previous_metadata_name
   if display_name:
     update_print_file_name(job["print_id"], display_name)
 
@@ -394,20 +402,18 @@ def _on_3mf_job_complete(job_key, local_path, metadata, error):
     log(
       f"[3MF] Metadaten ergänzt; Tracker wird bei abgeschlossenem Job nicht neu gestartet: {current_state}"
     )
+  elif current_state == "RUNNING":
+    FILAMENT_TRACKER.start_tracking_from_cached_model(
+      metadata, local_path, copy.deepcopy(PRINTER_STATE.get("print", {}) or {}),
+    )
   elif metadata.get("print_type") == "local":
     FILAMENT_TRACKER.start_local_print_from_metadata(metadata, local_path)
   else:
     FILAMENT_TRACKER.set_print_metadata(metadata)
-    if current_state == "RUNNING":
-      FILAMENT_TRACKER.start_tracking_from_cached_model(
-        metadata,
-        local_path,
-        copy.deepcopy(PRINTER_STATE.get("print", {}) or {}),
-      )
   log(f"[3MF] Job ready task={job_key} print_id={job['print_id']} local={local_path!r}")
 
 
-def _queue_3mf_job(print_data):
+def _queue_3mf_job(print_data, *, resume=False):
   job_key = _job_key(print_data)
   with _ACTIVE_3MF_PRINTS_LOCK:
     existing = ACTIVE_3MF_PRINTS.get(job_key)
@@ -422,8 +428,15 @@ def _queue_3mf_job(print_data):
       return existing
 
     file_name = print_data.get("subtask_name") or print_data.get("gcode_file") or print_data.get("url") or job_key
-    print_id = insert_print(file_name, print_data.get("print_type") or "cloud")
-    ensure_layer_tracking(print_id, "PREPARING")
+    recovered = find_active_print_for_printer_job(
+      print_data.get("subtask_name"), print_data.get("gcode_file"), print_data.get("url"),
+      job_key=job_key,
+    ) if resume else None
+    if recovered:
+      print_id = int(recovered["id"])
+    else:
+      print_id = insert_print(file_name, print_data.get("print_type") or "cloud")
+      ensure_layer_tracking(print_id, "PREPARING")
     update_layer_tracking(print_id, printer_job_key=job_key)
     mapping_value = _active_tray_mapping(print_data)
     metadata = {
@@ -448,7 +461,8 @@ def _queue_3mf_job(print_data):
   FILAMENT_TRACKER.begin_pending_print(metadata)
   JOBS_3MF.enqueue(job_key, job["source"], _on_3mf_job_complete)
   print_data["_metadata_job_queued"] = True
-  log(f"[3MF] Print-ID {print_id} sofort angelegt, Metadaten laufen im Hintergrund: {job_key}")
+  action = "wiederaufgenommen" if recovered else "sofort angelegt"
+  log(f"[3MF] Print-ID {print_id} {action}, Metadaten laufen im Hintergrund: {job_key}")
   return job
 
 
@@ -673,16 +687,24 @@ def processMessage(data):
         f"Druckerstatus {current_state} (print_error={current_print.get('print_error')!r})",
       )
 
+    with _ACTIVE_3MF_PRINTS_LOCK:
+      active_job = ACTIVE_3MF_PRINTS.get(_job_key(current_print))
     if incoming_print.get("command") == "project_file" and (
         incoming_print.get("url") or current_print.get("gcode_file")
     ):
       active_job = _queue_3mf_job(current_print)
       incoming_print["_metadata_job_queued"] = True
-    else:
-      with _ACTIVE_3MF_PRINTS_LOCK:
-        active_job = ACTIVE_3MF_PRINTS.get(_job_key(current_print))
+    elif history_status in {"PREPARING", "RUNNING", "PAUSED"} and (
+        current_print.get("url") or current_print.get("gcode_file")
+    ):
+      tracking_status = get_layer_tracking_for_prints([active_job["print_id"]]).get(
+        active_job["print_id"], {}
+      ).get("status") if active_job else None
+      if tracking_status not in {"PREPARING", "RUNNING", "PAUSED"}:
+        active_job = _queue_3mf_job(current_print, resume=True)
 
     status_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    predicted_end_time = None
     if active_job:
       _ensure_provisional_filament_usage(active_job, current_print)
       if current_print.get("mc_remaining_time") is not None:
@@ -692,12 +714,18 @@ def processMessage(data):
           remaining_minutes = None
         if remaining_minutes is not None and remaining_minutes > 0:
           set_estimated_duration_from_remaining(active_job["print_id"], remaining_minutes)
+          predicted_end_time = (
+            datetime.now() + timedelta(minutes=remaining_minutes)
+          ).strftime("%Y-%m-%d %H:%M:%S")
     try:
       current_percent = float(current_print.get("mc_percent"))
     except (TypeError, ValueError):
       current_percent = None
     if active_job:
-      update_printer_job_status(active_job["print_id"], percent=current_percent, status_at=status_at)
+      update_printer_job_status(
+        active_job["print_id"], percent=current_percent, status_at=status_at,
+        predicted_end_time=predicted_end_time,
+      )
       state = current_state
       if incoming_print.get("command") == "project_file" and incoming_print.get("gcode_state") is None:
         state = "PREPARE"

@@ -93,7 +93,7 @@
       <a href="{{ url_for('about') }}" class="app-nav-link{% if request.endpoint == 'about' %} active{% endif %}"><i class="bi bi-info-circle" aria-hidden="true"></i><span>{{ _('About') }}</span></a>
       <a href="{{ SPOOLMAN_BASE_URL }}" target="m0bambospool-spoolman" data-spoolman-window="true" class="app-nav-link"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i><span>{{ _('SpoolMan') }}</span></a>
     </nav>
-    <div class="app-sidebar-footer">m0BamboSpool</div>
+    <div class="app-sidebar-footer">v{{ m0bambospool_version }} ({{ _('Build') }} {{ m0bambospool_build_number }})</div>
   </aside>
   <main class="app-main">
 <script>
@@ -188,19 +188,6 @@
 
   </main>
 </div>
-
-<footer class="app-footer">
-  <div class="container-fluid d-flex flex-wrap justify-content-between align-items-center">
-    <ul class="nav col-md-12 justify-content-end list-unstyled d-flex">
-      <li class="nav-item d-flex align-items-center me-2">
-        <span class="text-body-secondary">v{{ m0bambospool_version }} ({{ _('Build') }} {{ m0bambospool_build_number }}) @m0quai</span>
-      </li>
-      <li class="ms-3"><a class="link-body-emphasis" href="https://github.com/m0quai/m0BamboSpool" target="_blank" rel="noopener noreferrer">
-        <i class="bi bi-github"></i>
-      </a></li>
-    </ul>
-  </div>
-</footer>
 
 <script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"></script>
 <script>
