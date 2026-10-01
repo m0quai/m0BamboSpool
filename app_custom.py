@@ -790,16 +790,15 @@ def _printer_is_busy():
 
 def _printer_status_code():
     state = str((getattr(mqtt_bambulab, "PRINTER_STATE", {}).get("print", {}) or {}).get("gcode_state") or "OFFLINE").upper()
+    # Bambu retains a terminal job state after that job ends.  It describes
+    # the history entry, not the printer's current availability.
+    if state in {"FINISH", "FAILED", "STOP", "CANCEL", "CANCELED", "CANCELLED", "ABORT", "ABORTED"}:
+        return "Ready" if mqtt_bambulab.isMqttClientConnected() else "Offline"
     return {
         "IDLE": "Ready",
         "PREPARE": "Preparing",
         "RUNNING": "Printing",
         "PAUSE": "Paused",
-        # FINISH describes the last print job, not a busy printer. The
-        # printer itself is ready once Bambu reports FINISH.
-        "FINISH": "Ready",
-        "FAILED": "Failed",
-        "STOP": "Cancelled",
     }.get(state, "Offline" if state == "OFFLINE" else state.title())
 
 
