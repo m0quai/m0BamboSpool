@@ -105,6 +105,28 @@ class ActivePrintRecoveryTests(unittest.TestCase):
         self.assertEqual(tracking["printer_percent"], 19)
         self.assertEqual(tracking["predicted_end_time"], "2026-10-01 18:20:00")
 
+    def test_terminal_zero_percent_uses_last_layer_checkpoint(self):
+        print_id = self.add_print("RUNNING")
+        history.update_layer_tracking(print_id, layers_printed=255, total_layers=1481)
+
+        percent = history.set_printer_percent_from_layers(print_id)
+
+        self.assertEqual(percent, 17.22)
+        tracking = history.get_layer_tracking_for_prints([print_id])[print_id]
+        self.assertEqual(tracking["printer_percent"], 17.22)
+
+    def test_spool_usage_exposes_completion_details(self):
+        print_id = history.insert_print("finished-model", "local", print_date="2026-10-01 08:00:00")
+        history.ensure_layer_tracking(print_id, "COMPLETED")
+        history.update_layer_tracking(print_id, actual_end_time="2026-10-01 09:35:00")
+        history.insert_filament_usage(print_id, "PLA", "FFFFFF", 12.5, 1)
+        history.update_filament_spool(print_id, 1, 42)
+
+        usage = history.get_spool_print_usage(42)
+        self.assertEqual(usage[0]["status"], "COMPLETED")
+        self.assertEqual(usage[0]["actual_end_time"], "2026-10-01 09:35:00")
+        self.assertEqual(usage[0]["duration_minutes"], 95.0)
+
     def test_cached_resume_skips_old_layers_and_restores_consumption(self):
         active = self.add_print("RUNNING")
         history.insert_filament_usage(active, "PLA", "FFFFFF", 15, 1, length_used=1000)

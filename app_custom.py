@@ -337,6 +337,8 @@ _UI_TRANSLATIONS["de"]["Ready"] = "Bereit"
 _UI_TRANSLATIONS["en"]["Ready"] = "Ready"
 _UI_TRANSLATIONS["de"].update({"Last status": "Letzter Status", "Last booking": "Letzte Buchung"})
 _UI_TRANSLATIONS["en"].update({"Last status": "Last status", "Last booking": "Last booking"})
+_UI_TRANSLATIONS["de"].update({"Ende": "Ende", "Dauer": "Dauer"})
+_UI_TRANSLATIONS["en"].update({"Ende": "End", "Dauer": "Duration"})
 _UI_TRANSLATIONS["de"].update({"Letzter Druck": "Letzter Druck", "Letzter Status": "Letzter Status", "Letzte Buchung": "Letzte Buchung"})
 _UI_TRANSLATIONS["en"].update({"Letzter Druck": "Last print", "Letzter Status": "Last status", "Letzte Buchung": "Last booking"})
 
@@ -701,23 +703,24 @@ def _current_printer_status_payload():
         if live_status in {"PREPARING", "RUNNING", "PAUSED", "COMPLETED", "ABORTED", "FAILED"}:
             last_print = dict(last_print)
             last_print["status"] = live_status
-        live_status_at = getattr(mqtt_bambulab, "PRINTER_STATE_LAST_UPDATE_AT", None)
-        if live_status_at:
-            last_print = dict(last_print)
-            last_print["last_status_at"] = live_status_at
-        try:
-            if print_state.get("mc_percent") is not None:
+        if active_print_id is not None and int(last_print["id"]) == int(active_print_id):
+            live_status_at = getattr(mqtt_bambulab, "PRINTER_STATE_LAST_UPDATE_AT", None)
+            if live_status_at:
                 last_print = dict(last_print)
-                last_print["printer_percent"] = float(print_state["mc_percent"])
-        except (TypeError, ValueError):
-            pass
-        for source, target in (("layer_num", "layers_printed"), ("total_layer_num", "total_layers")):
-            if print_state.get(source) is not None:
-                try:
+                last_print["last_status_at"] = live_status_at
+            try:
+                if print_state.get("mc_percent") is not None:
                     last_print = dict(last_print)
-                    last_print[target] = int(print_state[source])
-                except (TypeError, ValueError):
-                    pass
+                    last_print["printer_percent"] = float(print_state["mc_percent"])
+            except (TypeError, ValueError):
+                pass
+            for source, target in (("layer_num", "layers_printed"), ("total_layer_num", "total_layers")):
+                if print_state.get(source) is not None:
+                    try:
+                        last_print = dict(last_print)
+                        last_print[target] = int(print_state[source])
+                    except (TypeError, ValueError):
+                        pass
     return {
         "printer_name": PRINTER_NAME or (getattr(mqtt_bambulab, "getPrinterModel", lambda: {})() or {}).get("devicename") or PRINTER_ID,
         "mqtt_connected": connected,

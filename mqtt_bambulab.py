@@ -51,6 +51,7 @@ from print_history import (
   get_filament_usage_for_reconciliation,
   mark_print_reconciled,
   set_estimated_duration_from_remaining,
+  set_printer_percent_from_layers,
   update_printer_job_status,
   update_latest_printer_job_status,
   get_layer_tracking_for_prints,
@@ -679,7 +680,12 @@ def processMessage(data):
     current_state = str(current_print.get("gcode_state") or "").upper()
     history_status = printer_state_to_history_status(current_state, current_print.get("print_error"))
     previous_state = str((PRINTER_STATE_LAST.get("print") or {}).get("gcode_state") or "").upper()
-    if current_state == "FAILED" and history_status == "ABORTED" and previous_state != "FAILED":
+    if (
+      PRINTER_STATE_LAST.get("print")
+      and current_state == "FAILED"
+      and history_status == "ABORTED"
+      and previous_state != "FAILED"
+    ):
       log("[History] Bambu meldet FAILED mit print_error=0; wird als manuelles CANCEL (ABORTED) gewertet.")
     if history_status == "ABORTED":
       JOBS_3MF.cancel(
@@ -721,9 +727,14 @@ def processMessage(data):
       current_percent = float(current_print.get("mc_percent"))
     except (TypeError, ValueError):
       current_percent = None
+    terminal_percent = current_percent
+    if history_status in {"COMPLETED", "ABORTED", "FAILED"} and (
+      current_percent is None or current_percent <= 0
+    ):
+      terminal_percent = None
     if active_job:
       update_printer_job_status(
-        active_job["print_id"], percent=current_percent, status_at=status_at,
+        active_job["print_id"], percent=terminal_percent, status_at=status_at,
         predicted_end_time=predicted_end_time,
       )
       state = current_state
@@ -744,10 +755,12 @@ def processMessage(data):
         if status in {"FAILED", "ABORTED"}:
           status_fields["actual_end_time"] = status_at
         update_layer_tracking(active_job["print_id"], **status_fields)
+        if status in {"COMPLETED", "ABORTED", "FAILED"} and terminal_percent is None:
+          set_printer_percent_from_layers(active_job["print_id"])
     else:
       update_latest_printer_job_status(
         (current_print.get("subtask_name"), current_print.get("gcode_file"), current_print.get("url")),
-        percent=current_percent,
+        percent=terminal_percent,
         status_at=status_at,
       )
       state = str(current_print.get("gcode_state") or "").upper()
@@ -771,13 +784,16 @@ def processMessage(data):
           and current_status == "FAILED"
         )
         if candidate and should_update:
-          update_layer_tracking(
-            candidate["id"],
-            status=terminal_status,
-            actual_end_time=status_at,
-            last_status_at=status_at,
-            printer_percent=current_percent,
-          )
+          status_fields = {
+            "status": terminal_status,
+            "actual_end_time": status_at,
+            "last_status_at": status_at,
+          }
+          if terminal_percent is not None:
+            status_fields["printer_percent"] = terminal_percent
+          update_layer_tracking(candidate["id"], **status_fields)
+          if terminal_percent is None:
+            set_printer_percent_from_layers(candidate["id"])
           log(
             f"[History] Offener Druck {candidate['id']} anhand Druckerstatus "
             f"{state} auf {terminal_status} gesetzt."

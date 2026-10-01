@@ -471,6 +471,29 @@ def update_printer_job_status(
     conn.close()
 
 
+def set_printer_percent_from_layers(print_id: int) -> float | None:
+    # A terminal Bambu report may reset mc_percent to zero.  Retain the
+    # measurable progress from the last layer checkpoint in that case.
+    if print_id is None:
+        return None
+    conn = connect_database(db_config["db_path"])
+    row = conn.execute(
+        "SELECT layers_printed, total_layers FROM print_layer_tracking WHERE print_id = ?",
+        (int(print_id),),
+    ).fetchone()
+    if not row or row[0] is None or row[1] is None or int(row[1]) <= 0:
+        conn.close()
+        return None
+    percent = round(max(0.0, min(100.0, float(row[0]) * 100.0 / float(row[1]))), 2)
+    conn.execute(
+        "UPDATE print_layer_tracking SET printer_percent = ? WHERE print_id = ?",
+        (percent, int(print_id)),
+    )
+    conn.commit()
+    conn.close()
+    return percent
+
+
 def update_latest_printer_job_status(names: tuple[str | None, ...], *, percent: float | None, status_at: str) -> None:
     wanted = {_normalise_print_name(name) for name in names if name}
     wanted.discard("")
@@ -873,9 +896,16 @@ def get_spool_print_usage(spool_id: int) -> list[dict]:
     rows = conn.execute(
         """SELECT p.id AS print_id, p.print_date, p.file_name,
                   f.grams_used, f.length_used, f.calculated_length,
-                  f.spoolman_length_used
+                  f.spoolman_length_used,
+                  COALESCE(t.status, 'COMPLETED') AS status,
+                  t.actual_end_time,
+                  CASE
+                    WHEN t.actual_end_time IS NOT NULL
+                    THEN ROUND((julianday(t.actual_end_time) - julianday(p.print_date)) * 1440.0)
+                  END AS duration_minutes
            FROM prints p
            JOIN filament_usage f ON f.print_id = p.id
+           LEFT JOIN print_layer_tracking t ON t.print_id = p.id
            WHERE f.spool_id = ?
            ORDER BY p.print_date DESC, p.id DESC""",
         (int(spool_id),),

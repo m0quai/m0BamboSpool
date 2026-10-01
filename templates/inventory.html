@@ -1,6 +1,5 @@
 {% extends "base.html" %}
 {% block content %}
-<h1 class="mb-4 text-center">{{ _('Inventory') }}</h1>
 <div class="inventory-table-container">
   <table class="table table-hover align-middle inventory-table {{ 'inventory-has-status' if show_status_column else 'inventory-no-status' }}" id="inventory-table">
     <thead>
@@ -32,8 +31,8 @@
       <tr class="inventory-print-detail-row" id="inventory-prints-{{ spool.id }}" hidden>
         <td colspan="{{ 9 if show_status_column else 8 }}">
           <div class="table-responsive">
-            <table class="table table-sm inventory-print-table mb-0"><thead><tr><th scope="col">{{ _('ID') }}</th><th scope="col">{{ _('Datum') }}</th><th scope="col">{{ _('Verbrauch') }}</th><th scope="col">{{ _('Auftrag') }}</th></tr></thead><tbody>
-            {% for print in item.prints %}<tr><td class="text-nowrap"><a href="{{ url_for('print_history', print_id=print.print_id, _anchor='print_' ~ print.print_id) }}">#{{ print.print_id }}</a></td><td class="text-nowrap">{{ format_datetime(print.print_date) }}</td><td class="text-nowrap">{{ '%.2f'|format(print.grams_used|float) }} g</td><td>{{ print.file_name }}</td></tr>{% endfor %}
+            <table class="table table-sm inventory-print-table mb-0"><thead><tr><th scope="col">{{ _('ID') }}</th><th scope="col">{{ _('Datum') }}</th><th scope="col">{{ _('Ende') }}</th><th scope="col">{{ _('Dauer') }}</th><th scope="col">{{ _('Verbrauch') }}</th><th scope="col">{{ _('Auftrag') }}</th><th scope="col">{{ _('Status') }}</th></tr></thead><tbody>
+            {% for print in item.prints %}<tr><td class="text-nowrap"><a href="{{ url_for('print_history', print_id=print.print_id, _anchor='print_' ~ print.print_id) }}">#{{ print.print_id }}</a></td><td class="text-nowrap">{{ format_datetime(print.print_date) }}</td><td class="text-nowrap">{{ format_datetime(print.actual_end_time) if print.actual_end_time else '—' }}</td><td class="text-nowrap">{% if print.duration_minutes is not none %}{{ (print.duration_minutes|int // 60) }} h {{ (print.duration_minutes|int % 60) }} min{% else %}—{% endif %}</td><td class="text-nowrap">{{ '%.2f'|format(print.grams_used|float) }} g</td><td>{{ print.file_name }}</td><td><span class="badge {% if print.status == 'COMPLETED' %}text-bg-success{% elif print.status == 'ABORTED' %}text-bg-secondary{% elif print.status == 'FAILED' %}text-bg-danger{% else %}text-bg-info{% endif %}">{{ _({'COMPLETED':'Finished','ABORTED':'Aborted','FAILED':'Failed','RUNNING':'Running','PAUSED':'Paused','PREPARING':'Preparing'}.get(print.status, print.status or 'Unknown')) }}</span></td></tr>{% endfor %}
             </tbody></table>
           </div>
         </td>

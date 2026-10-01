@@ -817,10 +817,13 @@ main.container {
 .inventory-print-table thead th { background: transparent; font-size: .8rem; }
 .inventory-print-toggle { padding: 0; border: 0; background: none; color: var(--bs-primary); white-space: nowrap; }
 .inventory-print-detail-row > td { background: var(--bs-tertiary-bg); }
-.inventory-print-table { width: 100%; min-width: 34rem; table-layout: auto; }
+.inventory-print-table { width: 100%; min-width: 56rem; table-layout: auto; }
 .inventory-print-table th:nth-child(1) { width: 4rem; }
-.inventory-print-table th:nth-child(2) { width: 11rem; }
-.inventory-print-table th:nth-child(3) { width: 7rem; }
+.inventory-print-table th:nth-child(2),
+.inventory-print-table th:nth-child(3) { width: 11rem; }
+.inventory-print-table th:nth-child(4),
+.inventory-print-table th:nth-child(5) { width: 7rem; }
+.inventory-print-table th:nth-child(7) { width: 7rem; }
 .inventory-print-table td:last-child { overflow-wrap: anywhere; }
 .inventory-filter-menu.show {
     position: fixed !important;
