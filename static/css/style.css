@@ -75,6 +75,22 @@ body {
     color: var(--m0-success);
 }
 
+.app-topbar-print-progress {
+    display: inline-flex;
+    align-items: center;
+    gap: .4rem;
+    min-width: 0;
+    padding-left: 1rem;
+    border-left: 1px solid var(--m0-line);
+    color: var(--m0-brand);
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.app-topbar-print-progress > .bi {
+    font-size: 1.05rem;
+}
+
 .app-topbar-actions {
     margin-left: auto;
 }
@@ -381,6 +397,15 @@ body {
 
     .app-topbar-status {
         display: none;
+    }
+
+    .app-topbar-print-progress {
+        margin-left: auto;
+        padding-left: 0;
+        border-left: 0;
+        font-size: .82rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
 
     .page-content {

@@ -115,6 +115,16 @@ class ActivePrintRecoveryTests(unittest.TestCase):
         tracking = history.get_layer_tracking_for_prints([print_id])[print_id]
         self.assertEqual(tracking["printer_percent"], 17.22)
 
+    def test_new_job_aborts_previous_active_history_entry(self):
+        previous = self.add_print("RUNNING", "interrupted-model")
+
+        changed = history.abort_active_prints_for_new_printer_job("2026-10-02 10:00:00")
+
+        self.assertEqual(changed, 1)
+        tracking = history.get_layer_tracking_for_prints([previous])[previous]
+        self.assertEqual(tracking["status"], "ABORTED")
+        self.assertEqual(tracking["actual_end_time"], "2026-10-02 10:00:00")
+
     def test_spool_usage_exposes_completion_details(self):
         print_id = history.insert_print("finished-model", "local", print_date="2026-10-01 08:00:00")
         history.ensure_layer_tracking(print_id, "COMPLETED")

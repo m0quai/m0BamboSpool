@@ -346,6 +346,9 @@ _UI_TRANSLATIONS["en"].update({"Letzter Druck": "Last print", "Letzter Status": 
 # above is retained only for compatibility with older local checkouts.
 from translations import UI_TRANSLATIONS as _UI_TRANSLATIONS
 
+_UI_TRANSLATIONS["de"].update({"Schicht": "Schicht", "Ende": "Ende", "Restlaufzeit": "Restlaufzeit", "Verbleibend": "verbleibend"})
+_UI_TRANSLATIONS["en"].update({"Schicht": "Layer", "Ende": "End", "Restlaufzeit": "Remaining", "Verbleibend": "remaining"})
+
 def _ui_language():
     language = session.get("ui_language", "de")
     return language if language in _ui_languages() else "de"
@@ -692,12 +695,8 @@ def _current_printer_status_payload():
     live_status = print_history_service.printer_state_to_history_status(live_state, print_state.get("print_error"))
     live_print_matches_latest = (
         last_print is not None
-        and (
-            active_print_id is not None
-            and int(last_print["id"]) == int(active_print_id)
-            or active_print_id is None
-            and live_status in {"COMPLETED", "ABORTED", "FAILED"}
-        )
+        and active_print_id is not None
+        and int(last_print["id"]) == int(active_print_id)
     )
     if live_print_matches_latest:
         if live_status in {"PREPARING", "RUNNING", "PAUSED", "COMPLETED", "ABORTED", "FAILED"}:
@@ -829,7 +828,12 @@ def reconcile_stale_print_history_statuses():
         state, print_state.get("print_error")
     )
     if terminal_status in {"COMPLETED", "FAILED", "ABORTED"}:
-        candidate = print_history_service.find_open_print_for_printer_job(
+        candidate_finder = (
+            print_history_service.find_active_print_for_printer_job
+            if terminal_status == "COMPLETED"
+            else print_history_service.find_open_print_for_printer_job
+        )
+        candidate = candidate_finder(
             print_state.get("subtask_name"),
             print_state.get("gcode_file"),
             print_state.get("url"),

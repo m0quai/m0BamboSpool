@@ -222,6 +222,23 @@ def ensure_layer_tracking(print_id: int, status: str = "PREPARING") -> None:
     conn.commit()
     conn.close()
 
+
+def abort_active_prints_for_new_printer_job(status_at: str) -> int:
+    # The printer can run only one physical job. Starting another one means
+    # prior active history attempts did not end successfully.
+    conn = connect_database(db_config["db_path"])
+    cursor = conn.execute(
+        """UPDATE print_layer_tracking
+           SET status = 'ABORTED', actual_end_time = ?, last_status_at = ?
+           WHERE status IN ('PREPARING', 'RUNNING', 'PAUSED')""",
+        (status_at, status_at),
+    )
+    conn.commit()
+    changed = cursor.rowcount
+    conn.close()
+    return changed
+
+
 def update_print_image(print_id: int, image_file: str) -> None:
     if print_id is None or not image_file:
         return

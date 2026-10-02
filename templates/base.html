@@ -57,6 +57,12 @@
       <span class="mqtt-menu-status-dot{% if mqtt_connected|default(false) %} connected{% else %} disconnected{% endif %}"></span>
       {{ _('Verbunden') if mqtt_connected|default(false) else _('Nicht verbunden') }}
     </span>
+    {% if request.endpoint != 'home_status' %}
+    <span class="app-topbar-print-progress" id="app-topbar-print-progress" hidden aria-live="polite">
+      <i class="bi bi-layers" id="app-topbar-print-progress-icon" aria-hidden="true"></i>
+      <span id="app-topbar-print-progress-text"></span>
+    </span>
+    {% endif %}
   </div>
   <div class="app-topbar-actions">
     <div class="nav-item dropdown">
@@ -232,6 +238,98 @@
         }
       });
     });
+    const topbarPrintProgress = document.getElementById('app-topbar-print-progress');
+    const topbarPrintProgressIcon = document.getElementById('app-topbar-print-progress-icon');
+    const topbarPrintProgressText = document.getElementById('app-topbar-print-progress-text');
+    const topbarLanguage = {{ current_language|tojson }};
+    const topbarLabels = {
+      layer: {{ _('Schicht')|tojson }},
+      end: {{ _('Ende')|tojson }},
+      remaining: {{ _('Restlaufzeit')|tojson }},
+      download: {{ _('3MF wird geladen')|tojson }},
+    };
+    const formatTopbarTime = function (value) {
+      if (!value) return null;
+      const date = new Date(String(value).replace(' ', 'T'));
+      if (Number.isNaN(date.getTime())) return null;
+      return new Intl.DateTimeFormat(topbarLanguage === 'de' ? 'de-DE' : 'en-US', {
+        hour: '2-digit', minute: '2-digit', hour12: topbarLanguage !== 'de'
+      }).format(date);
+    };
+    const formatTopbarRemaining = function (value) {
+      if (!value) return null;
+      const end = new Date(String(value).replace(' ', 'T'));
+      if (Number.isNaN(end.getTime())) return null;
+      const minutes = Math.max(0, Math.round((end.getTime() - Date.now()) / 60000));
+      const hours = Math.floor(minutes / 60);
+      return hours > 0 ? `${hours} h ${minutes % 60} min` : `${minutes} min`;
+    };
+    const formatTransferBytes = function (value) {
+      if (value === null || value === undefined || value === '') return null;
+      const bytes = Number(value);
+      if (!Number.isFinite(bytes) || bytes < 0) return null;
+      const units = ['B', 'KB', 'MB', 'GB'];
+      let amount = bytes;
+      let unit = 0;
+      while (amount >= 1024 && unit < units.length - 1) {
+        amount /= 1024;
+        unit += 1;
+      }
+      const digits = unit === 0 ? 0 : (amount >= 10 ? 1 : 2);
+      return `${amount.toFixed(digits)} ${units[unit]}`;
+    };
+    const updateTopbarPrintProgress = function (data) {
+      if (!topbarPrintProgress || !topbarPrintProgressText) return;
+      const download = data.download || {};
+      if (['queued', 'resolving', 'downloading', 'processing'].includes(download.state)) {
+        const items = [topbarLabels.download];
+        const downloaded = formatTransferBytes(download.bytes_downloaded);
+        const total = formatTransferBytes(download.bytes_total);
+        if (downloaded && total) items.push(`${downloaded} / ${total}`);
+        else if (downloaded) items.push(downloaded);
+        const speed = formatTransferBytes(download.speed_bytes_per_second);
+        if (speed && Number(download.speed_bytes_per_second) > 0) items.push(`${speed}/s`);
+        const remaining = Number(download.bytes_total) - Number(download.bytes_downloaded);
+        const remainingText = formatTransferBytes(remaining);
+        if (remainingText && Number.isFinite(remaining) && remaining > 0) items.push(`${remainingText} ${topbarLabels.remaining}`);
+        if (topbarPrintProgressIcon) topbarPrintProgressIcon.className = 'bi bi-cloud-arrow-down';
+        topbarPrintProgress.hidden = false;
+        topbarPrintProgressText.textContent = items.join(' · ');
+        return;
+      }
+      const print = data.last_print;
+      const active = Boolean(data.print_id) && print && ['PREPARING', 'RUNNING', 'PAUSED'].includes(print.status);
+      if (!active) {
+        topbarPrintProgress.hidden = true;
+        topbarPrintProgressText.textContent = '';
+        return;
+      }
+      if (topbarPrintProgressIcon) topbarPrintProgressIcon.className = 'bi bi-layers';
+      const items = [];
+      const percent = print.printer_percent != null
+        ? Math.round(Number(print.printer_percent))
+        : (print.total_layers ? Math.round(Number(print.layers_printed || 0) * 100 / Number(print.total_layers)) : null);
+      if (Number.isFinite(percent)) items.push(`${percent}%`);
+      if (print.total_layers) items.push(`${topbarLabels.layer} ${print.layers_printed || 0} / ${print.total_layers}`);
+      const end = formatTopbarTime(print.predicted_end_time);
+      if (end) items.push(`${topbarLabels.end} ${end}`);
+      const remaining = formatTopbarRemaining(print.predicted_end_time);
+      if (remaining) items.push(`${topbarLabels.remaining} ${remaining}`);
+      topbarPrintProgress.hidden = items.length === 0;
+      topbarPrintProgressText.textContent = items.join(' · ');
+    };
+    const refreshTopbarPrintProgress = async function () {
+      try {
+        const response = await fetch(`/home/state?_=${Date.now()}`, { cache: 'no-store', headers: { 'Accept': 'application/json' } });
+        if (response.ok) updateTopbarPrintProgress(await response.json());
+      } catch (_) {
+        // Keep the last confirmed progress visible during a short interruption.
+      }
+    };
+    if (topbarPrintProgress) {
+      refreshTopbarPrintProgress();
+      window.setInterval(refreshTopbarPrintProgress, 5000);
+    }
     const languageToggle = document.querySelector('.language-menu-toggle');
     const languageMenu = document.querySelector('.language-menu');
     const languageDropdown = languageToggle && languageToggle.closest('.dropdown');

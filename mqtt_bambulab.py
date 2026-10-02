@@ -40,6 +40,7 @@ from collections.abc import Mapping
 from logger import application_log_file, append_to_rotating_file, log
 from print_history import (
   insert_print,
+  abort_active_prints_for_new_printer_job,
   update_print_file_name,
   insert_filament_usage,
   ensure_layer_tracking,
@@ -436,6 +437,11 @@ def _queue_3mf_job(print_data, *, resume=False):
     if recovered:
       print_id = int(recovered["id"])
     else:
+      aborted_count = abort_active_prints_for_new_printer_job(
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+      )
+      if aborted_count:
+        log(f"[History] {aborted_count} älterer offener Druck beim Start eines neuen Jobs abgebrochen.")
       print_id = insert_print(file_name, print_data.get("print_type") or "cloud")
       ensure_layer_tracking(print_id, "PREPARING")
     update_layer_tracking(print_id, printer_job_key=job_key)
@@ -486,7 +492,7 @@ def _reconcile_completed_printer_job(print_data: dict) -> None:
   if percent is None or percent < 100 or state not in {"FINISH", "IDLE"}:
     return
 
-  candidate = find_open_print_for_printer_job(
+  candidate = find_active_print_for_printer_job(
     print_data.get("subtask_name"),
     print_data.get("gcode_file"),
     print_data.get("url"),
@@ -798,8 +804,6 @@ def processMessage(data):
             f"[History] Offener Druck {candidate['id']} anhand Druckerstatus "
             f"{state} auf {terminal_status} gesetzt."
           )
-    _reconcile_completed_printer_job(current_print)
-  
     #if ("gcode_state" in data["print"] and data["print"]["gcode_state"] == "RUNNING") and ("print_type" in data["print"] and data["print"]["print_type"] != "local") \
     #  and ("tray_tar" in data["print"] and data["print"]["tray_tar"] != "255") and ("stg_cur" in data["print"] and data["print"]["stg_cur"] == 0 and PRINT_CURRENT_STAGE != 0):
     

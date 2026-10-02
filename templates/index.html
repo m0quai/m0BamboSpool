@@ -28,7 +28,6 @@
   <div class="{% if ams_data|length > 1 %}col-12{% else %}col-lg-5{% endif %} mb-4 text-center">
     <div class="card shadow-sm printer-card">
       <div class="card-body">
-        <span id="three-mf-status" class="d-none" aria-live="polite"></span>
         {% with tray_data=vt_tray_data, ams_id=EXTERNAL_SPOOL_AMS_ID, pick_tray=False, tray_id=EXTERNAL_SPOOL_ID %}
           {% include 'fragments/tray.html' %}
         {% endwith %}
@@ -113,24 +112,6 @@
       if (printerStatus && state.printer_status) {
         printerStatus.textContent = state.printer_status;
       }
-      const download = state.download || {};
-      const downloadStatus = document.getElementById('three-mf-status');
-      if (downloadStatus) {
-        if (download.state === 'downloading' || download.state === 'resolving' || download.state === 'processing') {
-          const label = download.state === 'processing' ? {{ _('3MF wird verarbeitet')|tojson }} : {{ _('3MF wird geladen')|tojson }};
-          const percent = download.percent === null || download.percent === undefined ? '' : ` · ${download.percent}%`;
-          const bytes = download.bytes_total ? ` · ${(download.bytes_downloaded / 1048576).toFixed(1)} / ${(download.bytes_total / 1048576).toFixed(1)} MB` : '';
-          const speed = download.speed_bytes_per_second ? ` · ${(download.speed_bytes_per_second / 1024).toFixed(0)} KB/s` : '';
-          downloadStatus.textContent = `${label}${percent}${bytes}${speed}`;
-          downloadStatus.classList.remove('d-none');
-        } else if (download.state === 'error') {
-          downloadStatus.textContent = {{ _('3MF konnte nicht geladen werden')|tojson }};
-          downloadStatus.classList.remove('d-none');
-        } else {
-          downloadStatus.classList.add('d-none');
-        }
-      }
-
       if (typeof state.generation !== "number") {
         return;
       }
