@@ -1,5 +1,6 @@
 # Custom m0BamboSpool entry point; keeps local extensions outside upstream app.py.
 import os
+import math
 import logging
 import builtins
 import socket
@@ -220,7 +221,7 @@ if not app.secret_key:
 from bambu_auth_routes import bp as bambu_cloud_bp
 from nfc_routes import bp as ams_nfc_bp
 import nfc_pending_repository
-from flask import jsonify, redirect, request, url_for, render_template, send_from_directory, Response, stream_with_context, session
+from flask import jsonify, redirect, request, url_for, render_template, send_from_directory, Response, stream_with_context, session, g, has_request_context
 import mqtt_bambulab
 import inventory_repository as spool_data
 import inventory_database as inventory_db
@@ -266,10 +267,89 @@ _m0bambospool_app_module.LAYER_TRACKING_STATUS_DISPLAY.update({
     "PREPARING": ("Preparing", "info"),
     "PAUSED": ("Paused", "secondary"),
 })
+_MOS_HISTORY_PAGE_SIZE = 20
+_original_get_prints_with_filament = print_history_service.get_prints_with_filament
+
+def _get_prints_with_mos_pagination(limit=None, offset=None, include_deleted=False):
+    """Apply MOS pagination without changing the upstream history route."""
+    if not has_request_context() or request.endpoint != "print_history":
+        return _original_get_prints_with_filament(limit, offset, include_deleted)
+
+    try:
+        page = max(int(request.args.get("page", 1)), 1)
+    except (TypeError, ValueError):
+        page = 1
+    prints, total_prints = _original_get_prints_with_filament(
+        limit=_MOS_HISTORY_PAGE_SIZE,
+        offset=(page - 1) * _MOS_HISTORY_PAGE_SIZE,
+        include_deleted=include_deleted,
+    )
+    g.mos_history_total_prints = total_prints
+    return prints, total_prints
+
+print_history_service.get_prints_with_filament = _get_prints_with_mos_pagination
 _original_app_render_template = _m0bambospool_app_module.render_template
+
+def _history_page_controls_script(page, total_pages):
+    """Add numbered history pages after the untouched upstream template renders."""
+    return f'''<script>
+(() => {{
+  const currentPage = {page};
+  const totalPages = {total_pages};
+  const pageUrl = (targetPage) => {{
+    const params = new URLSearchParams(window.location.search);
+    ["ams_slot", "print_id", "spool_id", "old_spool_id"].forEach((key) => params.delete(key));
+    params.set("page", targetPage);
+    return `${{window.location.pathname}}?${{params.toString()}}`;
+  }};
+  const addPage = (list, targetPage, label, active = false, disabled = false) => {{
+    const item = document.createElement("li");
+    item.className = `page-item${{active ? " active" : ""}}${{disabled ? " disabled" : ""}}`;
+    const link = document.createElement(active || disabled ? "span" : "a");
+    link.className = "page-link";
+    link.textContent = label;
+    if (!active && !disabled) link.href = pageUrl(targetPage);
+    item.appendChild(link);
+    list.appendChild(item);
+  }};
+  document.querySelectorAll('nav[aria-label="Print history pagination"] ul').forEach((list) => {{
+    const items = Array.from(list.children);
+    const previous = items[0];
+    const next = items.at(-1);
+    if (!previous || !next) return;
+    previous.querySelector("a")?.setAttribute("href", pageUrl(Math.max(1, currentPage - 1)));
+    next.querySelector("a")?.setAttribute("href", pageUrl(Math.min(totalPages, currentPage + 1)));
+    items.slice(1, -1).forEach((item) => item.remove());
+    const first = Math.max(1, currentPage - 2);
+    const last = Math.min(totalPages, currentPage + 2);
+    if (first > 1) {{
+      addPage(list, 1, "1");
+      if (first > 2) addPage(list, 0, "…", false, true);
+    }}
+    for (let number = first; number <= last; number += 1) {{
+      addPage(list, number, String(number), number === currentPage);
+    }}
+    if (last < totalPages) {{
+      if (last < totalPages - 1) addPage(list, 0, "…", false, true);
+      addPage(list, totalPages, String(totalPages));
+    }}
+    list.insertBefore(previous, list.firstChild);
+    list.appendChild(next);
+  }});
+}})();
+</script>'''
 
 def _render_template_with_printer_progress(template_name, *args, **kwargs):
     if template_name == "print_history.html":
+        total_prints = getattr(g, "mos_history_total_prints", None)
+        if total_prints is not None:
+            try:
+                requested_page = max(int(request.args.get("page", 1)), 1)
+            except (TypeError, ValueError):
+                requested_page = 1
+            kwargs["page"] = requested_page
+            kwargs["per_page"] = _MOS_HISTORY_PAGE_SIZE
+            kwargs["total_pages"] = max(1, math.ceil(total_prints / _MOS_HISTORY_PAGE_SIZE))
         requested_print_id = request.args.get("print_id")
         try:
             requested_print_id = int(requested_print_id) if requested_print_id is not None else None
@@ -306,7 +386,13 @@ def _render_template_with_printer_progress(template_name, *args, **kwargs):
                 tracking["printer_percent"] = row.get("printer_percent")
                 tracking["last_status_at"] = row.get("last_status_at")
                 tracking["last_usage_event_at"] = row.get("last_usage_event_at")
-    return _original_app_render_template(template_name, *args, **kwargs)
+    rendered = _original_app_render_template(template_name, *args, **kwargs)
+    if template_name == "print_history.html":
+        return rendered.replace(
+            "</body>",
+            _history_page_controls_script(kwargs["page"], kwargs["total_pages"]) + "</body>",
+        )
+    return rendered
 
 _m0bambospool_app_module.render_template = _render_template_with_printer_progress
 
