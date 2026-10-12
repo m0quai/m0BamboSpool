@@ -15,8 +15,7 @@ Der Abgleich vor der Übernahme bestätigte im aktuellen Code: MQTT-Logger akzep
 ## Druckhistorie: relevante Erkenntnisse
 
 - Bereits im August konnte Verbrauch gebucht werden, obwohl wegen fehlender 3MF-Metadaten keine Print-ID angelegt worden war. Metadaten und Bilder sind ergänzende Daten; ein erkannter Druckversuch benötigt unabhängig davon einen Eintrag.
-- Die damalige Annahme, task_id + subtask_id sei immer eindeutig, ist für die hier beobachteten lokalen Drucke falsch: Beide Werte können 0 sein. Dateinamen sind ebenfalls nicht eindeutig. Auch ein 3MF-Hash unterscheidet keine wiederholten Druckversuche derselben Datei.
-- Aktuell bestehen _job_key / ACTIVE_3MF_PRINTS in mqtt_bambulab.py sowie namensbasierte Zuordnungen in print_history.py. Die dauerhafte Korrektur ist noch offen: eigene Identität je tatsächlich neuem Druckversuch, persistente Zuordnung, Schutz abgeschlossener Einträge vor späteren Statusänderungen.
+- Bambu liefert für lokale Drucke keine verlässliche, eindeutige Aufgabenkennung. Die Anwendung verwendet deshalb die persistierte lokale Druck-ID zusammen mit dem 3MF-Pfad und dem aktiven Druckstatus. Dateinamen und 3MF-Hash unterscheiden wiederholte Druckversuche allein nicht.
 - Der alte Chat beschreibt Abschlussverlust nach Neustart bei fehlendem active_model. Recovery muss bestätigte Verbrauchsbuchungen erhalten und Doppelbuchungen verhindern. Frühere Chat-Erfolgsmeldungen sind keine aktuelle Laufzeitabnahme.
 - MQTT-Empfangszeiten sind keine garantierten tatsächlichen Start-/Endzeiten. Geschätzte Druckdauer bleibt als Schätzung zu kennzeichnen.
 

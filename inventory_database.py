@@ -43,6 +43,11 @@ def initialize() -> None:
                 material_id INTEGER REFERENCES materials(id) ON UPDATE CASCADE ON DELETE RESTRICT,
                 name TEXT NOT NULL,
                 color_hex TEXT,
+                diameter REAL,
+                density REAL,
+                weight REAL,
+                spool_weight REAL,
+                price REAL,
                 extruder_temp INTEGER,
                 bed_temp INTEGER,
                 nozzle_temp INTEGER,
@@ -87,9 +92,17 @@ def initialize() -> None:
         # Keep migrations compatible with osm.db files created before Bambu
         # profile IDs became part of the internal filament record.
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(filaments)")}
-        for column in ("bambu_filament_id", "bambu_setting_id"):
+        for column, definition in (
+            ("bambu_filament_id", "TEXT"),
+            ("bambu_setting_id", "TEXT"),
+            ("diameter", "REAL"),
+            ("density", "REAL"),
+            ("weight", "REAL"),
+            ("spool_weight", "REAL"),
+            ("price", "REAL"),
+        ):
             if column not in columns:
-                conn.execute(f"ALTER TABLE filaments ADD COLUMN {column} TEXT")
+                conn.execute(f"ALTER TABLE filaments ADD COLUMN {column} {definition}")
 
 
 def _row_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -127,11 +140,13 @@ def import_spoolman(vendors: list[dict[str, Any]], filaments: list[dict[str, Any
             material_id = _import_named(conn, "materials", None, material_name) if material_name else None
             conn.execute(
                 """INSERT OR IGNORE INTO filaments
-                   (id, vendor_id, material_id, name, color_hex, extruder_temp, bed_temp, nozzle_temp, cali_idx,
-                    bambu_filament_id, bambu_setting_id, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (id, vendor_id, material_id, name, color_hex, diameter, density, weight, spool_weight, price,
+                    extruder_temp, bed_temp, nozzle_temp, cali_idx, bambu_filament_id, bambu_setting_id, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (filament_id, vendor_id, material_id, filament.get("name") or f"Filament {filament_id}",
-                 _db_value(filament.get("color_hex")), _db_value(filament.get("settings_extruder_temp")), _db_value(filament.get("settings_bed_temp")),
+                 _db_value(filament.get("color_hex")), _db_value(filament.get("diameter")), _db_value(filament.get("density")),
+                 _db_value(filament.get("weight")), _db_value(filament.get("spool_weight")), _db_value(filament.get("price")),
+                 _db_value(filament.get("settings_extruder_temp")), _db_value(filament.get("settings_bed_temp")),
                  _db_value(_extra_value(filament.get("extra"), "nozzle_temperature")), _db_value(_extra_value(filament.get("extra"), "cali_idx")),
                  _db_value(_extra_value(filament.get("extra"), "filament_id")), _db_value(_extra_value(filament.get("extra"), "setting_id")), now, now),
             )
@@ -221,12 +236,86 @@ def list_filaments() -> list[dict[str, Any]]:
         )]
 
 
+def ensure_local_filament_from_inventory(filament: dict[str, Any] | None) -> None:
+    """Create a local editable mirror only when an active inventory filament is absent."""
+    filament = filament or {}
+    filament_id = filament.get("id")
+    if filament_id is None:
+        return
+    initialize()
+    now = _now()
+    vendor = filament.get("vendor") or {}
+    vendor_name = str(vendor.get("name") or "Unbekannt").strip()
+    material_name = str(filament.get("material") or "Unbekannt").strip()
+    with _connect() as conn:
+        if conn.execute("SELECT 1 FROM filaments WHERE id = ?", (filament_id,)).fetchone():
+            return
+        vendor_row = conn.execute("SELECT id FROM vendors WHERE name = ? COLLATE NOCASE", (vendor_name,)).fetchone()
+        if vendor_row:
+            vendor_id = int(vendor_row["id"])
+        else:
+            cursor = conn.execute("INSERT INTO vendors(name) VALUES (?)", (vendor_name,))
+            vendor_id = int(cursor.lastrowid)
+        material_row = conn.execute("SELECT id FROM materials WHERE name = ? COLLATE NOCASE", (material_name,)).fetchone()
+        if material_row:
+            material_id = int(material_row["id"])
+        else:
+            cursor = conn.execute("INSERT INTO materials(name) VALUES (?)", (material_name,))
+            material_id = int(cursor.lastrowid)
+        conn.execute(
+            """INSERT INTO filaments
+               (id, vendor_id, material_id, name, color_hex, diameter, density, weight, spool_weight, price,
+                extruder_temp, bed_temp, nozzle_temp, cali_idx, bambu_filament_id, bambu_setting_id, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                int(filament_id), vendor_id, material_id, filament.get("name") or f"Filament {filament_id}",
+                _db_value(filament.get("color_hex")), _db_value(filament.get("diameter")), _db_value(filament.get("density")),
+                _db_value(filament.get("weight")), _db_value(filament.get("spool_weight")), _db_value(filament.get("price")),
+                _db_value(filament.get("settings_extruder_temp")), _db_value(filament.get("settings_bed_temp")),
+                _db_value(_extra_value(filament.get("extra"), "nozzle_temperature")), _db_value(_extra_value(filament.get("extra"), "cali_idx")),
+                _db_value(_extra_value(filament.get("extra"), "filament_id")), _db_value(_extra_value(filament.get("extra"), "setting_id")),
+                now, now,
+            ),
+        )
+
+
+def ensure_local_spool_from_inventory(spool: dict[str, Any] | None) -> None:
+    """Create a local editable spool mirror without changing the active backend."""
+    spool = spool or {}
+    spool_id = spool.get("id")
+    filament = spool.get("filament") or {}
+    filament_id = filament.get("id")
+    if spool_id is None or filament_id is None:
+        return
+    ensure_local_filament_from_inventory(filament)
+    now = _now()
+    with _connect() as conn:
+        if conn.execute("SELECT 1 FROM spools WHERE id = ?", (spool_id,)).fetchone():
+            return
+        extras = spool.get("extra") or {}
+        conn.execute(
+            """INSERT INTO spools
+               (id, filament_id, price, archived, initial_weight, spool_weight, weight_correction, tag, active_tray, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)""",
+            (
+                int(spool_id), int(filament_id), spool.get("price") if spool.get("price") is not None else filament.get("price"),
+                int(bool(spool.get("archived"))), spool.get("initial_weight") if spool.get("initial_weight") is not None else filament.get("weight"),
+                spool.get("spool_weight") if spool.get("spool_weight") is not None else filament.get("spool_weight"),
+                _extra_value(extras, "tag"), _extra_value(extras, "active_tray"), now, now,
+            ),
+        )
+
+
 def save_entity(entity: str, values: dict[str, Any], entity_id: int | None = None) -> int:
     initialize()
     columns = {
         "vendors": ("name",),
         "materials": ("name",),
-        "filaments": ("vendor_id", "material_id", "name", "color_hex", "extruder_temp", "bed_temp", "nozzle_temp", "cali_idx"),
+        "filaments": (
+            "vendor_id", "material_id", "name", "color_hex", "diameter", "density",
+            "weight", "spool_weight", "price", "extruder_temp", "bed_temp",
+            "nozzle_temp", "cali_idx", "bambu_filament_id", "bambu_setting_id",
+        ),
     }
     if entity not in columns:
         raise ValueError("Unknown inventory entity")
@@ -256,6 +345,84 @@ def save_entity(entity: str, values: dict[str, Any], entity_id: int | None = Non
             [row.get(field) for field in fields] + [entity_id],
         )
         return entity_id
+
+
+def update_filament_fields(filament_id: int, values: dict[str, Any]) -> dict[str, Any]:
+    """Update only changed local filament fields for the inline inventory editor."""
+    initialize()
+    editable = {
+        "vendor_id", "material_id", "name", "color_hex", "diameter", "density",
+        "weight", "spool_weight", "price", "extruder_temp", "bed_temp",
+        "nozzle_temp", "cali_idx", "bambu_filament_id", "bambu_setting_id",
+    }
+    updates = {key: value for key, value in values.items() if key in editable}
+    if not updates:
+        raise ValueError("No editable filament field was supplied")
+    numeric_fields = {"vendor_id", "material_id", "diameter", "density", "weight", "spool_weight", "price", "extruder_temp", "bed_temp", "nozzle_temp", "cali_idx"}
+    for key, value in list(updates.items()):
+        if value == "":
+            updates[key] = None
+        elif key in numeric_fields:
+            updates[key] = int(value) if key in {"vendor_id", "material_id", "extruder_temp", "bed_temp", "nozzle_temp", "cali_idx"} else float(value)
+        elif key == "color_hex":
+            updates[key] = str(value).strip().lstrip("#") or None
+        elif key in {"name", "bambu_filament_id", "bambu_setting_id"}:
+            updates[key] = str(value).strip() or None
+    if "name" in updates and not updates["name"]:
+        raise ValueError("Name is required")
+    with _connect() as conn:
+        if not conn.execute("SELECT 1 FROM filaments WHERE id = ?", (filament_id,)).fetchone():
+            raise KeyError(f"No filament with ID {filament_id}")
+        updates["updated_at"] = _now()
+        conn.execute(
+            f"UPDATE filaments SET {','.join(f'{key} = ?' for key in updates)} WHERE id = ?",
+            list(updates.values()) + [filament_id],
+        )
+    return next(item for item in list_filaments() if int(item["id"]) == int(filament_id))
+
+
+def update_vendor_fields(vendor_id: int, values: dict[str, Any]) -> dict[str, Any]:
+    """Persist a single local vendor edit from the inline inventory editor."""
+    name = str(values.get("name") or "").strip()
+    if not name:
+        raise ValueError("Name is required")
+    with _connect() as conn:
+        if not conn.execute("SELECT 1 FROM vendors WHERE id = ?", (vendor_id,)).fetchone():
+            raise KeyError(f"No vendor with ID {vendor_id}")
+        conn.execute("UPDATE vendors SET name = ? WHERE id = ?", (name, vendor_id))
+    return next(item for item in list_entities("vendors") if int(item["id"]) == int(vendor_id))
+
+
+def update_spool_fields(spool_id: int, values: dict[str, Any]) -> dict[str, Any]:
+    """Persist only the explicitly changed local spool fields."""
+    initialize()
+    editable = {"filament_id", "price", "archived", "initial_weight", "spool_weight", "weight_correction", "tag", "active_tray"}
+    updates = {key: value for key, value in values.items() if key in editable}
+    if not updates:
+        raise ValueError("No editable spool field was supplied")
+    numeric_fields = {"filament_id", "price", "initial_weight", "spool_weight", "weight_correction"}
+    for key, value in list(updates.items()):
+        if key in {"tag", "active_tray"}:
+            updates[key] = str(value).strip() or None
+        elif key == "archived":
+            updates[key] = int(value is True or str(value).strip().lower() in {"1", "true", "yes", "on"})
+        elif value == "":
+            updates[key] = None
+        elif key == "filament_id":
+            updates[key] = int(value)
+        elif key in numeric_fields:
+            updates[key] = float(value)
+    with _connect() as conn:
+        if not conn.execute("SELECT 1 FROM spools WHERE id = ?", (spool_id,)).fetchone():
+            raise KeyError(f"No spool with ID {spool_id}")
+        if "filament_id" in updates and not conn.execute("SELECT 1 FROM filaments WHERE id = ?", (updates["filament_id"],)).fetchone():
+            raise ValueError("Unknown filament")
+        updates["updated_at"] = _now()
+        conn.execute(
+            f"UPDATE spools SET {','.join(f'{key} = ?' for key in updates)} WHERE id = ?",
+            list(updates.values()) + [spool_id],
+        )
+    return get_spool(spool_id)
 
 
 def delete_entity(entity: str, entity_id: int) -> None:

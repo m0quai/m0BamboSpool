@@ -46,8 +46,8 @@ from print_history import (
   ensure_layer_tracking,
   update_print_image,
   update_layer_tracking,
-  find_open_print_for_printer_job,
-  find_active_print_for_printer_job,
+  find_open_print_for_printer_source,
+  find_active_print_for_printer_source,
   find_previous_metadata_print_name,
   get_filament_usage_for_reconciliation,
   mark_print_reconciled,
@@ -63,7 +63,7 @@ from print_history import (
   set_filament_usage_event_status,
 )
 from filament_usage_tracker import FilamentUsageTracker
-from jobs_3mf import JOBS_3MF, make_job_key
+from jobs_3mf import JOBS_3MF
 MQTT_CLIENT = {}  # Global variable storing MQTT Client
 MQTT_CLIENT_CONNECTED = False
 MQTT_KEEPALIVE = 60
@@ -247,13 +247,27 @@ def _metadata_is_usable(metadata):
   )
 
 
-def _job_key(print_data):
-  task_id = print_data.get("task_id")
-  subtask_id = print_data.get("subtask_id")
-  key = make_job_key(task_id, subtask_id)
-  if key is not None:
-    return key
-  return str(print_data.get("subtask_name") or print_data.get("gcode_file") or print_data.get("url") or "unknown")
+def _transfer_key(print_id):
+  return f"print-{int(print_id)}"
+
+
+def _active_3mf_job_for_source(print_data):
+  candidates = {
+    str(value or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
+    for value in (
+      print_data.get("subtask_name"),
+      print_data.get("gcode_file"),
+      print_data.get("url"),
+    )
+    if value
+  }
+  with _ACTIVE_3MF_PRINTS_LOCK:
+    jobs = list(ACTIVE_3MF_PRINTS.values())
+  for job in reversed(jobs):
+    source = str(job.get("source") or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if source and source in candidates:
+      return job
+  return None
 
 
 def _active_tray_mapping(print_data):
@@ -330,15 +344,15 @@ def _ensure_provisional_filament_usage(job, print_data):
   job["provisional_signature"] = signature
 
 
-def _on_3mf_job_complete(job_key, local_path, metadata, error):
+def _on_3mf_job_complete(transfer_key, local_path, metadata, error):
   global PENDING_PRINT_METADATA
   with _ACTIVE_3MF_PRINTS_LOCK:
-    job = ACTIVE_3MF_PRINTS.get(job_key)
+    job = ACTIVE_3MF_PRINTS.get(transfer_key)
   if not job:
-    log(f"[3MF] Ergebnis für unbekannten Job ignoriert: {job_key}")
+    log(f"[3MF] Ergebnis für unbekannten Transfer ignoriert: {transfer_key}")
     return
   if error:
-    log(f"[3MF] Job {job_key} fehlgeschlagen: {error}")
+    log(f"[3MF] Transfer {transfer_key} fehlgeschlagen: {error}")
     return
 
   parsed_metadata = dict(metadata or {})
@@ -412,43 +426,49 @@ def _on_3mf_job_complete(job_key, local_path, metadata, error):
     FILAMENT_TRACKER.start_local_print_from_metadata(metadata, local_path)
   else:
     FILAMENT_TRACKER.set_print_metadata(metadata)
-  log(f"[3MF] Job ready task={job_key} print_id={job['print_id']} local={local_path!r}")
+  log(f"[3MF] Transfer bereit: {transfer_key}, print_id={job['print_id']}, local={local_path!r}")
 
 
 def _queue_3mf_job(print_data, *, resume=False):
-  job_key = _job_key(print_data)
+  existing_source_job = _active_3mf_job_for_source(print_data)
+  if existing_source_job:
+    tracking = get_layer_tracking_for_prints([existing_source_job["print_id"]]).get(
+      existing_source_job["print_id"], {}
+    )
+    if tracking.get("status") in {"PREPARING", "RUNNING", "PAUSED"}:
+      print_data["_metadata_job_queued"] = True
+      _ensure_provisional_filament_usage(existing_source_job, print_data)
+      return existing_source_job
+
+  file_name = print_data.get("subtask_name") or print_data.get("gcode_file") or print_data.get("url") or "unbekannte-3mf"
+  recovered = find_active_print_for_printer_source(
+    print_data.get("subtask_name"), print_data.get("gcode_file"), print_data.get("url"),
+  ) if resume else None
+  if recovered:
+    print_id = int(recovered["id"])
+  else:
+    aborted_count = abort_active_prints_for_new_printer_job(
+      datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    )
+    if aborted_count:
+      log(f"[History] {aborted_count} älterer offener Druck beim Start eines neuen Jobs abgebrochen.")
+    print_id = insert_print(file_name, print_data.get("print_type") or "cloud")
+    ensure_layer_tracking(print_id, "PREPARING")
+  transfer_key = _transfer_key(print_id)
   with _ACTIVE_3MF_PRINTS_LOCK:
-    existing = ACTIVE_3MF_PRINTS.get(job_key)
+    existing = ACTIVE_3MF_PRINTS.get(transfer_key)
     if existing:
       tracking = get_layer_tracking_for_prints([existing["print_id"]]).get(existing["print_id"], {})
       if tracking.get("status") in {"COMPLETED", "FAILED", "ABORTED"}:
-        ACTIVE_3MF_PRINTS.pop(job_key, None)
+        ACTIVE_3MF_PRINTS.pop(transfer_key, None)
         existing = None
     if existing:
       print_data["_metadata_job_queued"] = True
       _ensure_provisional_filament_usage(existing, print_data)
       return existing
 
-    file_name = print_data.get("subtask_name") or print_data.get("gcode_file") or print_data.get("url") or job_key
-    recovered = find_active_print_for_printer_job(
-      print_data.get("subtask_name"), print_data.get("gcode_file"), print_data.get("url"),
-      job_key=job_key,
-    ) if resume else None
-    if recovered:
-      print_id = int(recovered["id"])
-    else:
-      aborted_count = abort_active_prints_for_new_printer_job(
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-      )
-      if aborted_count:
-        log(f"[History] {aborted_count} älterer offener Druck beim Start eines neuen Jobs abgebrochen.")
-      print_id = insert_print(file_name, print_data.get("print_type") or "cloud")
-      ensure_layer_tracking(print_id, "PREPARING")
-    update_layer_tracking(print_id, printer_job_key=job_key)
     mapping_value = _active_tray_mapping(print_data)
     metadata = {
-      "task_id": print_data.get("task_id"),
-      "subtask_id": print_data.get("subtask_id"),
       "print_type": print_data.get("print_type"),
       "snapshot_name": print_data.get("snapshot_name") or print_data.get("subtask_name"),
       "subtask_name": print_data.get("subtask_name"),
@@ -462,22 +482,22 @@ def _queue_3mf_job(print_data, *, resume=False):
       "print_metadata": metadata,
       "source": print_data.get("url") or print_data.get("gcode_file"),
     }
-    ACTIVE_3MF_PRINTS[job_key] = job
+    ACTIVE_3MF_PRINTS[transfer_key] = job
 
   _ensure_provisional_filament_usage(job, print_data)
   FILAMENT_TRACKER.begin_pending_print(metadata)
-  JOBS_3MF.enqueue(job_key, job["source"], _on_3mf_job_complete)
+  JOBS_3MF.enqueue(transfer_key, job["source"], _on_3mf_job_complete)
   print_data["_metadata_job_queued"] = True
   action = "wiederaufgenommen" if recovered else "sofort angelegt"
-  log(f"[3MF] Print-ID {print_id} {action}, Metadaten laufen im Hintergrund: {job_key}")
+  log(f"[3MF] Print-ID {print_id} {action}, Metadaten laufen im Hintergrund: {transfer_key}")
   return job
 
 
 def get_active_3mf_print_id():
   with _ACTIVE_3MF_PRINTS_LOCK:
     items = list(ACTIVE_3MF_PRINTS.items())
-  for job_key, job in reversed(items):
-    if JOBS_3MF.get(job_key).get("state") in {"queued", "resolving", "downloading", "processing"}:
+  for transfer_key, job in reversed(items):
+    if JOBS_3MF.get(transfer_key).get("state") in {"queued", "resolving", "downloading", "processing"}:
       return job.get("print_id")
   return None
 
@@ -492,11 +512,10 @@ def _reconcile_completed_printer_job(print_data: dict) -> None:
   if percent is None or percent < 100 or state not in {"FINISH", "IDLE"}:
     return
 
-  candidate = find_active_print_for_printer_job(
+  candidate = find_active_print_for_printer_source(
     print_data.get("subtask_name"),
     print_data.get("gcode_file"),
     print_data.get("url"),
-    job_key=_job_key(print_data),
   )
   if not candidate or not _COMPLETION_RECONCILE_LOCK.acquire(blocking=False):
     return
@@ -694,17 +713,22 @@ def processMessage(data):
     ):
       log("[History] Bambu meldet FAILED mit print_error=0; wird als manuelles CANCEL (ABORTED) gewertet.")
     if history_status == "ABORTED":
+      active_transfer = _active_3mf_job_for_source(current_print)
       JOBS_3MF.cancel(
-        _job_key(current_print),
+        _transfer_key(active_transfer["print_id"]) if active_transfer else None,
         f"Druckerstatus {current_state} (print_error={current_print.get('print_error')!r})",
       )
 
-    with _ACTIVE_3MF_PRINTS_LOCK:
-      active_job = ACTIVE_3MF_PRINTS.get(_job_key(current_print))
+    active_job = _active_3mf_job_for_source(current_print)
     if incoming_print.get("command") == "project_file" and (
         incoming_print.get("url") or current_print.get("gcode_file")
     ):
-      active_job = _queue_3mf_job(current_print)
+      # Local Bambu task identifiers are not unique. Directly after MOS
+      # starts, the printer replays its still-running project_file event.
+      # Resume the matching active history row in that first sync instead of
+      # treating the replay as a new physical print and aborting the row.
+      initial_printer_sync = not bool(PRINTER_STATE_LAST.get("print"))
+      active_job = _queue_3mf_job(current_print, resume=initial_printer_sync)
       incoming_print["_metadata_job_queued"] = True
     elif history_status in {"PREPARING", "RUNNING", "PAUSED"} and (
         current_print.get("url") or current_print.get("gcode_file")
@@ -774,11 +798,10 @@ def processMessage(data):
       if terminal_status:
         if terminal_status == "COMPLETED":
           _reconcile_completed_printer_job(current_print)
-        candidate = find_open_print_for_printer_job(
+        candidate = find_open_print_for_printer_source(
           current_print.get("subtask_name"),
           current_print.get("gcode_file"),
           current_print.get("url"),
-          job_key=_job_key(current_print),
         )
         current_status = candidate.get("status") if candidate else None
         active_statuses = {"PREPARING", "RUNNING", "PAUSED"}
@@ -825,8 +848,6 @@ def processMessage(data):
 
         if _metadata_is_usable(PENDING_PRINT_METADATA) and not PENDING_PRINT_METADATA.get("print_id"):
           PENDING_PRINT_METADATA["print_type"] = PRINTER_STATE["print"].get("print_type")
-          PENDING_PRINT_METADATA["task_id"] = PRINTER_STATE["print"].get("task_id")
-          PENDING_PRINT_METADATA["subtask_id"] = PRINTER_STATE["print"].get("subtask_id")
 
           if not PENDING_PRINT_METADATA.get("tracking_started"):
             print_id = insert_print(PENDING_PRINT_METADATA["file"], PRINTER_STATE["print"]["print_type"], PENDING_PRINT_METADATA["image"])

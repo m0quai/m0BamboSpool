@@ -26,14 +26,13 @@ class ActivePrintRecoveryTests(unittest.TestCase):
         mqtt.PENDING_PRINT_METADATA = {}
         self.report = {
             "command": "push_status", "gcode_state": "RUNNING", "print_type": "idle",
-            "task_id": "0", "subtask_id": "0", "subtask_name": "same-model",
+            "subtask_name": "same-model",
             "gcode_file": "same-model.gcode.3mf", "mc_percent": 12, "layer_num": 40,
         }
 
     def add_print(self, status, name="same-model"):
         print_id = history.insert_print(name, "local")
         history.ensure_layer_tracking(print_id, status)
-        history.update_layer_tracking(print_id, printer_job_key="0:0")
         return print_id
 
     def test_running_report_after_restart_creates_history_before_download(self):
@@ -54,7 +53,18 @@ class ActivePrintRecoveryTests(unittest.TestCase):
         self.assertEqual(history.get_latest_active_print_id(), active)
         mqtt.JOBS_3MF.enqueue.assert_called_once()
 
-    def test_repeated_filename_and_zero_ids_create_distinct_attempts(self):
+    def test_initial_project_file_sync_resumes_active_local_print(self):
+        active = self.add_print("RUNNING", "renamed-model")
+        history.update_layer_tracking(active, remote_3mf_path="/same-model.gcode.3mf")
+        restarted_report = dict(self.report, command="project_file")
+
+        mqtt.processMessage({"print": restarted_report})
+
+        self.assertEqual(history.get_latest_active_print_id(), active)
+        self.assertEqual(history.get_layer_tracking_for_prints([active])[active]["status"], "RUNNING")
+        mqtt.JOBS_3MF.enqueue.assert_called_once()
+
+    def test_repeated_filename_creates_distinct_attempts_after_completion(self):
         mqtt.processMessage({"print": dict(self.report)})
         first = history.get_latest_active_print_id()
         history.update_layer_tracking(first, status="COMPLETED")
@@ -63,9 +73,22 @@ class ActivePrintRecoveryTests(unittest.TestCase):
         self.assertGreater(second, first)
         self.assertEqual(history.get_layer_tracking_for_prints([first])[first]["status"], "COMPLETED")
 
-    def test_zero_job_key_does_not_match_another_active_file(self):
+    def test_active_source_does_not_match_another_active_file(self):
         self.add_print("RUNNING", "another-model")
-        self.assertIsNone(history.find_active_print_for_printer_job("same-model", job_key="0:0"))
+        self.assertIsNone(history.find_active_print_for_printer_source("same-model"))
+
+    def test_schema_removes_legacy_printer_job_column(self):
+        connection = history.connect_database(history.db_config["db_path"])
+        connection.execute("ALTER TABLE print_layer_tracking ADD COLUMN printer_job_key TEXT")
+        connection.commit()
+        connection.close()
+
+        history.create_database()
+
+        connection = history.connect_database(history.db_config["db_path"])
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(print_layer_tracking)")}
+        connection.close()
+        self.assertNotIn("printer_job_key", columns)
 
     def test_metadata_enrichment_preserves_billed_consumption(self):
         active = self.add_print("RUNNING")
@@ -155,12 +178,25 @@ class ActivePrintRecoveryTests(unittest.TestCase):
                 patch("filament_usage_tracker.update_checkpoint_layer"):
             tracker._start_layer_tracking_for_model(
                 model_path="missing-test-model", gcode_file_name=None, model_file_name=None,
-                use_ams=False, ams_mapping=None, task_id=0, subtask_id=0, resume_layer=40,
+                use_ams=False, ams_mapping=None, resume_layer=40,
             )
             spend.assert_not_called()
         self.assertEqual(tracker.cumulative_grams_used[1], 15)
         self.assertEqual(tracker.cumulative_length_used[1], 1000)
         self.assertIn(40, tracker.spent_layers)
+
+    def test_cached_model_uses_3mf_gcode_path(self):
+        tracker = FilamentUsageTracker()
+        metadata = {
+            "print_id": 7,
+            "file": "model.gcode.3mf",
+            "gcode_path": "Metadata/plate_2.gcode",
+        }
+        with patch.object(tracker, "_handle_print_start") as start:
+            tracker.start_tracking_from_cached_model(metadata, "cached-model.3mf", {})
+
+        print_data = start.call_args.args[0]
+        self.assertEqual(print_data["param"], "Metadata/plate_2.gcode")
 
 
 if __name__ == "__main__":

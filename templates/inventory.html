@@ -1,244 +1,178 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="inventory-table-container">
-  <table class="table table-hover align-middle inventory-table {{ 'inventory-has-status' if show_status_column else 'inventory-no-status' }}" id="inventory-table">
-    <thead>
-      <tr class="inventory-sort-row"><th><button type="button" class="history-sort-button" data-inventory-sort="id">{{ _('Spool') }} <i class="bi bi-arrow-down-up"></i></button></th><th><button type="button" class="history-sort-button" data-inventory-sort="vendor">{{ _('Hersteller') }} <i class="bi bi-arrow-down-up"></i></button></th><th><button type="button" class="history-sort-button" data-inventory-sort="material">{{ _('Material') }} <i class="bi bi-arrow-down-up"></i></button></th><th><button type="button" class="history-sort-button" data-inventory-sort="filament">{{ _('Filament') }} <i class="bi bi-arrow-down-up"></i></button></th><th>{{ _('Farbe') }}</th>{% if show_status_column %}<th>{{ _('Status') }}</th>{% endif %}<th>{{ _('Restgewicht') }}</th><th><button type="button" class="history-sort-button" data-inventory-sort="last-used">{{ _('Letzte Benutzung') }} <i class="bi bi-arrow-down-up"></i></button></th><th>{{ _('Drucke') }}</th></tr>
-      <tr class="history-filter-row"><th><input type="search" class="form-control form-control-sm inventory-filter" data-inventory-filter="id" placeholder="{{ _('ID') }}"></th><th>{% for key, label in [('vendor', _('Hersteller'))] %}<div class="dropdown"><button class="btn btn-sm btn-outline-secondary dropdown-toggle w-100 text-start" data-bs-toggle="dropdown" data-inventory-filter-button="{{ key }}" data-inventory-filter-label="{{ label }}">{{ _('Alle') }} {{ label }}</button><div class="dropdown-menu p-2 inventory-filter-menu" data-inventory-filter-menu="{{ key }}"></div></div>{% endfor %}</th><th><div class="dropdown"><button class="btn btn-sm btn-outline-secondary dropdown-toggle w-100 text-start" data-bs-toggle="dropdown" data-inventory-filter-button="material" data-inventory-filter-label="{{ _('Material') }}">{{ _('Alle') }} {{ _('Material') }}</button><div class="dropdown-menu p-2 inventory-filter-menu" data-inventory-filter-menu="material"></div></div></th><th><div class="dropdown"><button class="btn btn-sm btn-outline-secondary dropdown-toggle w-100 text-start" data-bs-toggle="dropdown" data-inventory-filter-button="filament" data-inventory-filter-label="{{ _('Filament') }}">{{ _('Alle') }} {{ _('Filament') }}</button><div class="dropdown-menu p-2 inventory-filter-menu" data-inventory-filter-menu="filament"></div></div></th><th></th>{% if show_status_column %}<th><div class="dropdown"><button class="btn btn-sm btn-outline-secondary dropdown-toggle w-100 text-start" data-bs-toggle="dropdown" data-inventory-filter-button="status" data-inventory-filter-label="{{ _('Status') }}">{{ _('Aktiv') }}</button><div class="dropdown-menu p-2 inventory-filter-menu" data-inventory-filter-menu="status"></div></div></th>{% endif %}<th></th><th></th><th></th></tr>
-    </thead>
-    <tbody>
-    {% for item in inventory_rows %}
-      {% set spool = item.spool %}
-      {% set filament = spool.filament or {} %}
-      {% set last_used_value = item.last_used or '' %}
-      {% set spool_status = 'archived' if spool.archived else 'active' %}{% set spool_status_label = _('Archiviert') if spool.archived else _('Aktiv') %}
-      <tr data-inventory-row data-inventory-id="{{ spool.id }}" data-inventory-vendor="{{ (filament.vendor.name if filament.vendor else '')|lower }}" data-inventory-vendor-label="{{ filament.vendor.name if filament.vendor else _('Unbekannt') }}" data-inventory-filament="{{ (filament.name or '')|lower }}" data-inventory-filament-label="{{ filament.name or _('Ohne Namen') }}" data-inventory-material="{{ (filament.material or '')|lower }}" data-inventory-material-label="{{ filament.material or _('Unbekannt') }}" data-inventory-status="{{ spool_status }}" data-inventory-status-label="{{ spool_status_label }}" data-inventory-color="{{ (filament.color_hex or '')|lower }}" data-inventory-color-label="{{ filament.color_hex or '' }}" data-inventory-weight="{{ spool.remaining_weight|float }}" data-inventory-last-used="{{ last_used_value }}">
-        <td class="text-nowrap">{% if local_inventory %}<strong>#{{ spool.id }}</strong>{% else %}<a class="inventory-spool-link" href="{{ SPOOLMAN_BASE_URL }}/?sel=spool:{{ spool.id }}" target="m0bambospool-spoolman" data-spoolman-window="true" title="{{ _('view in spoolman') }}"><strong>#{{ spool.id }}</strong></a>{% endif %}</td>
-        <td>{% if filament.vendor and filament.vendor.id %}{% if local_inventory %}{{ filament.vendor.name }}{% else %}<a class="inventory-entity-link" href="{{ SPOOLMAN_BASE_URL }}/?sel=vendor:{{ filament.vendor.id }}" target="m0bambospool-spoolman" data-spoolman-window="true">{{ filament.vendor.name }}</a>{% endif %}{% else %}{{ _('Unbekannt') }}{% endif %}</td>
-        <td>{{ filament.material or _('Unbekannt') }}</td>
-        <td>{% if filament.id and not local_inventory %}<a class="inventory-entity-link" href="{{ SPOOLMAN_BASE_URL }}/?sel=filament:{{ filament.id }}" target="m0bambospool-spoolman" data-spoolman-window="true">{{ filament.name or _('Ohne Namen') }}</a>{% else %}{{ filament.name or _('Ohne Namen') }}{% endif %}</td>
-        {% set color_value = filament.color_hex or '000000' %}<td><span class="inventory-color-code" style="background-color: #{{ color_value }}; color: {{ '#fff' if color_is_dark(color_value) else '#111' }}; text-shadow: {{ '0 1px 1px rgba(0,0,0,.65)' if color_is_dark(color_value) else 'none' }};">#{{ color_value }}</span></td>
-        {% if show_status_column %}<td><span class="badge {{ 'text-bg-secondary' if spool.archived else 'text-bg-success' }}">{{ spool_status_label }}</span></td>{% endif %}
-        <td class="text-nowrap">{{ '%.1f'|format(spool.remaining_weight|float) }} g</td>
-        <td class="text-nowrap">{{ format_datetime(last_used_value) if last_used_value else '—' }}</td>
-        <td>
-          {% if item.prints %}
-          <button type="button" class="inventory-print-toggle" aria-expanded="false" aria-controls="inventory-prints-{{ spool.id }}"><span aria-hidden="true">▸</span> {{ item.prints|length }} {{ _('Drucke') }}</button>
-          {% else %}<span class="text-muted">{{ _('ungebraucht') }}</span>{% endif %}
-        </td>
-      </tr>
-      {% if item.prints %}
-      <tr class="inventory-print-detail-row" id="inventory-prints-{{ spool.id }}" hidden>
-        <td colspan="{{ 9 if show_status_column else 8 }}">
-          <div class="table-responsive">
-            <table class="table table-sm inventory-print-table mb-0"><thead><tr><th scope="col">{{ _('ID') }}</th><th scope="col">{{ _('Datum') }}</th><th scope="col">{{ _('Ende') }}</th><th scope="col">{{ _('Dauer') }}</th><th scope="col">{{ _('Verbrauch') }}</th><th scope="col">{{ _('Auftrag') }}</th><th scope="col">{{ _('Status') }}</th></tr></thead><tbody>
-            {% for print in item.prints %}<tr><td class="text-nowrap"><a href="{{ url_for('print_history', print_id=print.print_id, _anchor='print_' ~ print.print_id) }}">#{{ print.print_id }}</a></td><td class="text-nowrap">{{ format_datetime(print.print_date) }}</td><td class="text-nowrap">{{ format_datetime(print.actual_end_time) if print.actual_end_time else '—' }}</td><td class="text-nowrap">{% if print.duration_minutes is not none %}{{ (print.duration_minutes|int // 60) }} h {{ (print.duration_minutes|int % 60) }} min{% else %}—{% endif %}</td><td class="text-nowrap">{{ '%.2f'|format(print.grams_used|float) }} g</td><td>{{ print.file_name }}</td><td><span class="badge {% if print.status == 'COMPLETED' %}text-bg-success{% elif print.status == 'ABORTED' %}text-bg-secondary{% elif print.status == 'FAILED' %}text-bg-danger{% else %}text-bg-info{% endif %}">{{ _({'COMPLETED':'Finished','ABORTED':'Aborted','FAILED':'Failed','RUNNING':'Running','PAUSED':'Paused','PREPARING':'Preparing'}.get(print.status, print.status or 'Unknown')) }}</span></td></tr>{% endfor %}
-            </tbody></table>
-          </div>
-        </td>
-      </tr>
-      {% endif %}
-    {% else %}<tr><td colspan="{{ 9 if show_status_column else 8 }}" class="text-center text-muted py-4">{{ _('Keine Spulen gefunden') }}</td></tr>{% endfor %}
-    </tbody>
-  </table>
-</div>
-{% if local_inventory %}
-<section class="mt-5" id="local-inventory-management">
-  <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3"><div><h2 class="h4 mb-0">Lokale Verwaltung</h2><span class="text-muted">Hersteller · Materialien · Filamente · Spulen</span></div></div>
-  <div id="inventory-admin-message" class="alert d-none" role="alert"></div>
-  <div class="row g-3">
-    {% for entity, title, rows in [('vendors', 'Hersteller', inventory_vendors), ('materials', 'Materialien', inventory_materials), ('filaments', 'Filamente', inventory_filaments)] %}
-    <div class="col-12 col-xl-6"><div class="card h-100"><div class="card-header d-flex justify-content-between align-items-center"><strong>{{ title }}</strong><button class="btn btn-sm btn-primary" type="button" data-admin-add="{{ entity }}">Neu</button></div><div class="table-responsive"><table class="table table-sm table-hover mb-0"><thead><tr><th>ID</th><th>Name</th>{% if entity == 'filaments' %}<th>Hersteller / Material</th><th>Farbe</th>{% endif %}<th></th></tr></thead><tbody>
-    {% for row in rows %}<tr><td>{{ row.id }}</td><td>{{ row.name }}</td>{% if entity == 'filaments' %}<td>{{ row.vendor_name or '—' }} / {{ row.material_name or '—' }}</td><td>{{ row.color_hex or '—' }}</td>{% endif %}<td class="text-end text-nowrap"><button class="btn btn-sm btn-outline-primary" type="button" data-admin-edit="{{ entity }}" data-record="{{ row|tojson|forceescape }}">Bearbeiten</button><button class="btn btn-sm btn-outline-danger ms-1" type="button" data-admin-delete="{{ entity }}" data-id="{{ row.id }}">Löschen</button></td></tr>
-    {% else %}<tr><td colspan="{{ 5 if entity == 'filaments' else 3 }}" class="text-muted">Noch keine Einträge</td></tr>{% endfor %}
-    </tbody></table></div></div></div>
-    {% endfor %}
-    <div class="col-12"><div class="card"><div class="card-header d-flex justify-content-between align-items-center"><strong>Spulen</strong><button class="btn btn-sm btn-primary" type="button" data-admin-add="spools">Neue Spule</button></div><div class="table-responsive"><table class="table table-sm table-hover align-middle mb-0"><thead><tr><th>ID</th><th>Filament</th><th>Preis</th><th>Startgewicht</th><th>Verbrauch</th><th>Restgewicht</th><th>Status</th><th></th></tr></thead><tbody>
-    {% for item in inventory_rows %}{% set spool = item.spool %}<tr><td>#{{ spool.id }}</td><td>{{ spool.filament.name }}</td><td>{{ spool.price if spool.price is not none else '—' }}</td><td>{{ spool.initial_weight or 0 }} g</td><td>{{ '%.1f'|format(spool.used_weight|float) }} g</td><td>{{ '%.1f'|format(spool.remaining_weight|float) }} g</td><td>{{ 'Archiviert' if spool.archived else 'Aktiv' }}</td><td class="text-end"><button class="btn btn-sm btn-outline-primary" type="button" data-admin-edit="spools" data-record="{{ spool|tojson|forceescape }}">Bearbeiten / Gewicht korrigieren</button></td></tr>
-    {% else %}<tr><td colspan="8" class="text-muted">Noch keine Spulen</td></tr>{% endfor %}
-    </tbody></table></div></div></div>
+<section class="inventory-workspace" aria-label="Inventar">
+  <div class="inventory-toolbar">
+    <label class="inventory-control">Gruppieren
+      <select id="inventory-group-select" class="form-select form-select-sm">
+        <option value="filament">Filament</option>
+        <option value="vendor">Hersteller</option>
+        <option value="material">Material</option>
+        <option value="none">Keine Gruppierung</option>
+      </select>
+    </label>
+    <label class="inventory-control">Sortieren
+      <select id="inventory-sort-select" class="form-select form-select-sm">
+        <option value="last-used">Letzte Verwendung</option>
+        <option value="name">Name</option>
+        <option value="remaining">Restgewicht</option>
+      </select>
+    </label>
+    <label class="inventory-control inventory-search">Filtern
+      <input id="inventory-search" class="form-control form-control-sm" type="search" placeholder="Filament, Hersteller oder Material">
+    </label>
+  </div>
+  <div class="inventory-layout">
+    <div id="inventory-groups" class="inventory-groups" aria-live="polite"></div>
+    <aside id="inventory-inline-editor" class="inventory-inline-editor" hidden aria-live="polite">
+      <div class="inventory-editor-heading"><div><div class="small text-muted">Lokale Stammdaten</div><h2 id="inventory-editor-title" class="h5 mb-0"></h2></div><span id="inventory-editor-state" class="small text-muted"></span></div>
+      <p class="small text-muted mb-3">&Auml;nderungen werden beim Verlassen eines ge&auml;nderten Feldes lokal gespeichert. Sie &auml;ndern weder SpoolMan noch AMS oder Verbrauch.</p>
+      <div id="inventory-editor-fields" class="row g-2"></div>
+    </aside>
   </div>
 </section>
-<div class="modal fade" id="inventory-admin-modal" tabindex="-1" aria-hidden="true"><div class="modal-dialog modal-lg modal-dialog-scrollable"><div class="modal-content"><form id="inventory-admin-form"><div class="modal-header"><h2 class="modal-title fs-5" id="inventory-admin-title">Eintrag</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Schließen"></button></div><div class="modal-body"><input type="hidden" name="id"><div class="row g-3" id="inventory-admin-fields"></div><small class="text-muted d-block mt-3" id="inventory-admin-help"></small></div><div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Abbrechen</button><button type="submit" class="btn btn-primary">Speichern</button></div></form></div></div></div>
-<script id="inventory-admin-data" type="application/json">{{ {'vendors': inventory_vendors, 'materials': inventory_materials, 'filaments': inventory_filaments, 'spools': inventory_rows|map(attribute='spool')|list}|tojson }}</script>
+<script id="inventory-data" type="application/json">{{ inventory_rows|tojson }}</script>
+<script id="local-filament-data" type="application/json">{{ inventory_filaments|tojson }}</script>
+<script id="local-vendor-data" type="application/json">{{ inventory_vendors|tojson }}</script>
+<script id="local-material-data" type="application/json">{{ inventory_materials|tojson }}</script>
 <script>
 document.addEventListener('DOMContentLoaded', () => {
-  const data = JSON.parse(document.getElementById('inventory-admin-data').textContent);
-  const modalNode = document.getElementById('inventory-admin-modal');
-  const modal = bootstrap.Modal.getOrCreateInstance(modalNode);
-  const form = document.getElementById('inventory-admin-form');
-  const fieldsNode = document.getElementById('inventory-admin-fields');
-  const message = document.getElementById('inventory-admin-message');
-  const fields = {
-    vendors: [['name', 'Name', 'text']],
-    materials: [['name', 'Name', 'text']],
-    filaments: [['vendor_id', 'Hersteller', 'select:vendors'], ['material_id', 'Material', 'select:materials'], ['name', 'Name', 'text'], ['color_hex', 'Farbe (Hex)', 'color'], ['extruder_temp', 'Extruder-Temperatur (°C)', 'number'], ['bed_temp', 'Bett-Temperatur (°C)', 'number'], ['nozzle_temp', 'Nozzle-Temperatur (°C)', 'number'], ['cali_idx', 'Kalibrierungsindex', 'number']],
-    spools: [['filament_id', 'Filament', 'select:filaments'], ['price', 'Preis', 'number'], ['initial_weight', 'Anfangsgewicht (g)', 'number'], ['spool_weight', 'Leergewicht (g)', 'number'], ['current_remaining_weight', 'Gemessenes Restgewicht (g)', 'number'], ['tag', 'NFC-Tag', 'text'], ['active_tray', 'AMS-Fach', 'text'], ['archived', 'Archiviert', 'checkbox']]
-  };
-  const labels = {vendors: 'Hersteller', materials: 'Material', filaments: 'Filament', spools: 'Spule'};
-  const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
-  const showMessage = (text, isError = false) => { message.textContent = text; message.className = `alert ${isError ? 'alert-danger' : 'alert-success'}`; };
-  const buildForm = (entity, record = {}) => {
-    form.dataset.entity = entity; form.dataset.id = record.id || ''; form.querySelector('[name=id]').value = record.id || '';
-    document.getElementById('inventory-admin-title').textContent = `${record.id ? 'Bearbeiten' : 'Neu'}: ${labels[entity]}`;
-    document.getElementById('inventory-admin-help').textContent = entity === 'spools' ? 'Das gemessene Restgewicht berechnet eine dauerhafte Gewichtskorrektur aus Anfangsgewicht und gebuchtem Druckverbrauch.' : '';
-    fieldsNode.replaceChildren();
-    fields[entity].forEach(([name, label, type]) => {
-      const wrap = document.createElement('div'); wrap.className = 'col-12 col-md-6';
-      let control;
-      if (type.startsWith('select:')) {
-        const source = type.split(':')[1]; control = document.createElement('select'); control.className = 'form-select'; control.name = name;
-        control.add(new Option('— auswählen —', ''));
-        (data[source] || []).forEach(option => control.add(new Option(source === 'filaments' ? `${option.name} (#${option.id})` : option.name, option.id)));
-      } else {
-        control = document.createElement('input'); control.type = type; control.className = type === 'checkbox' ? 'form-check-input' : 'form-control'; control.name = name;
-        if (type === 'number') { control.step = 'any'; }
-      }
-      const lab = document.createElement('label'); lab.className = type === 'checkbox' ? 'form-check-label ms-2' : 'form-label'; lab.textContent = label;
-      if (type === 'checkbox') { wrap.className += ' form-check pt-4'; control.checked = Boolean(record[name]); wrap.append(control, lab); }
-      else { wrap.append(lab, control); }
-      let value = record[name];
-      if (entity === 'spools' && name === 'current_remaining_weight') value = record.remaining_weight ?? record.initial_weight;
-      if (type === 'color') value = value ? `#${String(value).replace(/^#/, '').slice(0, 6)}` : '#000000';
-      if (type !== 'checkbox') control.value = value ?? '';
-      fieldsNode.append(wrap);
-    });
-    modal.show();
-  };
-  document.querySelectorAll('[data-admin-add]').forEach(button => button.addEventListener('click', () => buildForm(button.dataset.adminAdd)));
-  document.querySelectorAll('[data-admin-edit]').forEach(button => button.addEventListener('click', () => buildForm(button.dataset.adminEdit, JSON.parse(button.dataset.record))));
-  form.addEventListener('submit', async event => {
-    event.preventDefault();
-    const entity = form.dataset.entity; const id = form.dataset.id;
-    const payload = {};
-    fields[entity].forEach(([name, , type]) => {
-      const input = form.elements[name]; let value = type === 'checkbox' ? input.checked : input.value;
-      if (type === 'number') value = value === '' ? null : Number(value);
-      if (type.startsWith('select:')) value = value === '' ? null : Number(value);
-      payload[name] = value;
-    });
-    const response = await fetch(`/inventory/manage/${entity}${id ? `/${id}` : ''}`, {method: id ? 'PUT' : 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload)});
-    const result = await response.json();
-    if (!response.ok) { showMessage(result.error || 'Speichern fehlgeschlagen.', true); return; }
-    window.location.reload();
-  });
-  document.querySelectorAll('[data-admin-delete]').forEach(button => button.addEventListener('click', async () => {
-    if (!window.confirm('Eintrag wirklich löschen?')) return;
-    const response = await fetch(`/inventory/manage/${button.dataset.adminDelete}/${button.dataset.id}`, {method:'DELETE'});
-    const result = await response.json();
-    if (!response.ok) { showMessage(result.error || 'Löschen fehlgeschlagen.', true); return; }
-    window.location.reload();
-  }));
-});
-</script>
-{% endif %}
-<script>
-document.addEventListener('DOMContentLoaded', () => {
-  const table = document.getElementById('inventory-table');
-  if (!table) return;
-  const body = table.tBodies[0];
-  const rows = Array.from(body.querySelectorAll('[data-inventory-row]'));
-  const printDetails = new Map();
-  rows.forEach(row => {
-    const toggle = row.querySelector('.inventory-print-toggle');
-    if (!toggle) return;
-    const detail = document.getElementById(toggle.getAttribute('aria-controls'));
-    printDetails.set(row, { toggle, detail });
-    toggle.addEventListener('click', () => {
-      const expanded = toggle.getAttribute('aria-expanded') !== 'true';
-      toggle.setAttribute('aria-expanded', String(expanded));
-      toggle.querySelector('span').textContent = expanded ? '▾' : '▸';
-      detail.hidden = row.hidden || !expanded;
-    });
-  });
-  const textFilters = Array.from(document.querySelectorAll('[data-inventory-filter]'));
-  const filterMenus = Array.from(document.querySelectorAll('[data-inventory-filter-menu]'));
-  const filterSets = Object.fromEntries(filterMenus.map(menu => [menu.dataset.inventoryFilterMenu, new Set()]));
-  if (filterSets.status) filterSets.status.add('active');
-  const buttons = Array.from(document.querySelectorAll('[data-inventory-sort]'));
-  const storageKey = 'm0bambospool-inventory-table-state';
+  const inventory = JSON.parse(document.getElementById('inventory-data').textContent);
+  const localFilaments = new Map(JSON.parse(document.getElementById('local-filament-data').textContent).map(item => [String(item.id), item]));
+  const vendors = JSON.parse(document.getElementById('local-vendor-data').textContent);
+  const materials = JSON.parse(document.getElementById('local-material-data').textContent);
+  const groupsNode = document.getElementById('inventory-groups');
+  const editor = document.getElementById('inventory-inline-editor');
+  const editorTitle = document.getElementById('inventory-editor-title');
+  const editorState = document.getElementById('inventory-editor-state');
+  const editorFields = document.getElementById('inventory-editor-fields');
+  const groupSelect = document.getElementById('inventory-group-select');
+  const sortSelect = document.getElementById('inventory-sort-select');
+  const search = document.getElementById('inventory-search');
+  const stateKey = 'm0bambospool-inventory-group-view';
+  let selectedFilamentId = null;
   let savedState = {};
-  try { savedState = JSON.parse(localStorage.getItem(storageKey) || '{}'); } catch (_) { savedState = {}; }
-  const validFields = ['id', 'vendor', 'material', 'filament', 'last-used'];
-  let field = validFields.includes(savedState.field) ? savedState.field : 'id';
-  let direction = savedState.direction === 'desc' ? 'desc' : 'asc';
-  const inventorySelectedLabel = "{{ _('ausgewählt') }}";
-  const inventoryAllLabel = {{ _('Alle')|tojson }};
-  const apply = () => {
-    const active = Object.fromEntries(textFilters.map(input => [input.dataset.inventoryFilter, input.value.trim().toLowerCase()]));
-    rows.forEach(row => { row.hidden = Object.entries(active).some(([key, value]) => value && !row.dataset['inventory' + key.charAt(0).toUpperCase() + key.slice(1)].includes(value)) || Object.entries(filterSets).some(([key, values]) => values.size && !values.has(row.dataset['inventory' + key.charAt(0).toUpperCase() + key.slice(1)])); });
-    printDetails.forEach(({ toggle, detail }, row) => {
-      detail.hidden = row.hidden || toggle.getAttribute('aria-expanded') !== 'true';
-    });
-    const visible = rows.filter(row => !row.hidden);
-    try { localStorage.setItem(storageKey, JSON.stringify({ field, direction })); } catch (_) {}
-    visible.sort((a, b) => { const key = 'inventory' + field.charAt(0).toUpperCase() + field.slice(1); let left; let right; if (field === 'last-used') { const leftRaw = a.dataset.inventoryLastUsed || ''; const rightRaw = b.dataset.inventoryLastUsed || ''; if (!leftRaw || !rightRaw) { if (!leftRaw && !rightRaw) return 0; return leftRaw ? -1 : 1; } left = Date.parse(leftRaw) || 0; right = Date.parse(rightRaw) || 0; } else { left = field === 'id' || field === 'weight' ? Number(a.dataset[key]) : a.dataset[key]; right = field === 'id' || field === 'weight' ? Number(b.dataset[key]) : b.dataset[key]; } const result = left < right ? -1 : left > right ? 1 : 0; return direction === 'asc' ? result : -result; });
-    visible.forEach(row => {
-      body.appendChild(row);
-      if (printDetails.has(row)) body.appendChild(printDetails.get(row).detail);
-    });
+  try { savedState = JSON.parse(localStorage.getItem(stateKey) || '{}'); } catch (_) {}
+  groupSelect.value = ['filament', 'vendor', 'material', 'none'].includes(savedState.group) ? savedState.group : 'filament';
+  sortSelect.value = ['last-used', 'name', 'remaining'].includes(savedState.sort) ? savedState.sort : 'last-used';
+
+  const text = value => String(value ?? '');
+  const filamentOf = entry => entry.spool?.filament || {};
+  const vendorOf = entry => filamentOf(entry).vendor?.name || 'Unbekannt';
+  const materialOf = entry => filamentOf(entry).material || 'Unbekannt';
+  const filamentNameOf = entry => filamentOf(entry).name || 'Ohne Namen';
+  const formatWeight = grams => { const value = Number(grams || 0); if (value < 1000) return `${value.toFixed(1)} g`; const kilograms = Math.round(value / 10) / 100; return `${Number.isInteger(kilograms) ? kilograms.toFixed(0) : kilograms.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')} kg`; };
+  const relativeDate = value => {
+    if (!value) return 'unbenutzt';
+    const date = new Date(value.replace(' ', 'T'));
+    const minutes = Math.max(0, Math.round((Date.now() - date.getTime()) / 60000));
+    if (minutes < 60) return `verwendet vor ${minutes} Min.`;
+    if (minutes < 1440) return `verwendet vor ${Math.round(minutes / 60)} Std.`;
+    return `verwendet vor ${Math.round(minutes / 1440)} Tg.`;
   };
-  textFilters.forEach(input => input.addEventListener('input', apply));
-  filterMenus.forEach(menu => {
-    const key = menu.dataset.inventoryFilterMenu;
-    const dataKey = 'inventory' + key.charAt(0).toUpperCase() + key.slice(1);
-    const labelKey = `${dataKey}Label`;
-    const choices = new Map();
-    rows.forEach(row => {
-      const value = row.dataset[dataKey];
-      if (value && !choices.has(value)) {
-        choices.set(value, row.dataset[labelKey] || value);
-      }
+  const persistView = () => { try { localStorage.setItem(stateKey, JSON.stringify({ group: groupSelect.value, sort: sortSelect.value })); } catch (_) {} };
+  const make = (tag, className, value) => { const node = document.createElement(tag); if (className) node.className = className; if (value !== undefined) node.textContent = value; return node; };
+
+  function groupEntries() {
+    const term = search.value.trim().toLocaleLowerCase();
+    const filtered = inventory.filter(entry => [filamentNameOf(entry), vendorOf(entry), materialOf(entry)].join(' ').toLocaleLowerCase().includes(term));
+    const groups = new Map();
+    filtered.forEach(entry => {
+      const filament = filamentOf(entry);
+      let key; let label;
+      if (groupSelect.value === 'vendor') { key = `vendor:${vendorOf(entry)}`; label = vendorOf(entry); }
+      else if (groupSelect.value === 'material') { key = `material:${materialOf(entry)}`; label = materialOf(entry); }
+      else if (groupSelect.value === 'none') { key = `spool:${entry.spool.id}`; label = filamentNameOf(entry); }
+      else { key = `filament:${filament.id}`; label = filamentNameOf(entry); }
+      if (!groups.has(key)) groups.set(key, { key, label, entries: [] });
+      groups.get(key).entries.push(entry);
     });
-    [...choices.entries()]
-      .sort(([, left], [, right]) => left.localeCompare(right, undefined, { sensitivity: 'base' }))
-      .forEach(([value, displayLabel]) => {
-        const label = document.createElement('label');
-        label.className = 'filter-choice';
-        const checkbox = document.createElement('input');
-        checkbox.className = 'filter-choice-input';
-        checkbox.type = 'checkbox';
-        checkbox.value = value;
-        checkbox.checked = key === 'status' && value === 'active';
-        const labelText = document.createElement('span');
-        labelText.textContent = displayLabel;
-        label.append(checkbox, labelText);
-        checkbox.addEventListener('change', () => {
-          checkbox.checked ? filterSets[key].add(value) : filterSets[key].delete(value);
-          const button = document.querySelector(`[data-inventory-filter-button="${key}"]`);
-          button.textContent = filterSets[key].size ? `${filterSets[key].size} ${inventorySelectedLabel}` : `${inventoryAllLabel} ${button.dataset.inventoryFilterLabel || key}`;
-          apply();
-        });
-        menu.appendChild(label);
+    const sorted = [...groups.values()];
+    sorted.forEach(group => group.entries.sort((left, right) => Number(right.spool.remaining_weight || 0) - Number(left.spool.remaining_weight || 0)));
+    const latest = group => Math.max(...group.entries.map(entry => Date.parse((entry.last_used || '').replace(' ', 'T')) || 0));
+    sorted.sort((left, right) => {
+      if (sortSelect.value === 'remaining') return right.entries.reduce((sum, entry) => sum + Number(entry.spool.remaining_weight || 0), 0) - left.entries.reduce((sum, entry) => sum + Number(entry.spool.remaining_weight || 0), 0);
+      if (sortSelect.value === 'name') return left.label.localeCompare(right.label, undefined, { sensitivity: 'base' });
+      return latest(right) - latest(left) || left.label.localeCompare(right.label, undefined, { sensitivity: 'base' });
+    });
+    return sorted;
+  }
+
+  function selectFilament(filamentId) {
+    const record = localFilaments.get(String(filamentId));
+    if (!record) { editor.hidden = false; editorTitle.textContent = 'Kein lokaler Filamenteintrag'; editorState.textContent = 'Nicht editierbar'; editorFields.replaceChildren(make('p', 'text-muted mb-0', 'F\u00fcr dieses Filament liegt noch kein lokaler Stammdatensatz vor.')); return; }
+    selectedFilamentId = String(filamentId);
+    editor.hidden = false;
+    editorTitle.textContent = `${record.vendor_name || 'Unbekannt'} \u00b7 ${record.name}`;
+    editorState.textContent = '';
+    editorFields.replaceChildren();
+    const fieldDefinitions = [
+      ['name', 'Name', 'text'], ['vendor_id', 'Hersteller', 'select', vendors], ['material_id', 'Material', 'select', materials], ['color_hex', 'Farbe', 'color'],
+      ['diameter', 'Durchmesser (mm)', 'number'], ['density', 'Dichte (g/cm\u00b3)', 'number'], ['weight', 'Gewicht (g)', 'number'], ['spool_weight', 'Leergewicht Spule (g)', 'number'], ['price', 'Preis (EUR)', 'number'],
+      ['nozzle_temp', 'D\u00fcsentemperatur (\u00b0C)', 'number'], ['bed_temp', 'Bett-Temperatur (\u00b0C)', 'number'], ['extruder_temp', 'Extruder-Temperatur (\u00b0C)', 'number'], ['cali_idx', 'Kalibrierungsindex', 'number'],
+      ['bambu_filament_id', 'Bambu Filament-ID', 'text'], ['bambu_setting_id', 'Bambu Setting-ID', 'text']
+    ];
+    fieldDefinitions.forEach(([name, label, type, options]) => {
+      const wrap = make('div', name === 'name' ? 'col-12' : 'col-12 col-md-6');
+      const labelNode = make('label', 'form-label small mb-1', label);
+      let input;
+      if (type === 'select') {
+        input = document.createElement('select'); input.className = 'form-select form-select-sm';
+        input.append(new Option('â€”', ''));
+        options.forEach(option => input.append(new Option(option.name, option.id)));
+        input.value = record[name] ?? '';
+      } else {
+        input = document.createElement('input'); input.className = type === 'color' ? 'form-control form-control-color' : 'form-control form-control-sm'; input.type = type;
+        if (type === 'number') input.step = 'any';
+        input.value = type === 'color' ? `#${text(record[name] || '000000').replace(/^#/, '')}` : (record[name] ?? '');
+      }
+      input.name = name;
+      input.dataset.originalValue = input.value;
+      input.addEventListener('change', async () => {
+        const value = input.value;
+        if (value === input.dataset.originalValue) return;
+        input.disabled = true; editorState.textContent = 'Speichert â€¦';
+        try {
+          const response = await fetch(`/inventory/local-filaments/${selectedFilamentId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ [name]: value }) });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || 'Speichern fehlgeschlagen.');
+          localFilaments.set(String(result.filament.id), result.filament);
+          input.dataset.originalValue = value;
+          editorState.textContent = 'Gespeichert';
+        } catch (error) { editorState.textContent = error.message; input.value = input.dataset.originalValue; }
+        finally { input.disabled = false; }
       });
-    const button = document.querySelector(`[data-inventory-filter-button="${key}"]`);
-    const dropdown = menu.closest('.dropdown');
-    if (button && dropdown) {
-      const positionMenu = () => {
-        const rect = button.getBoundingClientRect();
-        menu.style.setProperty('position', 'fixed', 'important');
-        menu.style.setProperty('transform', 'none', 'important');
-        menu.style.setProperty('left', `${rect.left}px`, 'important');
-        menu.style.setProperty('width', `${rect.width}px`, 'important');
-        const menuHeight = Math.min(menu.scrollHeight, window.innerHeight - 16);
-        const top = rect.bottom + menuHeight > window.innerHeight ? Math.max(8, rect.top - menuHeight) : rect.bottom;
-        menu.style.setProperty('top', `${top}px`, 'important');
-      };
-      dropdown.addEventListener('shown.bs.dropdown', () => {
-        window.requestAnimationFrame(positionMenu);
-        window.setTimeout(positionMenu, 0);
+      wrap.append(labelNode, input); editorFields.append(wrap);
+    });
+  }
+
+  function render() {
+    persistView(); groupsNode.replaceChildren();
+    const groups = groupEntries();
+    if (!groups.length) { groupsNode.append(make('p', 'text-muted p-3', 'Keine Filamente gefunden.')); return; }
+    groups.forEach(group => {
+      const first = group.entries[0]; const firstFilament = filamentOf(first);
+      const total = group.entries.reduce((sum, entry) => sum + Number(entry.spool.remaining_weight || 0), 0);
+      const details = make('details', 'inventory-group'); details.open = true;
+      const summary = make('summary', 'inventory-group-summary');
+      const color = make('span', 'inventory-group-color'); color.style.backgroundColor = `#${text(firstFilament.color_hex || '000000').replace('#', '')}`;
+      const copy = make('span', 'inventory-group-copy'); const name = make('strong', '', group.label); const meta = make('span', 'inventory-group-meta', groupSelect.value === 'filament' || groupSelect.value === 'none' ? `${vendorOf(first)} \u00b7 ${materialOf(first)} \u00b7 ${firstFilament.diameter || '1.75'} mm` : (groupSelect.value === 'vendor' ? 'Herstellergruppe' : 'Materialgruppe')); copy.append(name, meta);
+      const totalNode = make('span', 'inventory-group-total'); totalNode.append(make('strong', '', formatWeight(total)), make('small', '', `${group.entries.length} ${group.entries.length === 1 ? 'Spule' : 'Spulen'}`));
+      summary.append(color, copy, totalNode); details.append(summary);
+      const list = make('div', 'inventory-spool-list');
+      group.entries.forEach(entry => {
+        const filament = filamentOf(entry); const button = make('button', 'inventory-spool-row'); button.type = 'button'; button.dataset.filamentId = filament.id || '';
+        const left = make('span', 'inventory-spool-left'); left.append(make('strong', '', `#${entry.spool.id}`), make('small', '', `${filamentNameOf(entry)} \u00b7 ${relativeDate(entry.last_used)}`));
+        const maximum = Number(entry.spool.initial_weight || filament.weight || entry.spool.remaining_weight || 1); const percent = Math.max(0, Math.min(100, Number(entry.spool.remaining_weight || 0) / maximum * 100));
+        const bar = make('span', 'inventory-spool-bar'); const fill = make('i'); fill.style.width = `${percent}%`; bar.append(fill);
+        const remaining = make('span', 'inventory-spool-remaining', formatWeight(entry.spool.remaining_weight));
+        button.append(left, bar, remaining); button.addEventListener('click', () => selectFilament(filament.id)); list.append(button);
       });
-      dropdown.addEventListener('hidden.bs.dropdown', () => {
-        menu.style.removeProperty('left');
-        menu.style.removeProperty('top');
-        menu.style.removeProperty('width');
-      });
-    }
-  });
-  buttons.forEach(button => button.addEventListener('click', () => { const next = button.dataset.inventorySort; direction = next === field && direction === 'asc' ? 'desc' : 'asc'; field = next; buttons.forEach(item => { const icon = item.querySelector('.bi'); if (icon) icon.className = `bi bi-arrow-${item === button ? (direction === 'asc' ? 'up' : 'down') : 'down-up'}`; }); apply(); }));
-  const activeButton = buttons.find(button => button.dataset.inventorySort === field);
-  if (activeButton) { const icon = activeButton.querySelector('.bi'); if (icon) icon.className = `bi bi-arrow-${direction === 'asc' ? 'up' : 'down'}`; }
-  apply();
+      details.append(list); groupsNode.append(details);
+    });
+  }
+  [groupSelect, sortSelect].forEach(control => control.addEventListener('change', render));
+  search.addEventListener('input', render);
+  render();
 });
 </script>
 {% endblock %}

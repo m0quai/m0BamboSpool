@@ -76,12 +76,11 @@ def _save_checkpoint_metadata(metadata: dict) -> None:
   temp_path.replace(metadata_path)
 
 
-def _safe_checkpoint_model_name(source_name: str | None, task_id=None, subtask_id=None) -> str:
+def _safe_checkpoint_model_name(source_name: str | None, print_id=None) -> str:
   # Preserve the original 3MF name, but never allow path traversal.
   raw_name = os.path.basename(str(source_name or "").replace("\\", "/")).strip()
   if not raw_name.lower().endswith(".3mf"):
-    fallback = "-".join(str(value) for value in (task_id, subtask_id) if value not in (None, ""))
-    raw_name = f"{fallback or 'print'}.3mf"
+    raw_name = f"print-{print_id or 'model'}.3mf"
   safe_name = re.sub(r"[^A-Za-z0-9._() -]+", "_", raw_name).strip(" .")
   return safe_name or "print.3mf"
 
@@ -97,19 +96,18 @@ def _file_sha256(path: Path) -> str:
 def archive_checkpoint_model(
     model_path: str,
     model_file_name: str | None = None,
-    task_id=None,
-    subtask_id=None,
+    print_id=None,
 ) -> Path:
   """Keep a completed download under its original, sanitized 3MF filename."""
   source = Path(model_path)
-  checkpoint_name = _safe_checkpoint_model_name(model_file_name, task_id, subtask_id)
+  checkpoint_name = _safe_checkpoint_model_name(model_file_name, print_id)
   destination = _checkpoint_dir() / checkpoint_name
   temporary = destination.with_suffix(destination.suffix + ".part")
   with source.open("rb") as source_stream, temporary.open("wb") as target_stream:
     shutil.copyfileobj(source_stream, target_stream, length=1024 * 1024)
   temporary.replace(destination)
   log(
-    f"[filament-tracker] 3MF archiviert: job={task_id}:{subtask_id}, "
+    f"[filament-tracker] 3MF archiviert: print_id={print_id}, "
     f"quelle={str(source)!r}, datei={checkpoint_name!r}, bytes={destination.stat().st_size}"
   )
   return destination
@@ -119,8 +117,7 @@ def save_checkpoint(
     *,
     model_path: str,
     current_layer: int,
-    task_id,
-    subtask_id,
+    print_id,
     ams_mapping,
     gcode_file_name: str,
     model_file_name: str | None = None,
@@ -128,14 +125,12 @@ def save_checkpoint(
   destination = archive_checkpoint_model(
     model_path,
     model_file_name=model_file_name,
-    task_id=task_id,
-    subtask_id=subtask_id,
+    print_id=print_id,
   )
   checkpoint_name = destination.name
 
   metadata = {
-    "task_id": task_id,
-    "subtask_id": subtask_id,
+    "print_id": print_id,
     "current_layer": current_layer,
     "ams_mapping": ams_mapping,
     "gcode_file_name": gcode_file_name,
@@ -146,7 +141,7 @@ def save_checkpoint(
   }
   _save_checkpoint_metadata(metadata)
   log(
-    f"[filament-tracker] Checkpoint gespeichert: job={task_id}:{subtask_id}, "
+    f"[filament-tracker] Checkpoint gespeichert: print_id={print_id}, "
     f"datei={checkpoint_name!r}, bytes={metadata['model_size']}"
   )
 
@@ -177,13 +172,7 @@ def update_checkpoint_layer(layer: int) -> None:
   _save_checkpoint_metadata(metadata)
 
 
-def _same_job_id(left, right) -> bool:
-  if left in (None, "") or right in (None, ""):
-    return False
-  return str(left) == str(right)
-
-
-def recover_model(task_id, subtask_id):
+def recover_model(print_id):
   metadata = _get_checkpoint_metadata()
   if not metadata:
     return None
@@ -193,17 +182,11 @@ def recover_model(task_id, subtask_id):
     clear_checkpoint(preserve_models=False)
     return None
 
-  checkpoint_task_id = metadata.get("task_id")
-  checkpoint_subtask_id = metadata.get("subtask_id")
-  comparable_ids = []
-  if task_id not in (None, ""):
-    comparable_ids.append(_same_job_id(checkpoint_task_id, task_id))
-  if subtask_id not in (None, ""):
-    comparable_ids.append(_same_job_id(checkpoint_subtask_id, subtask_id))
-  if not comparable_ids or not all(comparable_ids):
+  checkpoint_print_id = metadata.get("print_id")
+  if checkpoint_print_id is None or int(checkpoint_print_id) != int(print_id):
     log(
-      f"[filament-tracker] Checkpoint gehört zu anderem oder nicht eindeutigem Job: "
-      f"{checkpoint_task_id}:{checkpoint_subtask_id} != {task_id}:{subtask_id}"
+      f"[filament-tracker] Checkpoint gehört zu einem anderen Druck: "
+      f"{checkpoint_print_id!r} != {print_id!r}"
     )
     clear_checkpoint(preserve_models=False)
     return None
@@ -476,9 +459,7 @@ class FilamentUsageTracker:
         self._handle_print_abort(status=status)
 
     if self.gcode_state == "RUNNING" and previous_state != "RUNNING" and self.active_model is None:
-      task_id = print_obj.get("task_id")
-      subtask_id = print_obj.get("subtask_id")
-      self._attempt_print_resume(task_id, subtask_id, print_obj.get("url"), print_obj)
+      self._attempt_print_resume(print_obj.get("url"), print_obj)
 
   def _handle_print_start(self, print_obj: dict) -> None:
     log("[filament-tracker] Print start")
@@ -508,8 +489,6 @@ class FilamentUsageTracker:
       model_file_name=model_file_name,
       use_ams=use_ams,
       ams_mapping=ams_mapping,
-      task_id=print_obj.get("task_id"),
-      subtask_id=print_obj.get("subtask_id"),
       resume_layer=print_obj.get("_resume_layer"),
     )
     metadata = _get_checkpoint_metadata()
@@ -524,8 +503,6 @@ class FilamentUsageTracker:
       model_file_name: str | None,
       use_ams: bool,
       ams_mapping: list[int] | None,
-      task_id,
-      subtask_id,
       resume_layer=None,
   ) -> None:
     self._reset_layer_tracking_state()
@@ -570,8 +547,7 @@ class FilamentUsageTracker:
     save_checkpoint(
       model_path=model_path,
       current_layer=resume_layer or 0,
-      task_id=task_id,
-      subtask_id=subtask_id,
+      print_id=self.print_id,
       ams_mapping=self.ams_mapping,
       gcode_file_name=gcode_file_name,
       model_file_name=model_file_name,
@@ -605,8 +581,6 @@ class FilamentUsageTracker:
       "param": metadata.get("gcode_path"),
       "use_ams": bool(ams_mapping),
       "ams_mapping": ams_mapping,
-      "task_id": metadata.get("task_id"),
-      "subtask_id": metadata.get("subtask_id"),
       "model_file_name": metadata.get("file"),
     }
     
@@ -627,10 +601,9 @@ class FilamentUsageTracker:
     current_print["local_model_path"] = local_model_path
     current_print["url"] = current_print.get("url") or metadata.get("model_url") or metadata.get("file")
     current_print["model_file_name"] = metadata.get("file")
+    current_print["param"] = current_print.get("param") or metadata.get("gcode_path")
     current_print["ams_mapping"] = metadata.get("ams_mapping") or []
     current_print["use_ams"] = bool(current_print["ams_mapping"])
-    current_print["task_id"] = metadata.get("task_id", current_print.get("task_id"))
-    current_print["subtask_id"] = metadata.get("subtask_id", current_print.get("subtask_id"))
     try:
       current_print["_resume_layer"] = max(0, int(current_print.get("layer_num") or 0))
     except (TypeError, ValueError):
@@ -1165,17 +1138,16 @@ class FilamentUsageTracker:
     )
     self.apply_ams_mapping(mapping)
 
-  def _attempt_print_resume(self, task_id, subtask_id, model_url=None, print_obj=None) -> None:
+  def _attempt_print_resume(self, model_url=None, print_obj=None) -> None:
     print_obj = print_obj or {}
     try:
-      from jobs_3mf import JOBS_3MF, make_job_key
-      job_key = make_job_key(task_id, subtask_id)
-      worker_status = JOBS_3MF.get(job_key) if job_key is not None else JOBS_3MF.get_active()
+      from jobs_3mf import JOBS_3MF
+      worker_status = JOBS_3MF.get_active()
       job_state = worker_status.get("state")
       if job_state in {"queued", "resolving", "downloading", "processing"}:
         log(
           f"[filament-tracker] Resume wartet auf zentralen 3MF-Worker: "
-          f"{worker_status.get('job_key') or job_key} ({job_state})"
+          f"{worker_status.get('transfer_id')} ({job_state})"
         )
         return
       if job_state == "ready" and worker_status.get("local_path"):
@@ -1192,11 +1164,9 @@ class FilamentUsageTracker:
     except Exception as worker_error:
       log(f"[filament-tracker] 3MF-Workerstatus nicht verfügbar: {worker_error}")
     if self.print_id is None:
-      from print_history import find_active_print_for_printer_job
-      from jobs_3mf import make_job_key
-      candidate = find_active_print_for_printer_job(
+      from print_history import find_active_print_for_printer_source
+      candidate = find_active_print_for_printer_source(
         print_obj.get("subtask_name"), print_obj.get("gcode_file"), model_url,
-        job_key=make_job_key(task_id, subtask_id),
       )
       self.print_id = int(candidate["id"]) if candidate else None
       if self.print_id is None:
@@ -1212,17 +1182,14 @@ class FilamentUsageTracker:
       clear_checkpoint(preserve_models=False)
       checkpoint_metadata = {}
     # Never take the source URL from an unverified/old checkpoint.
-    if checkpoint_metadata and (
-      _same_job_id(checkpoint_metadata.get("task_id"), task_id)
-      or _same_job_id(checkpoint_metadata.get("subtask_id"), subtask_id)
-    ):
+    if checkpoint_metadata and checkpoint_metadata.get("print_id") == self.print_id:
       model_url = model_url or checkpoint_metadata.get("model_url")
     log(
       f"[filament-tracker] Resume diagnostics: print_id={self.print_id}, "
       f"checkpoint_version={checkpoint_metadata.get('checkpoint_version')!r}, "
       f"model_url_present={bool(model_url)}"
     )
-    result = recover_model(task_id, subtask_id)
+    result = recover_model(self.print_id)
     if result is None:
       log(
         "[filament-tracker] No checkpoint to recover; attempting reconstruction "
@@ -1269,8 +1236,6 @@ class FilamentUsageTracker:
         model_file_name=os.path.basename(str(model_url or model_path).replace("\\", "/")),
         use_ams=use_ams,
         ams_mapping=ams_mapping if use_ams else None,
-        task_id=task_id,
-        subtask_id=subtask_id,
       )
       if self.active_model is None:
         log("[filament-tracker] Resume reconstruction failed: 3MF contains no usable G-code")
@@ -1290,7 +1255,7 @@ class FilamentUsageTracker:
         f"checkpoint_saved=True"
       )
       return
-    log(f"[filament-tracker] Recovering from checkpoint task={task_id} subtask={subtask_id}")
+    log(f"[filament-tracker] Recovering from checkpoint for print_id={self.print_id}")
     model_path, gcode_file_name, current_layer, ams_mapping = result
     checkpoint_layer = max(0, int(current_layer))
     try:

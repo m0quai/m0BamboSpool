@@ -106,7 +106,6 @@ def create_database() -> None:
             status TEXT NOT NULL DEFAULT 'RUNNING',
             predicted_end_time TEXT,
             actual_end_time TEXT,
-            printer_job_key TEXT,
             FOREIGN KEY (print_id) REFERENCES prints (id) ON DELETE CASCADE
         )
     ''')
@@ -179,8 +178,13 @@ def create_database() -> None:
     _ensure_column(cursor, "print_layer_tracking", "printer_percent", "REAL")
     _ensure_column(cursor, "print_layer_tracking", "last_status_at", "TEXT")
     _ensure_column(cursor, "print_layer_tracking", "last_usage_event_at", "TEXT")
-    _ensure_column(cursor, "print_layer_tracking", "printer_job_key", "TEXT")
     _ensure_column(cursor, "print_layer_tracking", "remote_3mf_path", "TEXT")
+
+    # Local Bambu task/subtask identifiers are not stable.  History links a
+    # running print by its persisted source path and local print ID instead.
+    cursor.execute("PRAGMA table_info(print_layer_tracking)")
+    if "printer_job_key" in {row[1] for row in cursor.fetchall()}:
+        cursor.execute("ALTER TABLE print_layer_tracking DROP COLUMN printer_job_key")
 
     conn.commit()
     conn.close()
@@ -322,7 +326,7 @@ def _normalise_print_name(value: str | None) -> str:
     return name
 
 
-def find_open_print_for_printer_job(*names: str | None, job_key: str | None = None) -> dict | None:
+def find_open_print_for_printer_source(*names: str | None) -> dict | None:
     # Find the newest matching history row that may still need terminal-status
     # reconciliation. A failed row can be reclassified when later MQTT evidence
     # confirms that the user stopped the print manually.
@@ -346,51 +350,33 @@ def find_open_print_for_printer_job(*names: str | None, job_key: str | None = No
              ORDER BY p.id DESC"""
     ).fetchall()
     conn.close()
-    if job_key:
-        conn = connect_database(db_config["db_path"])
-        conn.row_factory = sqlite3.Row
-        exact = conn.execute(
-            """SELECT p.id, p.file_name, t.status, t.total_layers,
-                      t.layers_printed, t.predicted_end_time,
-                      t.estimated_duration_minutes, t.reconciliation_done,
-                      t.remote_3mf_path
-               FROM prints p JOIN print_layer_tracking t ON t.print_id = p.id
-               WHERE COALESCE(p.is_deleted, 0) = 0
-                 AND t.printer_job_key = ?
-                 AND t.status IN ('PREPARING', 'RUNNING', 'PAUSED', 'ABORTED', 'FAILED')
-                 AND COALESCE(t.reconciliation_done, 0) = 0
-               ORDER BY p.id DESC LIMIT 1""",
-            (str(job_key),),
-        ).fetchone()
-        conn.close()
-        if exact:
-            return dict(exact)
     for row in rows:
-        if _normalise_print_name(row["file_name"]) in wanted:
+        candidates = {
+            _normalise_print_name(row["file_name"]),
+            _normalise_print_name(row["remote_3mf_path"]),
+        }
+        if wanted.intersection(candidates):
             return dict(row)
     return None
 
 
-def find_active_print_for_printer_job(*names: str | None, job_key: str | None = None) -> dict | None:
-    # Local printers reuse 0:0 and filenames. Only an active, matching attempt
-    # can be resumed; terminal history rows must never become the current job.
+def find_active_print_for_printer_source(*names: str | None) -> dict | None:
+    # Only an active source-matching attempt can be resumed; terminal history
+    # rows must never become the current job.
     def normalise(value):
         return _normalise_print_name(str(value or "").replace("\\", "/").rsplit("/", 1)[-1])
 
     wanted = {normalise(name) for name in names if name}
-    meaningful_key = bool(job_key and any(part not in {"", "0"} for part in str(job_key).split(":")))
     with connect_database(db_config["db_path"]) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            """SELECT p.id, p.file_name, t.status, t.printer_job_key, t.remote_3mf_path
+            """SELECT p.id, p.file_name, t.status, t.remote_3mf_path
                FROM prints p JOIN print_layer_tracking t ON t.print_id = p.id
                WHERE COALESCE(p.is_deleted, 0) = 0
                  AND t.status IN ('PREPARING', 'RUNNING', 'PAUSED')
                ORDER BY p.id DESC"""
         ).fetchall()
     for row in rows:
-        if meaningful_key and str(row["printer_job_key"]) == str(job_key):
-            return dict(row)
         if wanted.intersection({normalise(row["file_name"]), normalise(row["remote_3mf_path"])}):
             return dict(row)
     return None
@@ -969,7 +955,6 @@ def update_layer_tracking(print_id: int, **fields):
       "printer_percent",
       "last_status_at",
       "last_usage_event_at",
-      "printer_job_key",
       "remote_3mf_path",
   }
 

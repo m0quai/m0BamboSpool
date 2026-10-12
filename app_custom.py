@@ -818,7 +818,7 @@ def _current_printer_status_payload():
         "ams_environment": _ams_environment_status(),
         "download": {
             key: value for key, value in JOBS_3MF.get().items()
-            if key in {"job_key", "state", "percent", "bytes_downloaded", "bytes_total", "speed_bytes_per_second", "elapsed_seconds", "error"}
+            if key in {"transfer_id", "state", "percent", "bytes_downloaded", "bytes_total", "speed_bytes_per_second", "elapsed_seconds", "error"}
         },
     }
 
@@ -915,9 +915,9 @@ def reconcile_stale_print_history_statuses():
     )
     if terminal_status in {"COMPLETED", "FAILED", "ABORTED"}:
         candidate_finder = (
-            print_history_service.find_active_print_for_printer_job
+            print_history_service.find_active_print_for_printer_source
             if terminal_status == "COMPLETED"
-            else print_history_service.find_open_print_for_printer_job
+            else print_history_service.find_open_print_for_printer_source
         )
         candidate = candidate_finder(
             print_state.get("subtask_name"),
@@ -965,22 +965,71 @@ def inventory():
     show_status_column = any(bool(item["spool"].get("archived")) for item in inventory_rows)
     local_mode = not USE_SPOOLMAN
     try:
-        vendors = inventory_db.list_entities("vendors") if local_mode else []
-        materials = inventory_db.list_entities("materials") if local_mode else []
-        filaments = inventory_db.list_filaments() if local_mode else []
+        # The local catalog remains editable and visible while SpoolMan is the
+        # active inventory backend.  It is deliberately not used for AMS,
+        # print usage, or the primary inventory table in that mode.
+        for item in inventory_rows:
+            inventory_db.ensure_local_spool_from_inventory(item["spool"])
+        vendors = inventory_db.list_entities("vendors")
+        materials = inventory_db.list_entities("materials")
+        filaments = inventory_db.list_filaments()
+        local_spools = inventory_db.list_spools(include_archived=True)
     except Exception as exc:
         _log(f"Local inventory editor could not load: {exc}")
-        vendors, materials, filaments = [], [], []
+        vendors, materials, filaments, local_spools = [], [], [], []
     return render_template(
         "inventory.html",
         inventory_rows=inventory_rows,
         show_status_column=show_status_column,
         inventory_backend=spool_data.get_backend(),
         local_inventory=local_mode,
+        local_catalog_visible=True,
         inventory_vendors=vendors,
         inventory_materials=materials,
         inventory_filaments=filaments,
+        inventory_spools=local_spools,
+        sunlu_color_options=SUNLU_COLOR_OPTIONS,
     )
+
+
+@app.patch("/inventory/local-filaments/<int:filament_id>")
+def update_local_filament(filament_id):
+    """Persist one inline field without making the local catalog an active backend."""
+    payload = request.get_json(silent=True) or {}
+    try:
+        updated = inventory_db.update_filament_fields(filament_id, payload)
+    except (KeyError, TypeError, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        _log(f"Local filament inline update failed ({filament_id}): {exc!r}")
+        return jsonify({"error": "Speichern fehlgeschlagen."}), 500
+    return jsonify({"saved": True, "filament": updated})
+
+
+@app.patch("/inventory/local-vendors/<int:vendor_id>")
+def update_local_vendor(vendor_id):
+    payload = request.get_json(silent=True) or {}
+    try:
+        updated = inventory_db.update_vendor_fields(vendor_id, payload)
+    except (KeyError, TypeError, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        _log(f"Local vendor inline update failed ({vendor_id}): {exc!r}")
+        return jsonify({"error": "Speichern fehlgeschlagen."}), 500
+    return jsonify({"saved": True, "vendor": updated})
+
+
+@app.patch("/inventory/local-spools/<int:spool_id>")
+def update_local_spool(spool_id):
+    payload = request.get_json(silent=True) or {}
+    try:
+        updated = inventory_db.update_spool_fields(spool_id, payload)
+    except (KeyError, TypeError, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        _log(f"Local spool inline update failed ({spool_id}): {exc!r}")
+        return jsonify({"error": "Speichern fehlgeschlagen."}), 500
+    return jsonify({"saved": True, "spool": updated})
 
 
 @app.get("/inventory/management/<entity>")
@@ -1222,7 +1271,7 @@ def ams_state_generation():
         "print_id": active_print_id,
         "download": {
             key: value for key, value in JOBS_3MF.get().items()
-            if key in {"job_key", "state", "percent", "bytes_downloaded", "bytes_total", "speed_bytes_per_second", "elapsed_seconds", "error"}
+            if key in {"transfer_id", "state", "percent", "bytes_downloaded", "bytes_total", "speed_bytes_per_second", "elapsed_seconds", "error"}
         },
     })
 
