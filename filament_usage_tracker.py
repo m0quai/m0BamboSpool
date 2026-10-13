@@ -1142,7 +1142,26 @@ class FilamentUsageTracker:
     print_obj = print_obj or {}
     try:
       from jobs_3mf import JOBS_3MF
-      worker_status = JOBS_3MF.get_active()
+      # Resolve the exact internal attempt.  Ready jobs from an earlier print
+      # must not mask the current job, and the completed result survives the
+      # short-lived PENDING_PRINT_METADATA hand-off between MQTT packets.
+      ready_result = None
+      if self.print_id is not None:
+        try:
+          import mqtt_bambulab
+          ready_result = mqtt_bambulab.get_ready_3mf_for_print(self.print_id)
+        except Exception as ready_error:
+          log(f"[filament-tracker] Zentraler 3MF-Status nicht lesbar: {ready_error!r}")
+      if ready_result:
+        self.start_tracking_from_cached_model(
+          ready_result["metadata"], ready_result["local_path"], print_obj
+        )
+        return
+
+      worker_status = (
+        JOBS_3MF.get(f"print-{int(self.print_id)}")
+        if self.print_id is not None else JOBS_3MF.get_active()
+      )
       job_state = worker_status.get("state")
       if job_state in {"queued", "resolving", "downloading", "processing"}:
         log(

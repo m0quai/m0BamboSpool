@@ -198,6 +198,22 @@ class ActivePrintRecoveryTests(unittest.TestCase):
         print_data = start.call_args.args[0]
         self.assertEqual(print_data["param"], "Metadata/plate_2.gcode")
 
+    def test_resume_uses_ready_result_bound_to_current_print(self):
+        tracker = FilamentUsageTracker()
+        tracker.print_id = 58
+        ready_result = {
+            "metadata": {"print_id": 58, "file": "Love.gcode.3mf"},
+            "local_path": "ready-model.3mf",
+        }
+        with patch.object(mqtt, "get_ready_3mf_for_print", return_value=ready_result), \
+                patch.object(tracker, "start_tracking_from_cached_model") as start:
+            tracker._attempt_print_resume(None, {"gcode_state": "RUNNING"})
+
+        start.assert_called_once_with(
+            ready_result["metadata"], ready_result["local_path"],
+            {"gcode_state": "RUNNING"},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

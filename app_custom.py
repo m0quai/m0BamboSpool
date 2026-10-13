@@ -1006,6 +1006,21 @@ def update_local_filament(filament_id):
     return jsonify({"saved": True, "filament": updated})
 
 
+@app.post("/inventory/local-filaments")
+def create_local_filament():
+    payload = request.get_json(silent=True) or {}
+    payload.setdefault("name", "Neues Filament")
+    try:
+        filament_id = inventory_db.save_entity("filaments", payload)
+        created = next(item for item in inventory_db.list_filaments() if int(item["id"]) == filament_id)
+    except (KeyError, TypeError, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        _log(f"Local filament create failed: {exc!r}")
+        return jsonify({"error": "Anlegen fehlgeschlagen."}), 500
+    return jsonify({"saved": True, "filament": created}), 201
+
+
 @app.patch("/inventory/local-vendors/<int:vendor_id>")
 def update_local_vendor(vendor_id):
     payload = request.get_json(silent=True) or {}

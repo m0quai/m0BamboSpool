@@ -366,6 +366,13 @@ def _on_3mf_job_complete(transfer_key, local_path, metadata, error):
     job["metadata_ready"] = True
   metadata["local_model_path"] = local_path
   metadata["complete"] = True
+  # The transient PENDING_PRINT_METADATA value is consumed by the next MQTT
+  # packet.  Keep the completed result on its immutable internal print ID as
+  # well, so a RUNNING packet can never fall back to a second, pathless 3MF
+  # reconstruction for a freshly downloaded model.
+  with _ACTIVE_3MF_PRINTS_LOCK:
+    job["ready_metadata"] = dict(metadata)
+    job["local_path"] = local_path
   PENDING_PRINT_METADATA = metadata
   if metadata.get("image"):
     update_print_image(job["print_id"], metadata["image"])
@@ -500,6 +507,22 @@ def get_active_3mf_print_id():
     if JOBS_3MF.get(transfer_key).get("state") in {"queued", "resolving", "downloading", "processing"}:
       return job.get("print_id")
   return None
+
+
+def get_ready_3mf_for_print(print_id):
+  """Return the completed central 3MF result for one internal print attempt."""
+  if print_id is None:
+    return None
+  transfer_key = _transfer_key(print_id)
+  status = JOBS_3MF.get(transfer_key)
+  if status.get("state") != "ready" or not status.get("local_path"):
+    return None
+  with _ACTIVE_3MF_PRINTS_LOCK:
+    job = dict(ACTIVE_3MF_PRINTS.get(transfer_key) or {})
+  metadata = job.get("ready_metadata")
+  if not isinstance(metadata, dict) or int(metadata.get("print_id") or -1) != int(print_id):
+    return None
+  return {"metadata": dict(metadata), "local_path": status["local_path"]}
 
 
 def _reconcile_completed_printer_job(print_data: dict) -> None:
