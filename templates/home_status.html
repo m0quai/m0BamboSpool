@@ -48,7 +48,7 @@
               <dt class="col-sm-5 fw-normal" id="home-last-print-remaining-label"{% if not last_print or last_print.status not in ['PREPARING', 'RUNNING', 'PAUSED'] %} hidden{% endif %}>{{ _('Restlaufzeit:') }}</dt>
               <dd class="col-sm-7 mb-1" id="home-last-print-remaining"{% if not last_print or last_print.status not in ['PREPARING', 'RUNNING', 'PAUSED'] %} hidden{% endif %}>–</dd>
               <dt class="col-sm-5 fw-normal">{{ _('Consumed') }}</dt>
-              <dd class="col-sm-7 mb-1" id="home-last-print-consumed">{% if last_print and last_print.filament_grams_billed is not none %}{{ '%.2f'|format(last_print.filament_grams_billed) }} g{% else %}–{% endif %}</dd>
+              <dd class="col-sm-7 mb-1" id="home-last-print-consumed">{% if last_print and last_print.filament_grams_billed is not none %}{{ format_number(last_print.filament_grams_billed) }} g{% else %}–{% endif %}</dd>
               <dt class="col-sm-5 fw-normal" id="home-last-print-status-at-label"{% if not last_print or last_print.status not in ['PREPARING', 'RUNNING', 'PAUSED'] %} hidden{% endif %}>{{ _('Last status') }}</dt>
               <dd class="col-sm-7 mb-1" id="home-last-print-status-at"{% if not last_print or last_print.status not in ['PREPARING', 'RUNNING', 'PAUSED'] %} hidden{% endif %}>{% if last_print and last_print.last_status_at %}{{ format_datetime(last_print.last_status_at) }}{% else %}–{% endif %}</dd>
             </dl>
@@ -131,7 +131,7 @@
       });
       if (lastPrintExpectedEnd) lastPrintExpectedEnd.textContent = item.predicted_end_time ? formatUiDateTime(item.predicted_end_time) : '–';
       if (lastPrintRemaining) lastPrintRemaining.textContent = formatRemaining(item.predicted_end_time);
-      if (lastPrintConsumed) lastPrintConsumed.textContent = item.filament_grams_billed != null ? `${Number(item.filament_grams_billed).toFixed(2)} g` : '–';
+      if (lastPrintConsumed) lastPrintConsumed.textContent = item.filament_grams_billed != null ? `${new Intl.NumberFormat({{ ('de-DE' if current_language == 'de' else 'en-US')|tojson }}, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(item.filament_grams_billed))} g` : '–';
       const hasActiveJob = ['PREPARING', 'RUNNING', 'PAUSED'].includes(item.status);
       if (lastPrintStatusAtLabel) lastPrintStatusAtLabel.hidden = !hasActiveJob;
       if (lastPrintStatusAt) {
@@ -186,7 +186,7 @@
       unit += 1;
     }
     const digits = unit === 0 ? 0 : (amount >= 10 ? 1 : 2);
-    return `${amount.toFixed(digits)} ${units[unit]}`;
+    return `${new Intl.NumberFormat({{ ('de-DE' if current_language == 'de' else 'en-US')|tojson }}, { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(amount)} ${units[unit]}`;
   }
 
   function formatRemaining(value) {

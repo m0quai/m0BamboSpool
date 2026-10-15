@@ -20,6 +20,7 @@
     <label class="inventory-control inventory-search">Filtern
       <input id="inventory-search" class="form-control form-control-sm" type="search" placeholder="Filament, Hersteller oder Material">
     </label>
+    <label class="inventory-archived-toggle"><input id="inventory-show-archived" type="checkbox"><span>Archivierte anzeigen</span></label>
     <button id="inventory-create-filament" class="btn btn-sm btn-primary" type="button">Filament anlegen</button>
   </div>
   <div class="inventory-layout">
@@ -27,11 +28,39 @@
     <aside id="inventory-inline-editor" class="inventory-inline-editor" hidden aria-live="polite">
       <div class="inventory-editor-heading">
         <div><div id="inventory-editor-kind" class="small text-muted">Lokale Stammdaten</div><h2 id="inventory-editor-title" class="h5 mb-0"></h2></div>
-        <span id="inventory-editor-state" class="small text-muted"></span>
+        <div class="inventory-editor-actions">
+          <span id="inventory-editor-state" class="small text-muted"></span>
+          <button id="inventory-create-spool" class="btn btn-sm btn-primary" type="button" hidden>Neue Spule</button>
+          <button id="inventory-open-filament" class="btn btn-sm btn-outline-primary inventory-icon-button" type="button" hidden aria-label="Filament öffnen" title="Filament öffnen"><i class="bi bi-box-seam" aria-hidden="true"></i></button>
+          <button id="inventory-duplicate-spool" class="btn btn-sm btn-primary inventory-icon-button" type="button" hidden aria-label="Spule duplizieren" title="Spule duplizieren"><i class="bi bi-copy" aria-hidden="true"></i></button>
+          <button id="inventory-delete-spool" class="btn btn-sm btn-primary inventory-icon-button" type="button" hidden aria-label="Spule löschen" title="Spule löschen"><i class="bi bi-trash3" aria-hidden="true"></i></button>
+          <button id="inventory-adjust-stock" class="btn btn-sm btn-primary inventory-icon-button" type="button" hidden aria-label="Bestand verändern" title="Bestand verändern"><i class="bi bi-sliders" aria-hidden="true"></i></button>
+        </div>
       </div>
-      <div id="inventory-editor-picture" class="inventory-editor-picture" role="img" aria-label="Bildplatzhalter">Bildplatzhalter</div>
-      <p class="small text-muted mb-3">&Auml;nderungen werden beim Verlassen eines ge&auml;nderten Feldes lokal gespeichert. Sie &auml;ndern weder SpoolMan noch AMS oder Verbrauch.</p>
+      <div id="inventory-current-weight" class="inventory-current-weight" hidden>
+        <div class="inventory-current-weight-heading"><span>Aktuelles Gewicht (g)</span><strong id="inventory-current-weight-value"></strong></div>
+        <div class="inventory-current-weight-bar" role="progressbar" aria-label="Aktuelles Spulengewicht"><i id="inventory-current-weight-fill"></i></div>
+      </div>
+      <div id="inventory-stock-adjustment" class="inventory-stock-adjustment" hidden>
+        <div class="inventory-stock-tabs" role="tablist" aria-label="Bestandskorrektur">
+          <button type="button" class="btn btn-sm btn-primary" data-stock-mode="delta">Gewicht</button>
+          <button type="button" class="btn btn-sm btn-outline-secondary" data-stock-mode="absolute">Gemessenes Gewicht</button>
+        </div>
+        <div class="inventory-stock-entry">
+          <label id="inventory-stock-label" class="form-label small mb-0" for="inventory-stock-value">Neues Gesamtgewicht</label>
+          <div class="input-group input-group-sm">
+            <input id="inventory-stock-value" class="form-control" type="text" inputmode="decimal" autocomplete="off">
+            <span class="input-group-text">g</span>
+          </div>
+          <button id="inventory-stock-apply" class="btn btn-sm btn-primary" type="button">OK</button>
+        </div>
+        <div id="inventory-stock-help" class="small text-muted">Gesamtgewicht der Spule plus Restfilament, wie von einer Waage abgelesen.</div>
+      </div>
       <div id="inventory-editor-fields" class="row g-2"></div>
+      <section id="inventory-spool-prints" class="inventory-spool-prints" hidden aria-labelledby="inventory-spool-prints-title">
+        <div id="inventory-spool-prints-title" class="inventory-spool-prints-title">Drucke dieser Spule</div>
+        <div id="inventory-spool-prints-list" class="inventory-spool-prints-list"></div>
+      </section>
     </aside>
   </div>
 </section>
@@ -40,7 +69,7 @@
 <script id="local-vendor-data" type="application/json">{{ inventory_vendors|tojson }}</script>
 <script id="local-material-data" type="application/json">{{ inventory_materials|tojson }}</script>
 <script id="local-spool-data" type="application/json">{{ inventory_spools|tojson }}</script>
-<script id="inventory-color-data" type="application/json">{{ sunlu_color_options|tojson }}</script>
+<script id="inventory-color-data" type="application/json">{{ inventory_colors|tojson }}</script>
 <script>
 document.addEventListener('DOMContentLoaded', () => {
   const inventory = JSON.parse(document.getElementById('inventory-data').textContent);
@@ -55,24 +84,60 @@ document.addEventListener('DOMContentLoaded', () => {
   const editorKind = document.getElementById('inventory-editor-kind');
   const editorTitle = document.getElementById('inventory-editor-title');
   const editorState = document.getElementById('inventory-editor-state');
-  const editorPicture = document.getElementById('inventory-editor-picture');
   const editorFields = document.getElementById('inventory-editor-fields');
   const groupSelect = document.getElementById('inventory-group-select');
   const sortSelect = document.getElementById('inventory-sort-select');
   const search = document.getElementById('inventory-search');
+  const showArchived = document.getElementById('inventory-show-archived');
   const createFilamentButton = document.getElementById('inventory-create-filament');
+  const createSpoolButton = document.getElementById('inventory-create-spool');
+  const duplicateSpoolButton = document.getElementById('inventory-duplicate-spool');
+  const deleteSpoolButton = document.getElementById('inventory-delete-spool');
+  const openFilamentButton = document.getElementById('inventory-open-filament');
+  const adjustStockButton = document.getElementById('inventory-adjust-stock');
+  const stockAdjustment = document.getElementById('inventory-stock-adjustment');
+  const stockValue = document.getElementById('inventory-stock-value');
+  const stockLabel = document.getElementById('inventory-stock-label');
+  const stockHelp = document.getElementById('inventory-stock-help');
+  const stockApply = document.getElementById('inventory-stock-apply');
+  const currentWeight = document.getElementById('inventory-current-weight');
+  const currentWeightValue = document.getElementById('inventory-current-weight-value');
+  const currentWeightFill = document.getElementById('inventory-current-weight-fill');
+  const spoolPrints = document.getElementById('inventory-spool-prints');
+  const spoolPrintsList = document.getElementById('inventory-spool-prints-list');
+  const stockModeButtons = [...document.querySelectorAll('[data-stock-mode]')];
+  let stockMode = 'delta';
+  const setStockMode = mode => {
+    stockMode = mode === 'delta' ? 'delta' : 'absolute';
+    stockModeButtons.forEach(button => {
+      const active = button.dataset.stockMode === stockMode;
+      button.classList.toggle('btn-primary', active);
+      button.classList.toggle('btn-outline-secondary', !active);
+    });
+    stockLabel.textContent = stockMode === 'delta' ? 'Verbrauchsmenge' : 'Neues Gesamtgewicht';
+    stockHelp.textContent = stockMode === 'delta'
+      ? 'Positive Werte verbrauchen Filament, negative Werte buchen Filament zurück.'
+      : 'Gesamtgewicht der Spule plus Restfilament, wie von einer Waage abgelesen.';
+    stockValue.value = '';
+  };
+  stockModeButtons.forEach(button => button.addEventListener('click', () => setStockMode(button.dataset.stockMode)));
+  setStockMode('delta');
   const stateKey = 'm0bambospool-inventory-group-view';
+  let selectedEditor = null;
   let savedState = {};
   try { savedState = JSON.parse(localStorage.getItem(stateKey) || '{}'); } catch (_) {}
   groupSelect.value = ['filament', 'vendor', 'material', 'none'].includes(savedState.group) ? savedState.group : 'filament';
   sortSelect.value = ['last-used', 'name', 'remaining'].includes(savedState.sort) ? savedState.sort : 'last-used';
+  showArchived.checked = Boolean(savedState.showArchived);
 
   const text = value => String(value ?? '');
   const filamentOf = entry => entry.spool?.filament || {};
   const vendorOf = entry => filamentOf(entry).vendor?.name || 'Unbekannt';
   const materialOf = entry => filamentOf(entry).material || 'Unbekannt';
   const filamentNameOf = entry => filamentOf(entry).name || 'Ohne Namen';
-  const formatWeight = grams => { const value = Number(grams || 0); if (value < 1000) return `${value.toFixed(1)} g`; const kilograms = Math.round(value / 10) / 100; return `${Number.isInteger(kilograms) ? kilograms.toFixed(0) : kilograms.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')} kg`; };
+  const numberLocale = document.documentElement.lang.startsWith('de') ? 'de-DE' : 'en-US';
+  const formatDecimal = value => Number(value).toLocaleString(numberLocale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const formatWeight = grams => { const value = Number(grams || 0); if (value < 1000) return `${formatDecimal(value)} g`; return `${formatDecimal(value / 1000)} kg`; };
   const relativeDate = value => {
     if (!value) return 'unbenutzt';
     const date = new Date(value.replace(' ', 'T'));
@@ -82,12 +147,42 @@ document.addEventListener('DOMContentLoaded', () => {
     return `verwendet vor ${Math.round(minutes / 1440)} Tg.`;
   };
   const make = (tag, className, value) => { const node = document.createElement(tag); if (className) node.className = className; if (value !== undefined) node.textContent = value; return node; };
-  const persistView = () => { try { localStorage.setItem(stateKey, JSON.stringify({ group: groupSelect.value, sort: sortSelect.value })); } catch (_) {} };
+  const storeView = () => { try { localStorage.setItem(stateKey, JSON.stringify(savedState)); } catch (_) {} };
+  const updateSelectionMarker = () => {
+    document.querySelectorAll('.inventory-selectable.is-selected').forEach(node => node.classList.remove('is-selected'));
+    if (!selectedEditor) return;
+    const selector = `.inventory-selectable[data-selection-kind="${CSS.escape(selectedEditor.kind)}"][data-selection-id="${CSS.escape(selectedEditor.id)}"]`;
+    document.querySelectorAll(selector).forEach(node => node.classList.add('is-selected'));
+  };
+  const rememberOpenGroups = () => {
+    document.querySelectorAll('.inventory-group[data-group-mode][data-group-key]').forEach(details => {
+      const mode = details.dataset.groupMode;
+      if (!savedState.openGroups || typeof savedState.openGroups !== 'object') savedState.openGroups = {};
+      if (!savedState.openGroups[mode] || typeof savedState.openGroups[mode] !== 'object') savedState.openGroups[mode] = {};
+      savedState.openGroups[mode][details.dataset.groupKey] = details.open;
+    });
+  };
+  const persistView = () => {
+    rememberOpenGroups();
+    savedState.group = groupSelect.value;
+    savedState.sort = sortSelect.value;
+    savedState.showArchived = showArchived.checked;
+    storeView();
+  };
   const localColor = value => text(value || '000000').replace(/^#/, '').toUpperCase();
+  const formatEditorNumber = (name, value) => {
+    if (value === null || value === undefined || value === '') return '0.00';
+    const number = Number(value);
+    if (!Number.isFinite(number)) return value;
+    return formatDecimal(number);
+  };
+  const moneyOrWeightField = name => name === 'price' || name.includes('weight');
 
   function groupEntries() {
     const term = search.value.trim().toLocaleLowerCase();
-    const remoteFilamentIds = new Set(inventory.map(entry => String(filamentOf(entry).id)));
+    const isArchived = entry => localSpools.get(String(entry.spool?.id))?.archived ?? Boolean(entry.spool?.archived);
+    const visibleInventory = showArchived.checked ? inventory : inventory.filter(entry => !isArchived(entry));
+    const remoteFilamentIds = new Set(visibleInventory.map(entry => String(filamentOf(entry).id)));
     const localOnlyEntries = [...localFilaments.values()]
       .filter(filament => !remoteFilamentIds.has(String(filament.id)))
       .map(filament => ({
@@ -95,7 +190,8 @@ document.addEventListener('DOMContentLoaded', () => {
         spool: { id: null, remaining_weight: 0, initial_weight: 0, filament: { ...filament, vendor: { id: filament.vendor_id, name: filament.vendor_name }, material: filament.material_name } },
         last_used: null,
       }));
-    const filtered = [...inventory, ...localOnlyEntries].filter(entry => [filamentNameOf(entry), vendorOf(entry), materialOf(entry)].join(' ').toLocaleLowerCase().includes(term));
+    const filtered = [...visibleInventory, ...localOnlyEntries]
+      .filter(entry => [filamentNameOf(entry), vendorOf(entry), materialOf(entry)].join(' ').toLocaleLowerCase().includes(term));
     const groups = new Map();
     filtered.forEach(entry => {
       const filament = filamentOf(entry);
@@ -108,34 +204,74 @@ document.addEventListener('DOMContentLoaded', () => {
       groups.get(key).entries.push(entry);
     });
     const sorted = [...groups.values()];
-    sorted.forEach(group => group.entries.sort((left, right) => Number(right.spool.remaining_weight || 0) - Number(left.spool.remaining_weight || 0)));
+    const usedAt = entry => Date.parse((entry.last_used || '').replace(' ', 'T')) || 0;
+    const compareText = (left, right) => String(left || '').localeCompare(String(right || ''), undefined, { sensitivity: 'base' });
+    const spoolId = entry => Number(entry.spool?.id || 0);
+    const compareByName = (left, right) => {
+      const leftFilament = filamentOf(left);
+      const rightFilament = filamentOf(right);
+      let result = 0;
+      if (groupSelect.value === 'vendor') {
+        result = compareText(filamentNameOf(left), filamentNameOf(right));
+      } else if (groupSelect.value === 'material') {
+        result = compareText(vendorOf(left), vendorOf(right))
+          || compareText(filamentNameOf(left), filamentNameOf(right));
+      } else if (groupSelect.value === 'none') {
+        result = compareText(vendorOf(left), vendorOf(right))
+          || compareText(materialOf(left), materialOf(right))
+          || compareText(filamentNameOf(left), filamentNameOf(right));
+      } else {
+        result = compareText(leftFilament.name, rightFilament.name);
+      }
+      return result || spoolId(left) - spoolId(right);
+    };
+    sorted.forEach(group => group.entries.sort((left, right) => {
+      if (sortSelect.value === 'name') return compareByName(left, right);
+      const byLastUse = usedAt(right) - usedAt(left);
+      if (byLastUse) return byLastUse;
+      return spoolId(right) - spoolId(left);
+    }));
     const latest = group => Math.max(...group.entries.map(entry => Date.parse((entry.last_used || '').replace(' ', 'T')) || 0));
     sorted.sort((left, right) => {
       if (sortSelect.value === 'remaining') return right.entries.reduce((sum, entry) => sum + Number(entry.spool.remaining_weight || 0), 0) - left.entries.reduce((sum, entry) => sum + Number(entry.spool.remaining_weight || 0), 0);
-      if (sortSelect.value === 'name') return left.label.localeCompare(right.label, undefined, { sensitivity: 'base' });
-      return latest(right) - latest(left) || left.label.localeCompare(right.label, undefined, { sensitivity: 'base' });
+      if (sortSelect.value === 'name') return compareByName(left.entries[0], right.entries[0]);
+      return latest(right) - latest(left) || compareText(left.label, right.label);
     });
     return sorted;
   }
 
   function buildInput(definition, record, save) {
-    const [name, label, type, options] = definition;
+    const [name, label, type, options, locked] = definition;
+    const filamentDefaultField = { initial_weight: 'weight', spool_weight: 'spool_weight', price: 'price' }[name];
+    const filamentDefaultValue = filamentDefaultField ? record.filament?.[filamentDefaultField] : null;
+    const hasFilamentDefault = filamentDefaultValue !== null && filamentDefaultValue !== undefined;
+    const defaultFromFilament = Boolean(record.filament_defaults?.[name]);
     const wrap = make('div', name === 'name' || name === 'tag' || name === 'active_tray' ? 'col-12' : 'col-12 col-md-6');
     const labelNode = make('label', 'form-label small mb-1', label);
     let input;
+    let colorPreview;
+    let clearingToDefault = false;
     if (type === 'select' || type === 'color') {
       input = document.createElement('select');
       input.className = 'form-select form-select-sm';
       if (type === 'select') {
         input.append(new Option('\u2014', ''));
-        options.forEach(option => input.append(new Option(option.name, option.id)));
+        options.forEach(option => {
+          const label = name === 'filament_id' && option.material_name
+            ? `${option.name} · ${option.material_name}`
+            : option.name;
+          input.append(new Option(label, option.id));
+        });
         input.value = record[name] ?? '';
       } else {
         const current = localColor(record[name]);
         input.append(new Option('Farbe ausw\u00e4hlen', ''));
-        colorOptions.forEach(([colorName, colorHex]) => input.append(new Option(`${colorName} (#${colorHex})`, colorHex)));
+        colorOptions.forEach(color => input.append(new Option(color.name, color.hex_code)));
         if (![...input.options].some(option => option.value === current)) input.append(new Option(`Aktuell (#${current})`, current));
         input.value = current;
+        colorPreview = make('span', 'inventory-color-preview');
+        colorPreview.style.backgroundColor = `#${current}`;
+        colorPreview.title = `#${current}`;
       }
     } else if (type === 'checkbox') {
       input = document.createElement('input');
@@ -147,20 +283,46 @@ document.addEventListener('DOMContentLoaded', () => {
       input.type = 'text';
       input.inputMode = type === 'numeric' ? 'decimal' : 'text';
       input.className = 'form-control form-control-sm';
-      input.value = record[name] ?? '';
-      if (type === 'numeric') input.placeholder = '0';
+      input.value = defaultFromFilament ? '' : (type === 'numeric'
+        ? formatEditorNumber(name, record[name])
+        : (record[name] ?? ''));
+      if (type === 'numeric') input.placeholder = formatEditorNumber(name, 0);
+      if (hasFilamentDefault) {
+        input.placeholder = `${formatEditorNumber(name, filamentDefaultValue)} · Filament-Standard`;
+        input.classList.toggle('inventory-filament-default', defaultFromFilament);
+      }
     }
     input.name = name;
+    input.dataset.fieldName = name;
+    input.disabled = Boolean(locked);
     input.dataset.originalValue = type === 'checkbox' ? String(input.checked) : input.value;
+    if (locked) {
+      input.title = 'Das Filament kann nach einer Buchung nicht mehr geändert werden.';
+    }
+    input.addEventListener('input', () => {
+      if (!hasFilamentDefault) return;
+      clearingToDefault = !input.value.trim();
+      input.classList.toggle('inventory-filament-default', clearingToDefault);
+    });
     input.addEventListener('change', async () => {
-      const value = type === 'checkbox' ? input.checked : input.value;
+      const usesFilamentDefault = hasFilamentDefault && (!input.value.trim() || Number(input.value.replace(',', '.')) === 0);
+      if (usesFilamentDefault) {
+        clearingToDefault = true;
+        input.value = '';
+        input.classList.add('inventory-filament-default');
+      }
+      const value = type === 'checkbox' ? input.checked : (clearingToDefault || usesFilamentDefault ? '' : input.value);
       if (String(value) === input.dataset.originalValue) return;
       input.disabled = true;
       editorState.textContent = 'Speichert \u2026';
       try {
-        const result = await save(name, value);
+        const savedValue = type === 'numeric' && value !== '' ? value.replace(',', '.') : value;
+        const result = await save(name, savedValue);
         input.dataset.originalValue = String(value);
-        if (type === 'color') editorPicture.style.background = `#${localColor(value)}`;
+        if (type === 'color') {
+          colorPreview.style.backgroundColor = `#${localColor(value)}`;
+          colorPreview.title = `#${localColor(value)}`;
+        }
         editorState.textContent = 'Gespeichert';
         return result;
       } catch (error) {
@@ -169,7 +331,13 @@ document.addEventListener('DOMContentLoaded', () => {
         else input.value = input.dataset.originalValue;
       } finally { input.disabled = false; }
     });
-    wrap.append(labelNode, input);
+    if (colorPreview) {
+      const colorField = make('div', 'inventory-color-field');
+      colorField.append(input, colorPreview);
+      wrap.append(labelNode, colorField);
+    } else {
+      wrap.append(labelNode, input);
+    }
     return wrap;
   }
 
@@ -180,28 +348,214 @@ document.addEventListener('DOMContentLoaded', () => {
     const endpoint = { vendor: 'local-vendors', filament: 'local-filaments', spool: 'local-spools' }[kind];
     const resultKey = { vendor: 'vendor', filament: 'filament', spool: 'spool' }[kind];
     const label = { vendor: 'Hersteller', filament: 'Filament', spool: 'Spule' }[kind];
-    const color = kind === 'spool' ? record.filament?.color_hex : record.color_hex;
+    selectedEditor = { kind, id: String(id) };
+    updateSelectionMarker();
     editor.hidden = false;
+    const spoolLocked = kind === 'spool' && Boolean(record.active_print_locked);
+    createSpoolButton.hidden = kind !== 'filament';
+    duplicateSpoolButton.hidden = kind !== 'spool';
+    deleteSpoolButton.hidden = kind !== 'spool';
+    adjustStockButton.hidden = kind !== 'spool';
+    duplicateSpoolButton.disabled = spoolLocked;
+    duplicateSpoolButton.title = spoolLocked ? 'Gebundene Spulen können nicht dupliziert werden.' : 'Spule duplizieren';
+    deleteSpoolButton.disabled = spoolLocked;
+    deleteSpoolButton.title = spoolLocked ? 'Gebundene Spulen können nicht gelöscht werden.' : 'Spule löschen';
+    adjustStockButton.disabled = spoolLocked;
+    adjustStockButton.title = spoolLocked ? 'Gebundene Spulen können nicht verändert werden.' : 'Bestand verändern';
+    currentWeight.hidden = kind !== 'spool';
+    spoolPrints.hidden = kind !== 'spool';
+    spoolPrintsList.replaceChildren();
+    if (kind === 'spool') {
+      const liveEntry = inventory.find(item => String(item.spool?.id) === String(id));
+      const prints = Array.isArray(liveEntry?.prints) ? liveEntry.prints : [];
+      if (!prints.length) {
+        const empty = make('div', 'small text-muted');
+        empty.textContent = 'Keine Drucke zugeordnet.';
+        spoolPrintsList.append(empty);
+      } else {
+        prints.forEach(print => {
+          const row = make('div', 'inventory-spool-print-row');
+          const details = make('div', 'inventory-spool-print-details');
+          const link = make('a', 'inventory-spool-print-link');
+          const printId = print.print_id ?? print.id;
+          link.href = `/print_history?print_id=${encodeURIComponent(printId)}#print_${encodeURIComponent(printId)}`;
+          link.textContent = `#${printId} · ${print.file_name || 'Druck'}`;
+          const meta = make('div', 'small text-muted');
+          const date = print.print_date ? new Date(String(print.print_date).replace(' ', 'T')).toLocaleString(numberLocale, { dateStyle: 'short', timeStyle: 'short' }) : '–';
+          const duration = print.duration_minutes != null ? ` · ${print.duration_minutes} Min.` : '';
+          const amount = print.grams_used != null ? ` · ${formatDecimal(print.grams_used)} g` : '';
+          meta.textContent = `${date} · ${print.status || 'COMPLETED'}${duration}${amount}`;
+          details.append(link, meta);
+          row.append(details);
+          spoolPrintsList.append(row);
+        });
+      }
+    }
+    if (kind === 'spool') {
+      // The list is the live inventory view while the local record is the
+      // editable mirror. Use the selected list row for the read-only current
+      // weight so the editor cannot show a stale calculated value.
+      const liveEntry = inventory.find(item => String(item.spool?.id) === String(id));
+      const liveSpool = liveEntry?.spool || record;
+      const liveRemaining = Number(liveSpool.remaining_weight ?? record.remaining_weight ?? 0);
+      currentWeightValue.textContent = formatWeight(liveRemaining);
+      const maximum = Number(liveSpool.initial_weight || record.initial_weight || record.filament?.weight || liveRemaining || 1);
+      const percent = Math.max(0, Math.min(100, liveRemaining / maximum * 100));
+      currentWeightFill.style.width = `${percent}%`;
+      currentWeightFill.parentElement.setAttribute('aria-valuenow', String(Math.round(percent)));
+    }
+    stockAdjustment.hidden = true;
+    stockValue.value = '';
+    createSpoolButton.onclick = () => createSpoolForFilament(record);
+    duplicateSpoolButton.onclick = () => duplicateSpool(record);
+    deleteSpoolButton.onclick = () => deleteSpool(record);
+    openFilamentButton.onclick = () => selectEditor('filament', record.filament_id);
+    adjustStockButton.onclick = () => {
+      stockAdjustment.hidden = !stockAdjustment.hidden;
+      if (!stockAdjustment.hidden) {
+        setStockMode('delta');
+        stockValue.focus();
+      }
+    };
+    stockApply.onclick = async () => {
+      const value = stockValue.value.trim();
+      if (!value) return;
+      stockApply.disabled = true;
+      editorState.textContent = 'Speichert …';
+      try {
+        const response = await fetch(`/inventory/local-spools/${id}/stock-adjustment`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: stockMode, value: value.replace(',', '.') }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Bestandskorrektur fehlgeschlagen.');
+        localSpools.set(String(id), result.spool);
+        const entry = inventory.find(item => String(item.spool?.id) === String(id));
+        if (entry) entry.spool = result.spool;
+        selectEditor('spool', id);
+        stockAdjustment.hidden = false;
+        setStockMode(stockMode);
+        render();
+      } catch (error) {
+        editorState.textContent = error.message || 'Bestandskorrektur fehlgeschlagen.';
+      } finally { stockApply.disabled = false; }
+    };
     editorKind.textContent = `${label} \u00b7 lokale Stammdaten`;
     editorTitle.textContent = kind === 'vendor' ? record.name : kind === 'spool' ? `#${record.id} \u00b7 ${record.filament?.name || 'Spule'}` : `${record.vendor_name || 'Unbekannt'} \u00b7 ${record.name}`;
     editorState.textContent = '';
-    editorPicture.style.background = color ? `#${localColor(color)}` : 'var(--bs-secondary-bg)';
-    editorPicture.textContent = color ? `#${localColor(color)}` : 'Bildplatzhalter';
-    editorPicture.setAttribute('aria-label', color ? `Farbe #${localColor(color)}` : 'Bildplatzhalter');
     editorFields.replaceChildren();
     const save = async (name, value) => {
       const response = await fetch(`/inventory/${endpoint}/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ [name]: value }) });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Speichern fehlgeschlagen.');
       records[kind].set(String(id), result[resultKey]);
+      if (kind === 'spool') {
+        const entry = inventory.find(item => String(item.spool?.id) === String(id));
+        if (entry) {
+          const liveValues = {
+            remaining_weight: entry.spool.remaining_weight,
+            used_weight: entry.spool.used_weight,
+          };
+          Object.assign(entry.spool, result[resultKey]);
+          Object.assign(entry.spool, liveValues);
+        }
+        render();
+      }
+      if (kind === 'filament' && Array.isArray(result.spools)) {
+        result.spools.forEach(spool => {
+          localSpools.set(String(spool.id), spool);
+          const entry = inventory.find(item => String(item.spool?.id) === String(spool.id));
+          if (entry) entry.spool = spool;
+        });
+      }
       return result;
     };
     const definitions = kind === 'vendor'
       ? [['name', 'Name', 'text']]
       : kind === 'spool'
-        ? [['filament_id', 'Filament', 'select', [...localFilaments.values()]], ['initial_weight', 'Startgewicht (g)', 'numeric'], ['spool_weight', 'Leergewicht (g)', 'numeric'], ['price', 'Preis (EUR)', 'numeric'], ['weight_correction', 'Bestandskorrektur (g)', 'numeric'], ['tag', 'NFC-Tag', 'text'], ['active_tray', 'Aktives Fach', 'text'], ['archived', 'Archiviert', 'checkbox']]
-        : [['name', 'Name', 'text'], ['vendor_id', 'Hersteller', 'select', [...localVendors.values()]], ['material_id', 'Material', 'select', materials], ['color_hex', 'Farbe', 'color'], ['weight', 'Gewicht (g)', 'numeric'], ['spool_weight', 'Leergewicht Spule (g)', 'numeric'], ['price', 'Preis (EUR)', 'numeric'], ['nozzle_temp', 'D\u00fcsentemperatur (\u00b0C)', 'numeric'], ['bed_temp', 'Bett-Temperatur (\u00b0C)', 'numeric'], ['extruder_temp', 'Extruder-Temperatur (\u00b0C)', 'numeric'], ['cali_idx', 'Kalibrierungsindex', 'numeric'], ['bambu_filament_id', 'Bambu Filament-ID', 'text'], ['bambu_setting_id', 'Bambu Setting-ID', 'text']];
+        ? [['filament_id', record.active_print_locked ? 'Filament (aktueller Druck)' : 'Filament', 'select', [...localFilaments.values()], Boolean(record.active_print_locked)], ['initial_weight', 'Gewicht (g)', 'numeric'], ['spool_weight', 'Leergewicht Spule (g)', 'numeric'], ['price', 'Preis (EUR)', 'numeric'], ['weight_correction', 'Bestandskorrektur (g)', 'numeric'], ['tag', 'NFC-Tag', 'text'], ['active_tray', 'Aktives Fach', 'text'], ['archived', 'Archiviert', 'checkbox']]
+        : [['name', 'Name', 'text'], ['vendor_id', 'Hersteller', 'select', [...localVendors.values()]], ['material_id', 'Material', 'select', materials], ['color_hex', 'Farbe', 'color'], ['diameter', 'Durchmesser (mm)', 'numeric'], ['weight', 'Gewicht (g)', 'numeric'], ['spool_weight', 'Leergewicht Spule (g)', 'numeric'], ['price', 'Preis (EUR)', 'numeric'], ['nozzle_temp', 'D\u00fcsentemperatur (\u00b0C)', 'numeric'], ['bed_temp', 'Bett-Temperatur (\u00b0C)', 'numeric'], ['extruder_temp', 'Extruder-Temperatur (\u00b0C)', 'numeric'], ['cali_idx', 'Kalibrierungsindex', 'numeric'], ['bambu_filament_id', 'Bambu Filament-ID', 'text'], ['bambu_setting_id', 'Bambu Setting-ID', 'text']];
     definitions.forEach(definition => editorFields.append(buildInput(definition, record, save)));
+    if (kind === 'spool') {
+      const filamentInput = editorFields.querySelector('select');
+      const filamentField = filamentInput?.parentElement;
+      if (filamentInput && filamentField) {
+        const control = make('div', 'inventory-filament-control');
+        filamentInput.replaceWith(control);
+        control.append(filamentInput, openFilamentButton);
+        openFilamentButton.hidden = false;
+      }
+      const correctionInput = editorFields.querySelector('[data-field-name="weight_correction"]');
+      const correctionField = correctionInput?.parentElement;
+      if (correctionInput && correctionField) {
+        correctionInput.readOnly = true;
+        correctionInput.disabled = true;
+        correctionInput.tabIndex = -1;
+        correctionInput.setAttribute('aria-readonly', 'true');
+        correctionInput.classList.add('inventory-readonly');
+        const control = make('div', 'inventory-correction-control');
+        correctionInput.replaceWith(control);
+        control.append(correctionInput, adjustStockButton);
+        adjustStockButton.hidden = false;
+        control.after(stockAdjustment);
+      }
+    }
+    if (spoolLocked) {
+      editorFields.querySelectorAll('input, select, textarea, button').forEach(field => { field.disabled = true; });
+      editorState.textContent = 'Spule ist in einem Druck gebunden und gesperrt.';
+    }
+  }
+
+  async function createSpoolForFilament(filament) {
+    createSpoolButton.disabled = true;
+    editorState.textContent = 'Legt an …';
+    try {
+      const response = await fetch('/inventory/local-spools', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filament_id: filament.id }) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Anlegen fehlgeschlagen.');
+      localSpools.set(String(result.spool.id), result.spool);
+      inventory.push({ spool: result.spool, last_used: null });
+      selectEditor('spool', result.spool.id);
+      render();
+    } catch (error) {
+      editorState.textContent = error.message || 'Anlegen fehlgeschlagen.';
+    } finally { createSpoolButton.disabled = false; }
+  }
+
+  async function duplicateSpool(spool) {
+    duplicateSpoolButton.disabled = true;
+    editorState.textContent = 'Dupliziert …';
+    try {
+      const response = await fetch(`/inventory/local-spools/${spool.id}/duplicate`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Duplizieren fehlgeschlagen.');
+      localSpools.set(String(result.spool.id), result.spool);
+      inventory.push({ spool: result.spool, last_used: null });
+      selectEditor('spool', result.spool.id);
+      render();
+    } catch (error) {
+      editorState.textContent = error.message || 'Duplizieren fehlgeschlagen.';
+    } finally { duplicateSpoolButton.disabled = false; }
+  }
+
+  async function deleteSpool(spool) {
+    if (spool.active_print_locked || !window.confirm(`Spule #${spool.id} wirklich löschen?`)) return;
+    deleteSpoolButton.disabled = true;
+    editorState.textContent = 'Löscht …';
+    try {
+      const response = await fetch(`/inventory/local-spools/${spool.id}`, { method: 'DELETE' });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Löschen fehlgeschlagen.');
+      localSpools.delete(String(spool.id));
+      const index = inventory.findIndex(item => String(item.spool?.id) === String(spool.id));
+      if (index >= 0) inventory.splice(index, 1);
+      selectedEditor = null;
+      editor.hidden = true;
+      render();
+    } catch (error) {
+      editorState.textContent = error.message || 'Löschen fehlgeschlagen.';
+      deleteSpoolButton.disabled = false;
+    }
   }
 
   function selectGroup(group) {
@@ -223,55 +577,112 @@ document.addEventListener('DOMContentLoaded', () => {
     return false;
   }
 
+  function renderSpoolRow(entry, mode) {
+    if (entry.localOnly) return make('div', 'inventory-spool-row text-muted', 'Keine Spule');
+    const button = make('button', 'inventory-spool-row');
+    button.type = 'button';
+    button.classList.add('inventory-selectable');
+    button.dataset.selectionKind = 'spool';
+    button.dataset.selectionId = String(entry.spool.id);
+    if (entry.spool.active_print_locked) {
+      button.classList.add('inventory-active-print');
+      button.title = 'Spule im aktuell laufenden Druck gebunden';
+    }
+    const filament = filamentOf(entry);
+    const material = materialOf(entry);
+    const vendor = vendorOf(entry);
+    const name = filament.name || 'Ohne Namen';
+    const diameter = filament.diameter ? `${formatDecimal(filament.diameter)} mm` : '';
+    const title = mode === 'vendor' || mode === 'filament' ? name : `${vendor} · ${name}`;
+    const meta = [material, diameter].filter(Boolean).join(' · ');
+    const left = make('span', `inventory-spool-left${mode === 'filament' ? ' inventory-spool-left-compact' : ''}`);
+    left.append(make('strong', '', `#${entry.spool.id}`));
+    if (mode === 'filament') {
+      left.append(make('small', '', relativeDate(entry.last_used)));
+    } else {
+      const color = make('span', 'inventory-spool-color');
+      color.style.backgroundColor = `#${localColor(filament.color_hex)}`;
+      left.append(color);
+      const copy = make('span', 'inventory-spool-copy');
+      copy.append(make('strong', '', title), make('small', '', `${meta}${meta ? ' · ' : ''}${relativeDate(entry.last_used)}`));
+      left.append(copy);
+    }
+    const maximum = Number(entry.spool.initial_weight || filament.weight || entry.spool.remaining_weight || 1);
+    const percent = Math.max(0, Math.min(100, Number(entry.spool.remaining_weight || 0) / maximum * 100));
+    const bar = make('span', 'inventory-spool-bar');
+    const fill = make('i');
+    fill.style.width = `${percent}%`;
+    bar.append(fill);
+    button.append(left, bar, make('span', 'inventory-spool-remaining', formatWeight(entry.spool.remaining_weight)));
+    if (selectedEditor?.kind === 'spool' && selectedEditor.id === String(entry.spool.id)) button.classList.add('is-selected');
+    button.addEventListener('click', () => selectEditor('spool', entry.spool.id));
+    return button;
+  }
+
   function render() {
     persistView();
     groupsNode.replaceChildren();
     const groups = groupEntries();
     if (!groups.length) { groupsNode.append(make('p', 'text-muted p-3', 'Keine Filamente gefunden.')); return; }
+    if (groupSelect.value === 'none') {
+      const list = make('div', 'inventory-spool-list inventory-flat-list');
+      groups.flatMap(group => group.entries).forEach(entry => list.append(renderSpoolRow(entry, 'none')));
+      groupsNode.append(list);
+      updateSelectionMarker();
+      return;
+    }
     groups.forEach(group => {
       const first = group.entries[0];
       const firstFilament = filamentOf(first);
-      const total = group.entries.reduce((sum, entry) => sum + Number(entry.spool.remaining_weight || 0), 0);
+      const spoolEntries = group.entries.filter(entry => !entry.localOnly);
+      const total = spoolEntries.reduce((sum, entry) => sum + Number(entry.spool.remaining_weight || 0), 0);
       const details = make('details', 'inventory-group');
-      details.open = true;
+      details.dataset.groupMode = groupSelect.value;
+      details.dataset.groupKey = group.key;
+      const rememberedOpen = savedState.openGroups?.[groupSelect.value]?.[group.key];
+      details.open = rememberedOpen === undefined ? true : Boolean(rememberedOpen);
       const summary = make('summary', 'inventory-group-summary');
+      summary.classList.add('inventory-selectable');
+      if (groupSelect.value === 'filament') {
+        summary.dataset.selectionKind = 'filament';
+        summary.dataset.selectionId = String(firstFilament.id);
+      } else if (groupSelect.value === 'vendor') {
+        const vendorId = vendorIdByName.get(vendorOf(first).toLocaleLowerCase());
+        summary.dataset.selectionKind = 'vendor';
+        summary.dataset.selectionId = String(vendorId || '');
+      }
       const color = make('span', 'inventory-group-color');
       color.style.backgroundColor = `#${localColor(firstFilament.color_hex)}`;
       const copy = make('span', 'inventory-group-copy');
       const name = make('strong', '', group.label);
-      const meta = make('span', 'inventory-group-meta', groupSelect.value === 'filament' || groupSelect.value === 'none' ? `${vendorOf(first)} \u00b7 ${materialOf(first)}` : (groupSelect.value === 'vendor' ? 'Herstellergruppe' : 'Materialgruppe'));
+      const meta = make('span', 'inventory-group-meta', groupSelect.value === 'filament' || groupSelect.value === 'none' ? materialOf(first) : (groupSelect.value === 'vendor' ? 'Herstellergruppe' : 'Materialgruppe'));
       copy.append(name, meta);
       const totalNode = make('span', 'inventory-group-total');
-      totalNode.append(make('strong', '', formatWeight(total)), make('small', '', `${group.entries.length} ${group.entries.length === 1 ? 'Spule' : 'Spulen'}`));
-      summary.append(color, copy, totalNode);
-      summary.addEventListener('click', event => { if (selectGroup(group)) { event.preventDefault(); details.open = true; } });
+      totalNode.append(make('strong', '', spoolEntries.length ? formatWeight(total) : 'Keine Spule'), make('small', '', `${spoolEntries.length} ${spoolEntries.length === 1 ? 'Spule' : 'Spulen'}`));
+      const disclosure = make('span', 'inventory-group-disclosure', '\u203a');
+      disclosure.setAttribute('aria-hidden', 'true');
+      summary.append(color, copy, totalNode, disclosure);
+      summary.addEventListener('click', event => {
+        if (event.target.closest('.inventory-group-disclosure')) return;
+        event.preventDefault();
+        selectGroup(group);
+      });
+      details.addEventListener('toggle', () => {
+        if (!savedState.openGroups || typeof savedState.openGroups !== 'object') savedState.openGroups = {};
+        if (!savedState.openGroups[groupSelect.value] || typeof savedState.openGroups[groupSelect.value] !== 'object') savedState.openGroups[groupSelect.value] = {};
+        savedState.openGroups[groupSelect.value][group.key] = details.open;
+        storeView();
+      });
       details.append(summary);
       const list = make('div', 'inventory-spool-list');
-      group.entries.forEach(entry => {
-        if (entry.localOnly) {
-          list.append(make('div', 'inventory-spool-row text-muted', 'Noch keiner Spule zugeordnet.'));
-          return;
-        }
-        const filament = filamentOf(entry);
-        const button = make('button', 'inventory-spool-row');
-        button.type = 'button';
-        const left = make('span', 'inventory-spool-left');
-        left.append(make('strong', '', `#${entry.spool.id}`), make('small', '', `${filamentNameOf(entry)} \u00b7 ${relativeDate(entry.last_used)}`));
-        const maximum = Number(entry.spool.initial_weight || filament.weight || entry.spool.remaining_weight || 1);
-        const percent = Math.max(0, Math.min(100, Number(entry.spool.remaining_weight || 0) / maximum * 100));
-        const bar = make('span', 'inventory-spool-bar');
-        const fill = make('i');
-        fill.style.width = `${percent}%`;
-        bar.append(fill);
-        button.append(left, bar, make('span', 'inventory-spool-remaining', formatWeight(entry.spool.remaining_weight)));
-        button.addEventListener('click', () => selectEditor('spool', entry.spool.id));
-        list.append(button);
-      });
+      group.entries.forEach(entry => list.append(renderSpoolRow(entry, groupSelect.value)));
       details.append(list);
       groupsNode.append(details);
     });
+    updateSelectionMarker();
   }
   [groupSelect, sortSelect].forEach(control => control.addEventListener('change', render));
+  showArchived.addEventListener('change', () => { savedState.showArchived = showArchived.checked; render(); });
   search.addEventListener('input', render);
   createFilamentButton.addEventListener('click', async () => {
     createFilamentButton.disabled = true;

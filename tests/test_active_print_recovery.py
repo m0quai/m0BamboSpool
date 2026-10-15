@@ -24,6 +24,7 @@ class ActivePrintRecoveryTests(unittest.TestCase):
         mqtt.PRINTER_STATE = {}
         mqtt.PRINTER_STATE_LAST = {}
         mqtt.PENDING_PRINT_METADATA = {}
+        mqtt.MQTT_ACTIVE_PRINT_RECOVERY_PENDING = False
         self.report = {
             "command": "push_status", "gcode_state": "RUNNING", "print_type": "idle",
             "subtask_name": "same-model",
@@ -63,6 +64,24 @@ class ActivePrintRecoveryTests(unittest.TestCase):
         self.assertEqual(history.get_latest_active_print_id(), active)
         self.assertEqual(history.get_layer_tracking_for_prints([active])[active]["status"], "RUNNING")
         mqtt.JOBS_3MF.enqueue.assert_called_once()
+
+    def test_reconnect_running_report_resumes_tracker_without_state_change(self):
+        active = self.add_print("RUNNING", "renamed-model")
+        mqtt.ACTIVE_3MF_PRINTS[f"print-{active}"] = {
+            "print_id": active,
+            "source": "same-model.gcode.3mf",
+            "print_metadata": {"print_id": active, "file": "same-model.gcode.3mf"},
+        }
+        mqtt.on_disconnect(None, None, 7)
+        mqtt.FILAMENT_TRACKER.print_id = active
+        mqtt.FILAMENT_TRACKER.active_model = None
+
+        mqtt.processMessage({"print": dict(self.report)})
+
+        mqtt.FILAMENT_TRACKER._attempt_print_resume.assert_called_once_with(
+            None, mqtt.PRINTER_STATE["print"]
+        )
+        self.assertFalse(mqtt.MQTT_ACTIVE_PRINT_RECOVERY_PENDING)
 
     def test_repeated_filename_creates_distinct_attempts_after_completion(self):
         mqtt.processMessage({"print": dict(self.report)})

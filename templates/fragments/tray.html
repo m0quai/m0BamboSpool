@@ -139,7 +139,7 @@
                 <div class="fw-bold">{{ _('Full') }}</div>
               {% else %}
                 <div class="me-sm-1">{{ _('Remaining:') }}</div>
-                <div class="fw-bold">{{ remaining_weight|round(1) }}g</div>
+                <div class="fw-bold">{{ format_number(remaining_weight, 1) }}g</div>
               {% endif %}
             </div>
           {% else %}

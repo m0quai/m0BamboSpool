@@ -67,6 +67,10 @@ from jobs_3mf import JOBS_3MF
 MQTT_CLIENT = {}  # Global variable storing MQTT Client
 MQTT_CLIENT_CONNECTED = False
 MQTT_KEEPALIVE = 60
+# Set after an unexpected MQTT disconnect.  The first printer report after the
+# following connection then explicitly validates and, if required, resumes the
+# active print tracker.  A normal status update must not trigger this path.
+MQTT_ACTIVE_PRINT_RECOVERY_PENDING = False
 LAST_AMS_CONFIG = {}  # Global variable storing last AMS configuration
 LAST_AMS_CONFIG_GENERATION = 0  # Incremented whenever fresh AMS data arrives from MQTT
 LAST_LOGGED_AMS_STATE = None
@@ -500,6 +504,45 @@ def _queue_3mf_job(print_data, *, resume=False):
   return job
 
 
+def _recover_active_print_after_mqtt_reconnect(print_data: dict) -> None:
+  # Bambu reports an already running print as RUNNING after reconnecting. Since
+  # the previous local state can also be RUNNING, do not rely on a state change.
+  global MQTT_ACTIVE_PRINT_RECOVERY_PENDING
+
+  if not MQTT_ACTIVE_PRINT_RECOVERY_PENDING:
+    return
+
+  state = str((print_data or {}).get("gcode_state") or "").upper()
+  if state not in {"PREPARE", "RUNNING", "PAUSE", "PAUSED"}:
+    MQTT_ACTIVE_PRINT_RECOVERY_PENDING = False
+    log(f"[MQTT] Reconnect-Recovery beendet: Druckerstatus {state or 'unbekannt'} ist nicht aktiv.")
+    return
+
+  source_available = any(
+    print_data.get(field) for field in ("subtask_name", "gcode_file", "url")
+  )
+  if not source_available:
+    log("[MQTT] Reconnect-Recovery wartet auf einen Druckerstatus mit Dateizuordnung.")
+    return
+
+  active_job = _active_3mf_job_for_source(print_data)
+  if not active_job:
+    active_job = _queue_3mf_job(print_data, resume=True)
+  if not active_job:
+    log("[MQTT] Reconnect-Recovery konnte keinen aktiven Druck zuordnen.")
+    return
+
+  print_id = active_job.get("print_id")
+  if FILAMENT_TRACKER.print_id != print_id or FILAMENT_TRACKER.active_model is None:
+    FILAMENT_TRACKER.begin_pending_print(active_job.get("print_metadata") or {})
+    FILAMENT_TRACKER._attempt_print_resume(print_data.get("url"), print_data)
+    log(f"[MQTT] Reconnect-Recovery für laufenden Druck {print_id} gestartet.")
+  else:
+    log(f"[MQTT] Reconnect-Recovery geprüft: Tracking für Druck {print_id} läuft weiter.")
+
+  MQTT_ACTIVE_PRINT_RECOVERY_PENDING = False
+
+
 def get_active_3mf_print_id():
   with _ACTIVE_3MF_PRINTS_LOCK:
     items = list(ACTIVE_3MF_PRINTS.items())
@@ -761,6 +804,8 @@ def processMessage(data):
       ).get("status") if active_job else None
       if tracking_status not in {"PREPARING", "RUNNING", "PAUSED"}:
         active_job = _queue_3mf_job(current_print, resume=True)
+
+    _recover_active_print_after_mqtt_reconnect(current_print)
 
     status_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     predicted_end_time = None
@@ -1778,7 +1823,7 @@ def on_connect(client, userdata, flags, rc):
   publish(client, PUSH_ALL)
 
 def on_disconnect(client, userdata, rc):
-  global MQTT_CLIENT_CONNECTED
+  global MQTT_CLIENT_CONNECTED, MQTT_ACTIVE_PRINT_RECOVERY_PENDING
   MQTT_CLIENT_CONNECTED = False
   disconnect_meanings = {
     0: "Normal disconnection",
@@ -1786,6 +1831,9 @@ def on_disconnect(client, userdata, rc):
   }
   meaning = disconnect_meanings.get(rc, mqtt.error_string(rc))
   log(f"Disconnected with result code {rc}: {meaning}")
+  if rc != 0:
+    MQTT_ACTIVE_PRINT_RECOVERY_PENDING = True
+    log("[MQTT] Unerwartete Unterbrechung erkannt; laufender Druck wird nach Reconnect geprüft.")
 
 def async_subscribe():
   global MQTT_CLIENT

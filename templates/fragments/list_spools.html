@@ -73,7 +73,7 @@
         </span>
         {{ spool.filament.material }} - {{ spool.filament.vendor.name }}</h6>
       <!-- Filament Name (Row 2) -->
-      <small class="text-muted">{{ spool.filament.name }} - {{ spool.remaining_weight|round(0)|int }} {{ _('g left') }}</small>
+      <small class="text-muted">{{ spool.filament.name }} - {{ format_number(spool.remaining_weight, 0) }} {{ _('g left') }}</small>
     </div>
 
   <div class="spool-actions d-flex flex-column flex-sm-row align-items-start align-items-sm-center gap-2 ms-sm-3">

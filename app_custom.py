@@ -225,7 +225,6 @@ from flask import jsonify, redirect, request, url_for, render_template, send_fro
 import mqtt_bambulab
 import inventory_repository as spool_data
 import inventory_database as inventory_db
-from filament_color_catalog import SUNLU_COLOR_OPTIONS
 from config import USE_SPOOLMAN
 import print_history as print_history_service
 from config import EXTERNAL_SPOOL_AMS_ID, PRINTER_ID, PRINTER_NAME
@@ -456,6 +455,17 @@ def _ui_language_metadata():
 def _ui_text(key):
     return _UI_TRANSLATIONS[_ui_language()].get(key, key)
 
+
+def _format_ui_number(value, digits=2):
+    """Format quantities according to the selected UI language."""
+    try:
+        formatted = f"{float(0 if value in (None, '') else value):,.{int(digits)}f}"
+    except (TypeError, ValueError):
+        return str(value or "0")
+    if _ui_language() == "de":
+        return formatted.replace(",", "\0").replace(".", ",").replace("\0", ".")
+    return formatted
+
 @app.context_processor
 def inject_ui_language():
     return {
@@ -464,6 +474,7 @@ def inject_ui_language():
         "available_languages": _ui_languages(),
         "language_metadata": _ui_language_metadata(),
         "format_datetime": lambda value: format_ui_datetime(value, _ui_language()),
+        "format_number": _format_ui_number,
     }
 
 @app.post("/language")
@@ -972,11 +983,16 @@ def inventory():
             inventory_db.ensure_local_spool_from_inventory(item["spool"])
         vendors = inventory_db.list_entities("vendors")
         materials = inventory_db.list_entities("materials")
+        colors = inventory_db.list_colors()
         filaments = inventory_db.list_filaments()
         local_spools = inventory_db.list_spools(include_archived=True)
+        active_spool_ids = {int(spool["id"]) for spool in local_spools if spool.get("active_print_locked")}
+        for item in inventory_rows:
+            if item["spool"].get("id") is not None:
+                item["spool"]["active_print_locked"] = int(item["spool"]["id"]) in active_spool_ids
     except Exception as exc:
         _log(f"Local inventory editor could not load: {exc}")
-        vendors, materials, filaments, local_spools = [], [], [], []
+        vendors, materials, colors, filaments, local_spools = [], [], [], [], []
     return render_template(
         "inventory.html",
         inventory_rows=inventory_rows,
@@ -988,7 +1004,7 @@ def inventory():
         inventory_materials=materials,
         inventory_filaments=filaments,
         inventory_spools=local_spools,
-        sunlu_color_options=SUNLU_COLOR_OPTIONS,
+        inventory_colors=colors,
     )
 
 
@@ -1003,7 +1019,9 @@ def update_local_filament(filament_id):
     except Exception as exc:
         _log(f"Local filament inline update failed ({filament_id}): {exc!r}")
         return jsonify({"error": "Speichern fehlgeschlagen."}), 500
-    return jsonify({"saved": True, "filament": updated})
+    related_spools = [spool for spool in inventory_db.list_spools(include_archived=True)
+                      if int(spool.get("filament_id") or 0) == int(filament_id)]
+    return jsonify({"saved": True, "filament": updated, "spools": related_spools})
 
 
 @app.post("/inventory/local-filaments")
@@ -1047,6 +1065,59 @@ def update_local_spool(spool_id):
     return jsonify({"saved": True, "spool": updated})
 
 
+@app.post("/inventory/local-spools/<int:spool_id>/stock-adjustment")
+def adjust_local_spool_stock(spool_id):
+    payload = request.get_json(silent=True) or {}
+    try:
+        updated = inventory_db.adjust_spool_stock(spool_id, payload.get("mode"), payload.get("value"))
+    except (KeyError, TypeError, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        _log(f"Local spool stock adjustment failed ({spool_id}): {exc!r}")
+        return jsonify({"error": "Bestandskorrektur fehlgeschlagen."}), 500
+    return jsonify({"saved": True, "spool": updated})
+
+
+@app.post("/inventory/local-spools")
+def create_local_spool():
+    payload = request.get_json(silent=True) or {}
+    try:
+        filament_id = int(payload.get("filament_id"))
+        spool_id = inventory_db.save_spool({"filament_id": filament_id, "archived": False})
+        created = inventory_db.get_spool(spool_id)
+    except (KeyError, TypeError, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        _log(f"Local spool create failed: {exc!r}")
+        return jsonify({"error": "Anlegen fehlgeschlagen."}), 500
+    return jsonify({"saved": True, "spool": created}), 201
+
+
+@app.post("/inventory/local-spools/<int:spool_id>/duplicate")
+def duplicate_local_spool(spool_id):
+    try:
+        new_id = inventory_db.duplicate_spool(spool_id)
+        created = inventory_db.get_spool(new_id)
+    except (KeyError, TypeError, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        _log(f"Local spool duplicate failed ({spool_id}): {exc!r}")
+        return jsonify({"error": "Duplizieren fehlgeschlagen."}), 500
+    return jsonify({"saved": True, "spool": created}), 201
+
+
+@app.delete("/inventory/local-spools/<int:spool_id>")
+def delete_local_spool(spool_id):
+    try:
+        inventory_db.delete_spool(spool_id)
+    except (KeyError, TypeError, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        _log(f"Local spool delete failed ({spool_id}): {exc!r}")
+        return jsonify({"error": "Löschen fehlgeschlagen."}), 500
+    return jsonify({"saved": True, "deleted": spool_id})
+
+
 @app.get("/inventory/management/<entity>")
 def inventory_management(entity):
     # Show one local inventory catalog in its own preview page.
@@ -1070,10 +1141,12 @@ def inventory_management(entity):
     management_materials = []
     management_filaments = []
     management_spools = []
+    management_colors = []
     try:
         spool_data.ensure_local_catalog()
         management_vendors = inventory_db.list_entities("vendors")
         management_materials = inventory_db.list_entities("materials")
+        management_colors = inventory_db.list_colors()
         management_filaments = inventory_db.list_filaments()
         management_spools = inventory_db.list_spools(include_archived=True)
         if entity == "spools":
@@ -1106,7 +1179,7 @@ def inventory_management(entity):
         management_materials=management_materials,
         management_filaments=management_filaments,
         management_spools=management_spools if entity == "filaments" else [],
-        sunlu_color_options=SUNLU_COLOR_OPTIONS,
+        inventory_colors=management_colors,
     )
 
 

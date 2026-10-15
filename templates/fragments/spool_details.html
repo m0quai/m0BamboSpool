@@ -27,8 +27,8 @@
     <!-- Filament Details -->
     <div class="row mb-2">
       <div class="col-6">
-        <p class="mb-1"><strong>{{ _('Remaining Weight:') }}</strong> {{ current_spool.remaining_weight|round(2) }}g</p>
-        <p class="mb-1"><strong>{{ _('Remaining Length:') }}</strong> {{ current_spool.remaining_length|round(0) }}mm</p>
+        <p class="mb-1"><strong>{{ _('Remaining Weight:') }}</strong> {{ format_number(current_spool.remaining_weight) }}g</p>
+        <p class="mb-1"><strong>{{ _('Remaining Length:') }}</strong> {{ format_number(current_spool.remaining_length, 0) }}mm</p>
       </div>
       <div class="col-6">
         <p class="mb-1"><strong>{{ _('Nozzle Temp:') }}</strong> {{ current_spool.filament.extra.nozzle_temperature }}</p>

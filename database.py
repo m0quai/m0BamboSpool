@@ -58,6 +58,7 @@ def connect_database(path: str | Path | None = None) -> sqlite3.Connection:
     target_path.parent.mkdir(parents=True, exist_ok=True)
     _migrate_legacy_database_file(target_path)
     connection = sqlite3.connect(str(target_path))
+    connection.execute("PRAGMA foreign_keys = ON")
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS runtime_metadata (

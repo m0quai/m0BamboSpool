@@ -62,13 +62,15 @@ def create_database() -> None:
         )
     ''')
 
+    tables = {row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if "spool_usage" not in tables and "filament_usage" in tables:
+        cursor.execute("ALTER TABLE filament_usage RENAME TO spool_usage")
+
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS filament_usage (
+        CREATE TABLE IF NOT EXISTS spool_usage (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             print_id INTEGER NOT NULL,
             spool_id INTEGER,
-            filament_type TEXT NOT NULL,
-            color TEXT NOT NULL,
             grams_used REAL NOT NULL,
             ams_slot INTEGER NOT NULL,
             estimated_grams REAL,
@@ -79,6 +81,27 @@ def create_database() -> None:
         FOREIGN KEY (print_id) REFERENCES prints (id) ON DELETE CASCADE
         )
     ''')
+    # Normalize the legacy name and remove descriptive copies that are
+    # derivable through spool_id -> spools -> filaments.
+    usage_columns = {row[1] for row in cursor.execute("PRAGMA table_info(spool_usage)")}
+    for legacy_column in ("filament_type", "color"):
+        if legacy_column in usage_columns:
+            cursor.execute(f"ALTER TABLE spool_usage DROP COLUMN {legacy_column}")
+    cursor.execute("CREATE INDEX IF NOT EXISTS ix_spool_usage_print ON spool_usage(print_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS ix_spool_usage_spool ON spool_usage(spool_id)")
+    has_spools_table = bool(cursor.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'spools'").fetchone())
+    if has_spools_table:
+        cursor.execute("DROP VIEW IF EXISTS v_spool_usage")
+        cursor.execute('''
+            CREATE VIEW v_spool_usage AS
+            SELECT u.*, f.name AS filament_name, m.name AS material_name,
+                   c.hex_code AS color_hex
+            FROM spool_usage u
+            LEFT JOIN spools s ON s.id = u.spool_id
+            LEFT JOIN filaments f ON f.id = s.filament_id
+            LEFT JOIN materials m ON m.id = f.material_id
+            LEFT JOIN colors c ON c.id = f.color_id
+        ''')
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS filament_usage_events (
@@ -112,20 +135,20 @@ def create_database() -> None:
 
     _ensure_column(
         cursor,
-        "filament_usage",
+        "spool_usage",
         "estimated_grams",
         "REAL",
     )
     _ensure_column(cursor, "prints", "file_name_source", "TEXT NOT NULL DEFAULT 'legacy'")
     _ensure_column(
         cursor,
-        "filament_usage",
+        "spool_usage",
         "length_used",
         "REAL",
     )
     _ensure_column(
         cursor,
-        "filament_usage",
+        "spool_usage",
         "estimated_length",
         "REAL",
     )
@@ -133,26 +156,26 @@ def create_database() -> None:
     # Events written by older versions already caused the corresponding Spoolman
     # charge, so they must never become retry candidates after migration.
     cursor.execute("UPDATE filament_usage_events SET status = 'confirmed' WHERE status IS NULL OR status NOT IN ('pending', 'sent', 'confirmed')")
-    _ensure_column(cursor, "filament_usage", "calculated_length", "REAL")
-    _ensure_column(cursor, "filament_usage", "spoolman_length_used", "REAL")
-    cursor.execute("UPDATE filament_usage SET calculated_length = length_used WHERE calculated_length IS NULL AND length_used IS NOT NULL")
+    _ensure_column(cursor, "spool_usage", "calculated_length", "REAL")
+    _ensure_column(cursor, "spool_usage", "spoolman_length_used", "REAL")
+    cursor.execute("UPDATE spool_usage SET calculated_length = length_used WHERE calculated_length IS NULL AND length_used IS NOT NULL")
     # Legacy completed/failed jobs already had their usage sent to Spoolman.
     # Backfill the confirmed total while leaving the currently running job open.
     cursor.execute(
-        """UPDATE filament_usage
+        """UPDATE spool_usage
            SET calculated_length = COALESCE(calculated_length, length_used, 0),
                spoolman_length_used = COALESCE(spoolman_length_used, length_used, 0)
            WHERE spoolman_length_used IS NULL
              AND print_id IN (
                SELECT f.print_id
-               FROM filament_usage f
+               FROM spool_usage f
                LEFT JOIN print_layer_tracking t ON t.print_id = f.print_id
                WHERE COALESCE(t.status, 'COMPLETED') <> 'RUNNING'
              )"""
     )
     _ensure_column(
         cursor,
-        "filament_usage",
+        "spool_usage",
         "physical_ams_slot",
         "INTEGER",
     )
@@ -185,6 +208,67 @@ def create_database() -> None:
     cursor.execute("PRAGMA table_info(print_layer_tracking)")
     if "printer_job_key" in {row[1] for row in cursor.fetchall()}:
         cursor.execute("ALTER TABLE print_layer_tracking DROP COLUMN printer_job_key")
+
+    # Enforce the cross-module spool references after the legacy tables have
+    # been migrated. SQLite requires a table rebuild to add these constraints.
+    spool_usage_fk = {row[3] for row in cursor.execute("PRAGMA foreign_key_list(spool_usage)")}
+    if has_spools_table and "spool_id" not in spool_usage_fk:
+        cursor.execute("DROP VIEW IF EXISTS v_spool_usage")
+        cursor.execute("""CREATE TABLE spool_usage_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            print_id INTEGER NOT NULL REFERENCES prints(id) ON DELETE CASCADE,
+            spool_id INTEGER REFERENCES spools(id) ON UPDATE CASCADE ON DELETE RESTRICT,
+            grams_used REAL NOT NULL,
+            ams_slot INTEGER NOT NULL,
+            estimated_grams REAL,
+            length_used REAL,
+            estimated_length REAL,
+            physical_ams_slot INTEGER,
+            calculated_length REAL,
+            spoolman_length_used REAL
+        )""")
+        cursor.execute("""INSERT INTO spool_usage_new
+            (id, print_id, spool_id, grams_used, ams_slot, estimated_grams,
+             length_used, estimated_length, physical_ams_slot, calculated_length,
+             spoolman_length_used)
+            SELECT id, print_id, spool_id, grams_used, ams_slot, estimated_grams,
+                   length_used, estimated_length, physical_ams_slot, calculated_length,
+                   spoolman_length_used
+            FROM spool_usage""")
+        cursor.execute("DROP TABLE spool_usage")
+        cursor.execute("ALTER TABLE spool_usage_new RENAME TO spool_usage")
+        cursor.execute("CREATE INDEX IF NOT EXISTS ix_spool_usage_print ON spool_usage(print_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS ix_spool_usage_spool ON spool_usage(spool_id)")
+        cursor.execute('''
+            CREATE VIEW v_spool_usage AS
+            SELECT u.*, f.name AS filament_name, m.name AS material_name,
+                   c.hex_code AS color_hex
+            FROM spool_usage u
+            LEFT JOIN spools s ON s.id = u.spool_id
+            LEFT JOIN filaments f ON f.id = s.filament_id
+            LEFT JOIN materials m ON m.id = f.material_id
+            LEFT JOIN colors c ON c.id = f.color_id
+        ''')
+
+    event_spool_fk = {row[3] for row in cursor.execute("PRAGMA foreign_key_list(filament_usage_events)")}
+    if has_spools_table and "spool_id" not in event_spool_fk:
+        cursor.execute("""CREATE TABLE filament_usage_events_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            print_id INTEGER NOT NULL REFERENCES prints(id) ON DELETE CASCADE,
+            layer INTEGER NOT NULL,
+            filament_index INTEGER NOT NULL,
+            spool_id INTEGER NOT NULL REFERENCES spools(id) ON UPDATE CASCADE ON DELETE RESTRICT,
+            length_used REAL NOT NULL,
+            created_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'confirmed' CHECK (status IN ('pending', 'sent', 'confirmed')),
+            UNIQUE (print_id, layer, filament_index)
+        )""")
+        cursor.execute("""INSERT INTO filament_usage_events_new
+            (id, print_id, layer, filament_index, spool_id, length_used, created_at, status)
+            SELECT id, print_id, layer, filament_index, spool_id, length_used, created_at, status
+            FROM filament_usage_events""")
+        cursor.execute("DROP TABLE filament_usage_events")
+        cursor.execute("ALTER TABLE filament_usage_events_new RENAME TO filament_usage_events")
 
     conn.commit()
     conn.close()
@@ -412,7 +496,7 @@ def get_filament_usage_for_reconciliation(print_id: int) -> list[dict]:
         """SELECT id, ams_slot, spool_id, grams_used, estimated_grams,
                          length_used, estimated_length, calculated_length,
                          spoolman_length_used
-             FROM filament_usage
+             FROM spool_usage
              WHERE print_id = ?
              ORDER BY ams_slot""",
         (int(print_id),),
@@ -532,7 +616,7 @@ def mark_print_reconciled(
     conn.execute("PRAGMA foreign_keys = ON")
     for update in usage_updates:
         conn.execute(
-            """UPDATE filament_usage
+            """UPDATE spool_usage
                SET grams_used = ?, length_used = ?, calculated_length = ?,
                    spoolman_length_used = ?
                WHERE id = ?""",
@@ -549,7 +633,7 @@ def mark_print_reconciled(
            SET status = 'COMPLETED',
                layers_printed = COALESCE(total_layers, layers_printed),
                filament_grams_billed = COALESCE(
-                   (SELECT SUM(grams_used) FROM filament_usage WHERE print_id = ?),
+                   (SELECT SUM(grams_used) FROM spool_usage WHERE print_id = ?),
                    filament_grams_billed
                ),
                estimated_duration_minutes = COALESCE(
@@ -610,10 +694,8 @@ def insert_filament_usage(
     # tray before the 3MF is ready.  Enrich that row instead of inserting a
     # duplicate once the real metadata has been parsed.
     cursor.execute(
-        """UPDATE filament_usage
-           SET filament_type = ?,
-               color = ?,
-               grams_used = MAX(COALESCE(grams_used, 0), ?),
+        """UPDATE spool_usage
+           SET grams_used = MAX(COALESCE(grams_used, 0), ?),
                estimated_grams = COALESCE(?, estimated_grams),
                length_used = MAX(COALESCE(length_used, 0), ?),
                estimated_length = COALESCE(?, estimated_length),
@@ -621,8 +703,6 @@ def insert_filament_usage(
                physical_ams_slot = COALESCE(?, physical_ams_slot)
            WHERE print_id = ? AND ams_slot = ?""",
         (
-            filament_type,
-            color,
             grams_used,
             estimated_grams,
             length_used,
@@ -635,9 +715,9 @@ def insert_filament_usage(
     )
     if cursor.rowcount == 0:
         cursor.execute('''
-            INSERT INTO filament_usage (print_id, filament_type, color, grams_used, ams_slot, estimated_grams, length_used, estimated_length, calculated_length, physical_ams_slot)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (print_id, filament_type, color, grams_used, ams_slot, estimated_grams, length_used, estimated_length, length_used, physical_ams_slot))
+            INSERT INTO spool_usage (print_id, grams_used, ams_slot, estimated_grams, length_used, estimated_length, calculated_length, physical_ams_slot)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (print_id, grams_used, ams_slot, estimated_grams, length_used, estimated_length, length_used, physical_ams_slot))
     conn.commit()
     conn.close()
 
@@ -647,7 +727,7 @@ def update_filament_spool(print_id: int, filament_id: int, spool_id: int) -> Non
     conn = connect_database(db_config["db_path"])
     cursor = conn.cursor()
     cursor.execute('''
-        UPDATE filament_usage
+        UPDATE spool_usage
         SET spool_id = ?
         WHERE ams_slot = ? AND print_id = ?
     ''', (spool_id, filament_id, print_id))
@@ -659,7 +739,7 @@ def bind_filament_usage_spool(print_id: int, filament_id: int, spool_id: int, ph
     # recorded for an earlier physical spool.
     conn = connect_database(db_config["db_path"])
     conn.execute(
-        """UPDATE filament_usage
+        """UPDATE spool_usage
            SET spool_id = ?, physical_ams_slot = COALESCE(?, physical_ams_slot)
            WHERE print_id = ? AND ams_slot = ?
              AND COALESCE(grams_used, 0) = 0
@@ -684,7 +764,7 @@ def record_filament_usage_segment(
     conn = connect_database(db_config["db_path"])
     cursor = conn.cursor()
     cursor.execute(
-        """SELECT id FROM filament_usage
+        """SELECT id FROM spool_usage
            WHERE print_id = ? AND ams_slot = ? AND spool_id = ?
              AND physical_ams_slot IS ?
            ORDER BY id LIMIT 1""",
@@ -693,7 +773,7 @@ def record_filament_usage_segment(
     row = cursor.fetchone()
     if row:
         cursor.execute(
-            """UPDATE filament_usage
+            """UPDATE spool_usage
                SET grams_used = COALESCE(grams_used, 0) + ?,
                    length_used = COALESCE(length_used, 0) + ?,
                    calculated_length = COALESCE(calculated_length, 0) + ?,
@@ -703,13 +783,13 @@ def record_filament_usage_segment(
         )
     else:
         cursor.execute(
-            """INSERT INTO filament_usage
-               (print_id, spool_id, filament_type, color, grams_used, ams_slot,
+            """INSERT INTO spool_usage
+               (print_id, spool_id, grams_used, ams_slot,
                 estimated_grams, length_used, estimated_length, physical_ams_slot,
                 calculated_length, spoolman_length_used)
-               VALUES (?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, ?)""",
-            (int(print_id), int(spool_id), filament_type, color, float(grams_used),
-             int(filament_id), float(length_used), physical_ams_slot,
+               VALUES (?, ?, ?, ?, NULL, ?, NULL, ?, ?, ?)""",
+            (int(print_id), int(spool_id), float(grams_used), int(filament_id),
+             float(length_used), physical_ams_slot,
              float(length_used), float(length_used)),
         )
     conn.commit()
@@ -719,7 +799,7 @@ def update_filament_physical_slot(print_id: int, filament_id: int, physical_ams_
     # Persist the physical AMS tray for a logical filament channel.
     conn = connect_database(db_config["db_path"])
     conn.execute(
-        "UPDATE filament_usage SET physical_ams_slot = ? WHERE ams_slot = ? AND print_id = ?",
+        "UPDATE spool_usage SET physical_ams_slot = ? WHERE ams_slot = ? AND print_id = ?",
         (physical_ams_slot, filament_id, print_id),
     )
     conn.commit()
@@ -797,7 +877,7 @@ def update_filament_grams_used(print_id: int, filament_id: int, grams_used: floa
     conn = connect_database(db_config["db_path"])
     cursor = conn.cursor()
     cursor.execute(f'''
-        UPDATE filament_usage
+        UPDATE spool_usage
         SET {set_clause}
         WHERE ams_slot = ? AND print_id = ?
     ''', params)
@@ -826,8 +906,8 @@ def get_prints_with_filament(limit: int | None = None, offset: int | None = None
        (
            SELECT json_group_array(json_object(
                'spool_id', f.spool_id,
-                'filament_type', f.filament_type,
-                'color', f.color,
+                'filament_type', f.material_name,
+                'color', f.color_hex,
                 'grams_used', f.grams_used,
                 'estimated_grams', f.estimated_grams,
                 'length_used', f.length_used,
@@ -836,7 +916,7 @@ def get_prints_with_filament(limit: int | None = None, offset: int | None = None
                 'spoolman_length_used', f.spoolman_length_used,
                 'ams_slot', f.ams_slot,
                 'physical_ams_slot', f.physical_ams_slot
-            )) FROM filament_usage f WHERE f.print_id = p.id
+            )) FROM v_spool_usage f WHERE f.print_id = p.id
         ) AS filament_info
         FROM prints p
     ''' + where_clause + '''
@@ -884,7 +964,7 @@ def get_prints_by_spool(spool_id: int):
     cursor = conn.cursor()
     cursor.execute('''
         SELECT DISTINCT p.* FROM prints p
-        JOIN filament_usage f ON p.id = f.print_id
+        JOIN spool_usage f ON p.id = f.print_id
         WHERE f.spool_id = ?
     ''', (spool_id,))
     prints = [dict(row) for row in cursor.fetchall()]
@@ -907,7 +987,7 @@ def get_spool_print_usage(spool_id: int) -> list[dict]:
                     THEN ROUND((julianday(t.actual_end_time) - julianday(p.print_date)) * 1440.0)
                   END AS duration_minutes
            FROM prints p
-           JOIN filament_usage f ON f.print_id = p.id
+           JOIN spool_usage f ON f.print_id = p.id
            LEFT JOIN print_layer_tracking t ON t.print_id = p.id
            WHERE f.spool_id = ?
            ORDER BY p.print_date DESC, p.id DESC""",
@@ -922,7 +1002,7 @@ def get_filament_for_slot(print_id: int, ams_slot: int):
   cursor = conn.cursor()
 
   cursor.execute('''
-      SELECT * FROM filament_usage
+      SELECT * FROM v_spool_usage
       WHERE print_id = ? AND ams_slot = ?
   ''', (print_id, ams_slot))
 
@@ -1025,7 +1105,7 @@ def get_all_filament_usage_for_print(print_id: int):
   cursor.execute('''
       SELECT ams_slot, SUM(COALESCE(grams_used, 0)) AS grams_used,
              SUM(COALESCE(length_used, 0)) AS length_used
-      FROM filament_usage
+      FROM spool_usage
       WHERE print_id = ?
       GROUP BY ams_slot
   ''', (print_id,))
