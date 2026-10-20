@@ -93,6 +93,58 @@ def get_filament_order(file):
     return filament_order
 
 
+def is_valid_gcode_content(gcode: str | bytes | None) -> bool:
+    # A filename or an empty archive member is not sufficient proof of a usable G-code.
+    if isinstance(gcode, bytes):
+        gcode = gcode.decode("utf-8", errors="replace")
+    if not isinstance(gcode, str) or not gcode.strip():
+        return False
+    return bool(re.search(r"(?m)^\s*[GM]\d+(?:\s|$)", gcode))
+
+
+def validate_local_3mf_package(path: str, metadata: dict | None = None) -> tuple[bool, str]:
+    # Validate every required print asset before accepting a downloaded 3MF.
+    metadata = metadata or {}
+    required_metadata = ("file", "model_path", "plateID", "gcode_path")
+    missing_metadata = [key for key in required_metadata if not metadata.get(key)]
+    if missing_metadata:
+        return False, f"Metadaten fehlen: {', '.join(missing_metadata)}"
+    if not isinstance(metadata.get("filaments"), dict) or not metadata["filaments"]:
+        return False, "Filamentmetadaten fehlen"
+
+    try:
+        with zipfile.ZipFile(path, "r") as archive:
+            invalid_member = archive.testzip()
+            if invalid_member:
+                return False, f"Prüfsummenfehler in {invalid_member}"
+
+            gcode_path = metadata["gcode_path"]
+            plate_id = metadata["plateID"]
+            required_members = {
+                "Metadata/slice_info.config",
+                "Metadata/model_settings.config",
+                gcode_path,
+                f"Metadata/plate_{plate_id}.png",
+            }
+            missing_members = sorted(required_members.difference(archive.namelist()))
+            if missing_members:
+                return False, f"Pflichtbestandteile fehlen: {', '.join(missing_members)}"
+            if archive.getinfo(gcode_path).file_size <= 0:
+                return False, "eingebetteter G-Code ist leer"
+            with archive.open(gcode_path) as gcode_file:
+                gcode = gcode_file.read()
+            if not is_valid_gcode_content(gcode):
+                return False, "eingebetteter G-Code enthält keine G-/M-Befehle"
+    except (OSError, zipfile.BadZipFile, KeyError) as exc:
+        return False, f"3MF-Archiv ist ungültig: {exc}"
+    return True, ""
+
+
+def validate_local_3mf_gcode(path: str, metadata: dict | None = None) -> tuple[bool, str]:
+    # Keep the explicit G-code validator as the single strict package gate.
+    return validate_local_3mf_package(path, metadata)
+
+
 def get_model_object_names(archive) -> list[str]:
     # The object name is the user-renamed model name in Bambu Studio.
     def normalize(value: str) -> str:

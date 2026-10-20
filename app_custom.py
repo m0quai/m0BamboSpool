@@ -827,6 +827,7 @@ def _current_printer_status_payload():
         "mqtt_status": _ui_text("Verbunden" if connected else "Nicht verbunden"),
         "printer_state": print_state.get("gcode_state") or "OFFLINE",
         "printer_status": _ui_text(_printer_status_code()),
+        "printer_preparation_status": _ui_text(_printer_preparation_status_code() or ""),
         "print_id": active_print_id,
         "last_print": last_print,
         "temperatures": _printer_temperature_status(),
@@ -888,6 +889,82 @@ def _printer_temperature_waiting_code():
     return None
 
 
+_PRINT_PREPARATION_STAGE_CODES = {
+    1: "Auto bed leveling",
+    2: "Preheating heatbed",
+    3: "Vibration compensation",
+    4: "Changing filament",
+    7: "Heating hotend",
+    8: "Calibrating extrusion",
+    9: "Scanning bed surface",
+    10: "Inspecting first layer",
+    11: "Identifying build plate",
+    12: "Calibrating micro lidar",
+    13: "Homing toolhead",
+    14: "Cleaning nozzle tip",
+    15: "Checking extruder temperature",
+    19: "Calibrating extrusion flow",
+    22: "Unloading filament",
+    24: "Loading filament",
+    25: "Calibrating motor noise",
+    29: "Cooling chamber",
+    31: "Motor noise calibration",
+    36: "Checking absolute accuracy",
+    37: "Absolute accuracy calibration",
+    38: "Checking absolute accuracy",
+    39: "Calibrating nozzle offset",
+    40: "Bed leveling (high temperature)",
+    41: "Checking quick release",
+    42: "Checking door and cover",
+    43: "Laser calibration",
+    44: "Checking platform",
+    45: "Checking camera position",
+    46: "Calibrating camera",
+    47: "Bed leveling phase 1",
+    48: "Bed leveling phase 2",
+    49: "Heating chamber",
+    50: "Cooling heatbed",
+    51: "Printing calibration lines",
+    52: "Checking material",
+    53: "Live view camera calibration",
+    54: "Waiting for heatbed temperature",
+    55: "Checking material position",
+    56: "Cutting module offset calibration",
+    57: "Measuring surface",
+    58: "Thermal preconditioning",
+    59: "Homing blade holder",
+    60: "Calibrating camera offset",
+    61: "Calibrating blade holder",
+    62: "Hotend pick and place test",
+    63: "Waiting for chamber temperature",
+    64: "Preparing hotend",
+    65: "Calibrating nozzle clump detection",
+    66: "Purifying chamber air",
+    77: "Preparing AMS",
+}
+
+
+def _printer_preparation_status_code():
+    print_state = getattr(mqtt_bambulab, "PRINTER_STATE", {}).get("print", {}) or {}
+    state = str(print_state.get("gcode_state") or "").upper()
+    if state not in {"PREPARE", "RUNNING", "PAUSE"}:
+        return None
+
+    temperature_waiting_code = _printer_temperature_waiting_code()
+    if temperature_waiting_code:
+        return temperature_waiting_code
+
+    try:
+        stage = int(print_state.get("stg_cur"))
+    except (TypeError, ValueError):
+        stage = None
+    if stage in _PRINT_PREPARATION_STAGE_CODES:
+        return _PRINT_PREPARATION_STAGE_CODES[stage]
+    if state == "PREPARE":
+        return "Preparing printer"
+    return None
+
+
 def _ams_environment_status():
     metrics = []
     for index, ams in enumerate((getattr(mqtt_bambulab, "LAST_AMS_CONFIG", {}) or {}).get("ams", []) or []):
@@ -941,6 +1018,7 @@ def inject_m0bambospool_version():
         "printer_ams_environment": _ams_environment_status(),
         "printer_status": _ui_text(_printer_status_code()),
         "printer_waiting_message": _ui_text(_printer_temperature_waiting_code() or ""),
+        "printer_preparation_status": _ui_text(_printer_preparation_status_code() or ""),
         "mqtt_connected": mqtt_bambulab.isMqttClientConnected(),
         "PRINTER_ID": PRINTER_ID,
         "printer_is_busy": _printer_is_busy(),
@@ -1391,6 +1469,7 @@ def ams_state_generation():
         "printer_state": print_state.get("gcode_state") or "OFFLINE",
         "printer_status": _ui_text(_printer_status_code()),
         "printer_waiting_message": _ui_text(_printer_temperature_waiting_code() or ""),
+        "printer_preparation_status": _ui_text(_printer_preparation_status_code() or ""),
         "print_id": active_print_id,
         "download": {
             key: value for key, value in JOBS_3MF.get().items()

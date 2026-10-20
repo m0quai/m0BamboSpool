@@ -251,6 +251,7 @@ def _metadata_is_usable(metadata):
     and metadata.get("file") is not None
     and metadata.get("image") is not None
     and isinstance(metadata.get("filaments"), dict)
+    and metadata.get("gcode_valid") is True
   )
 
 
@@ -460,6 +461,10 @@ def _on_3mf_job_complete(transfer_key, local_path, metadata, error):
     return
   if error:
     log(f"[3MF] Transfer {transfer_key} fehlgeschlagen: {error}")
+    return
+
+  if not (metadata or {}).get("gcode_valid"):
+    log(f"[3MF] Transfer {transfer_key} ohne validierten G-Code verworfen.")
     return
 
   parsed_metadata = dict(metadata or {})
@@ -684,7 +689,11 @@ def get_ready_3mf_for_print(print_id):
   with _ACTIVE_3MF_PRINTS_LOCK:
     job = dict(ACTIVE_3MF_PRINTS.get(transfer_key) or {})
   metadata = job.get("ready_metadata")
-  if not isinstance(metadata, dict) or int(metadata.get("print_id") or -1) != int(print_id):
+  if (
+    not isinstance(metadata, dict)
+    or metadata.get("gcode_valid") is not True
+    or int(metadata.get("print_id") or -1) != int(print_id)
+  ):
     return None
   return {"metadata": dict(metadata), "local_path": status["local_path"]}
 
@@ -912,9 +921,13 @@ def processMessage(data):
     ):
       terminal_percent = None
     if active_job:
+      try:
+        observed_layer = max(0, int(current_print.get("layer_num") or 0))
+      except (TypeError, ValueError):
+        observed_layer = None
       update_printer_job_status(
         active_job["print_id"], percent=terminal_percent, status_at=status_at,
-        predicted_end_time=predicted_end_time,
+        predicted_end_time=predicted_end_time, layers_printed=observed_layer,
       )
       state = current_state
       if incoming_print.get("command") == "project_file" and incoming_print.get("gcode_state") is None:

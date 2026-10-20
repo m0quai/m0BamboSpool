@@ -15,8 +15,8 @@ from config import EXTERNAL_SPOOL_AMS_ID, EXTERNAL_SPOOL_ID, TRACK_LAYER_USAGE
 from inventory_repository import record_consumption
 from inventory_service import fetchSpools, getAMSFromTray, trayUid
 import inventory_database
-from tools_3mf import available_thumbnail_filename, download3mfFromCloud, download3mfFromFTP, download3mfFromLocalFilesystem, getMetaDataFrom3mf, getMetaDataFromLocal3mf, get_source_file_name
-from print_history import bind_filament_usage_spool, record_filament_usage_segment, claim_filament_usage_event, set_filament_usage_event_status, finalize_filament_usage_events, get_all_filament_usage_for_print, update_layer_tracking, update_print_image, update_print_file_name, get_print_image, get_latest_running_print_id, find_latest_print_id, printer_state_to_history_status
+from tools_3mf import available_thumbnail_filename, download3mfFromCloud, download3mfFromFTP, download3mfFromLocalFilesystem, getMetaDataFrom3mf, getMetaDataFromLocal3mf, get_source_file_name, is_valid_gcode_content, validate_local_3mf_gcode
+from print_history import bind_filament_usage_spool, record_filament_usage_segment, claim_filament_usage_event, set_filament_usage_event_status, finalize_filament_usage_events, get_all_filament_usage_for_print, get_layer_tracking_for_prints, update_layer_tracking, update_print_image, update_print_file_name, get_print_image, get_latest_running_print_id, find_latest_print_id, printer_state_to_history_status
 
 GCODE_STATE_LABELS = {
     "IDLE": "Drucker bereit",
@@ -361,6 +361,7 @@ class FilamentUsageTracker:
     self._layer_tracking_status = None
     self._layer_tracking_start_time = None
     self._pending_usage_mm = {}
+    self._pending_observed_layer = None
     self._mc_remaining_time_minutes = None
     self._last_logged_gcode_state = None
   def set_print_metadata(self, metadata: dict | None) -> None:
@@ -393,6 +394,7 @@ class FilamentUsageTracker:
       self.ams_mapping = metadata.get("ams_mapping") or None
       self.using_ams = bool(self.ams_mapping and self.ams_mapping[0] != EXTERNAL_SPOOL_ID)
       self.current_layer = None
+      self._pending_observed_layer = None
       self.spent_layers = set()
       self.cumulative_grams_used = {}
       self.cumulative_length_used = {}
@@ -434,10 +436,22 @@ class FilamentUsageTracker:
       self._apply_current_ams_tray(print_obj)
       if "layer_num" in print_obj:
         last_layer = self.current_layer
-        layer = print_obj["layer_num"]
-        if layer != last_layer:
-          self._handle_layer_change(layer)
-          self.current_layer = layer
+        try:
+          layer = max(0, int(print_obj["layer_num"]))
+        except (TypeError, ValueError):
+          layer = None
+        if layer is not None:
+          if self.active_model is None and self.print_id is not None:
+            previous_pending_layer = self._pending_observed_layer
+            self._pending_observed_layer = max(previous_pending_layer or 0, layer)
+            if previous_pending_layer != self._pending_observed_layer:
+              log(
+                f"[filament-tracker] Verbrauch zwischengespeichert: "
+                f"Print {self.print_id}, beobachtete Schicht {self._pending_observed_layer}"
+              )
+          if layer != last_layer:
+            self._handle_layer_change(layer)
+            self.current_layer = layer
 
     if self.gcode_state == "FINISH" and previous_state != "FINISH" and self.active_model is not None:
       self._handle_print_end()
@@ -491,6 +505,7 @@ class FilamentUsageTracker:
       use_ams=use_ams,
       ams_mapping=ams_mapping,
       resume_layer=print_obj.get("_resume_layer"),
+      defer_initial_spending=bool(print_obj.get("_defer_initial_spending")),
     )
     metadata = _get_checkpoint_metadata()
     metadata["model_url"] = model_url
@@ -505,6 +520,7 @@ class FilamentUsageTracker:
       use_ams: bool,
       ams_mapping: list[int] | None,
       resume_layer=None,
+      defer_initial_spending: bool = False,
   ) -> None:
     self._reset_layer_tracking_state()
     clear_checkpoint()
@@ -559,7 +575,8 @@ class FilamentUsageTracker:
     except OSError:
       pass
 
-    self._handle_layer_change(0)
+    if not defer_initial_spending:
+      self._handle_layer_change(0)
 
   def start_local_print_from_metadata(self, metadata: dict | None, local_model_path: str | None = None) -> None:
     if not metadata:
@@ -598,6 +615,9 @@ class FilamentUsageTracker:
   ) -> None:
     if not metadata or not local_model_path or self.active_model is not None:
       return
+    if metadata.get("gcode_valid") is not True:
+      log("[filament-tracker] Nicht validierte 3MF wird nicht für das Tracking verwendet")
+      return
     current_print = dict(print_obj or {})
     current_print["local_model_path"] = local_model_path
     current_print["url"] = current_print.get("url") or metadata.get("model_url") or metadata.get("file")
@@ -605,27 +625,42 @@ class FilamentUsageTracker:
     current_print["param"] = current_print.get("param") or metadata.get("gcode_path")
     current_print["ams_mapping"] = metadata.get("ams_mapping") or []
     current_print["use_ams"] = bool(current_print["ams_mapping"])
-    try:
-      current_print["_resume_layer"] = max(0, int(current_print.get("layer_num") or 0))
-    except (TypeError, ValueError):
-      current_print["_resume_layer"] = 0
+    current_print["_defer_initial_spending"] = True
     self.set_print_metadata(metadata)
     self._handle_print_start(current_print)
     if self.active_model is None:
       return
+    self._book_buffered_layers_after_verified_download(current_print)
 
+  def _book_buffered_layers_after_verified_download(self, print_obj: dict) -> None:
+    # MQTT continues to report the printer layer while the 3MF is retried. The
+    # durable layer high-water mark is the consumption buffer; only now, after
+    # a verified model is available, may those layers be booked to a spool.
     try:
-      current_layer = max(0, int(current_print.get("layer_num") or 0))
+      current_layer = max(0, int(print_obj.get("layer_num") or 0))
     except (TypeError, ValueError):
       current_layer = 0
-    self.spent_layers.update(range(current_layer + 1))
-    self.current_layer = current_layer
-    update_checkpoint_layer(current_layer)
+    buffered_layer = max(self._pending_observed_layer or 0, current_layer)
+    if self.print_id is not None:
+      tracking = get_layer_tracking_for_prints([self.print_id]).get(self.print_id, {})
+      try:
+        buffered_layer = max(buffered_layer, int(tracking.get("layers_printed") or 0))
+      except (TypeError, ValueError):
+        pass
+      for slot, usage in get_all_filament_usage_for_print(self.print_id).items():
+        self.cumulative_grams_used[slot] = usage.get("grams_used") or 0.0
+        self.cumulative_length_used[slot] = usage.get("length_used") or 0.0
+
+    self.current_layer = None
+    for layer in range(buffered_layer + 1):
+      self._handle_layer_change(layer)
+      self.current_layer = layer
+    self._pending_observed_layer = None
+    update_checkpoint_layer(buffered_layer)
     self._update_layer_tracking_progress()
     log(
-      f"[filament-tracker] Tracking nach 3MF-Download fortgesetzt: "
-      f"print_id={self.print_id}, current_layer={current_layer}; "
-      "bereits gedruckte Layer werden nicht doppelt verbucht"
+      f"[filament-tracker] Zwischengespeicherter Verbrauch nach validierter 3MF gebucht: "
+      f"print_id={self.print_id}, schichten=0..{buffered_layer}"
     )
 
   def apply_ams_mapping(self, ams_mapping: list[int] | None) -> None:
@@ -662,7 +697,17 @@ class FilamentUsageTracker:
         else:
           log(f"[filament-tracker] Downloading model via FTP: {model_url}")
           download3mfFromFTP(model_url.rpartition('/')[-1], model_file) # Pull just filename to clear out any unexpected paths
-        return model_file.name
+        model_path = model_file.name
+      metadata = getMetaDataFromLocal3mf(model_path, model_url)
+      is_valid_gcode, validation_error = validate_local_3mf_gcode(model_path, metadata)
+      if not is_valid_gcode:
+        log(f"[filament-tracker] Heruntergeladene 3MF verworfen: {validation_error}")
+        try:
+          os.remove(model_path)
+        except OSError:
+          pass
+        return None
+      return model_path
     except Exception as exc:
       log(f"Failed to fetch model: {exc}")
       return None
@@ -1068,8 +1113,8 @@ class FilamentUsageTracker:
 
   def _load_model(self, model_path: str, gcode_file: str | None) -> None:
     gcode = extract_gcode_from_3mf(model_path, gcode_file)
-    if gcode is None:
-      log("Failed to extract gcode from model")
+    if not is_valid_gcode_content(gcode):
+      log("[filament-tracker] Modell verworfen: G-Code fehlt oder ist ungültig")
       return
     self.active_model = evaluate_gcode(gcode)
 
@@ -1174,6 +1219,12 @@ class FilamentUsageTracker:
           f"{worker_status.get('transfer_id')} ({job_state})"
         )
         return
+      if job_state in {"error", "cancelled"}:
+        log(
+          f"[filament-tracker] Zentraler 3MF-Transfer ist {job_state}; "
+          "kein unbestätigter Ersatz-G-Code wird verwendet"
+        )
+        return
       if job_state == "ready" and worker_status.get("local_path"):
         try:
           import mqtt_bambulab
@@ -1185,6 +1236,8 @@ class FilamentUsageTracker:
             return
         except Exception as worker_error:
           log(f"[filament-tracker] Caches 3MF konnte nicht aktiviert werden: {worker_error!r}")
+        log("[filament-tracker] Bereiter 3MF-Transfer ohne validiertes Ergebnis wird nicht ersetzt")
+        return
     except Exception as worker_error:
       log(f"[filament-tracker] 3MF-Workerstatus nicht verfügbar: {worker_error}")
     if self.print_id is None:

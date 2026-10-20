@@ -17,6 +17,9 @@ import tools_3mf
 from logger import log
 
 
+_VALID_GCODE_DOWNLOAD_ATTEMPTS = 3
+
+
 class Job3MFManager:
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -160,11 +163,15 @@ class Job3MFManager:
                 log(f"[3MF] Worker gestartet: job={transfer_id}, source={source!r}")
                 metadata = None
                 remote_path = None
-                for attempt in range(1, 3):
+                for attempt in range(1, _VALID_GCODE_DOWNLOAD_ATTEMPTS + 1):
                     download_started = time.monotonic()
                     with tempfile.NamedTemporaryFile(suffix=".3mf", delete=False) as temp_file:
                         local_path = temp_file.name
                         self._update(transfer_id, state="downloading", local_path=local_path, percent=0)
+                        log(
+                            f"[3MF] G-Code-Transfer mit neuem Handle: job={transfer_id}, "
+                            f"versuch={attempt}/{_VALID_GCODE_DOWNLOAD_ATTEMPTS}"
+                        )
                         remote_path = self._download(source, temp_file, transfer_id, cancel_event)
 
                     if cancel_event.is_set():
@@ -173,7 +180,7 @@ class Job3MFManager:
                     download_seconds = time.monotonic() - download_started
                     download_bytes = os.path.getsize(local_path)
                     log(
-                        f"[3MF] Download abgeschlossen: job={transfer_id}, versuch={attempt}/2, "
+                        f"[3MF] Download abgeschlossen: job={transfer_id}, versuch={attempt}/{_VALID_GCODE_DOWNLOAD_ATTEMPTS}, "
                         f"pfad={remote_path or source!r}, bytes={download_bytes}, "
                         f"dauer={download_seconds:.2f}s"
                     )
@@ -181,17 +188,29 @@ class Job3MFManager:
                     parse_started = time.monotonic()
                     metadata = tools_3mf.getMetaDataFromLocal3mf(local_path, remote_path or source)
                     if not metadata:
-                        raise RuntimeError("3MF-Metadaten konnten nicht gelesen werden")
-                    if not metadata.get("gcode_present", False):
-                        if attempt < 2:
-                            log(f"[3MF] Kein eingebetteter G-Code; Transfer wird mit neuem Handle wiederholt (job={transfer_id}, versuch={attempt}/2)")
+                        is_valid_package = False
+                        validation_error = "3MF-Metadaten konnten nicht vollständig gelesen werden"
+                    else:
+                        is_valid_package, validation_error = tools_3mf.validate_local_3mf_package(
+                            local_path, metadata
+                        )
+                    if not is_valid_package:
+                        if attempt < _VALID_GCODE_DOWNLOAD_ATTEMPTS:
+                            log(
+                                f"[3MF] Unvollständige oder ungültige 3MF ({validation_error}); Transfer wird mit "
+                                f"neuem Handle wiederholt (job={transfer_id}, "
+                                f"versuch={attempt}/{_VALID_GCODE_DOWNLOAD_ATTEMPTS})"
+                            )
                             try:
                                 os.unlink(local_path)
                             except OSError:
                                 pass
                             local_path = None
                             continue
-                        raise RuntimeError("3MF enthält keinen eingebetteten G-Code")
+                        raise RuntimeError(
+                            f"3MF ist nicht vollständig oder enthält keinen gültigen G-Code: {validation_error}"
+                        )
+                    metadata["gcode_valid"] = True
                     parse_seconds = time.monotonic() - parse_started
                     log(
                         f"[3MF] Verarbeitung abgeschlossen: job={transfer_id}, "

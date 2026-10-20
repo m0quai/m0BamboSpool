@@ -571,6 +571,7 @@ def update_printer_job_status(
     print_id: int,
     *,
     percent: float | None = None,
+    layers_printed: int | None = None,
     status_at: str | None = None,
     predicted_end_time: str | None = None,
 ) -> None:
@@ -581,6 +582,9 @@ def update_printer_job_status(
     if percent is not None:
         fields.append("printer_percent = ?")
         values.append(max(0.0, min(100.0, float(percent))))
+    if layers_printed is not None:
+        fields.append("layers_printed = MAX(COALESCE(layers_printed, 0), ?)")
+        values.append(max(0, int(layers_printed)))
     if status_at:
         fields.append("last_status_at = ?")
         values.append(status_at)
