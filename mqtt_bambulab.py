@@ -60,8 +60,7 @@ from print_history import (
   update_latest_printer_job_status,
   get_layer_tracking_for_prints,
   printer_state_to_history_status,
-  update_filament_spool,
-  update_filament_physical_slot,
+  bind_filament_usage_spool,
   claim_filament_usage_event,
   set_filament_usage_event_status,
 )
@@ -441,10 +440,15 @@ def _ensure_provisional_filament_usage(job, print_data):
       estimated_length=None,
       physical_ams_slot=physical_slot,
     )
-  if spool and spool.get("id") is not None:
-    update_filament_spool(job["print_id"], 1, int(spool["id"]))
-  if physical_slot is not None:
-    update_filament_physical_slot(job["print_id"], 1, physical_slot)
+    if spool and spool.get("id") is not None:
+      # A provisional row may be bound only while it has no recorded usage.
+      # Parsed 3MF usage must keep its own spool and physical AMS tray.
+      bind_filament_usage_spool(
+        job["print_id"],
+        1,
+        int(spool["id"]),
+        physical_slot,
+      )
 
   metadata = job.setdefault("print_metadata", {})
   metadata["ams_mapping"] = [mapping_value]

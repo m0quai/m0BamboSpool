@@ -361,6 +361,7 @@ class FilamentUsageTracker:
     self._layer_tracking_status = None
     self._layer_tracking_start_time = None
     self._pending_usage_mm = {}
+    self._observed_ams_tray = None
     self._pending_observed_layer = None
     self._mc_remaining_time_minutes = None
     self._last_logged_gcode_state = None
@@ -394,6 +395,7 @@ class FilamentUsageTracker:
       self.ams_mapping = metadata.get("ams_mapping") or None
       self.using_ams = bool(self.ams_mapping and self.ams_mapping[0] != EXTERNAL_SPOOL_ID)
       self.current_layer = None
+      self._observed_ams_tray = None
       self._pending_observed_layer = None
       self.spent_layers = set()
       self.cumulative_grams_used = {}
@@ -828,6 +830,26 @@ class FilamentUsageTracker:
       self._pending_usage_mm[filament] = self._pending_usage_mm.get(filament, 0.0) + total_mm
       return False
 
+    # A 3MF can schedule several filament changes within one printer layer.
+    # The slicer's plan is not proof that the AMS has already performed that
+    # change.  Book AMS material only after MQTT confirms the active tray.
+    if self.using_ams:
+      observed_tray = self._observed_ams_tray
+      if observed_tray is None:
+        self._pending_usage_mm[filament] = self._pending_usage_mm.get(filament, 0.0) + total_mm
+        log(
+          f"[filament-tracker] Verbrauch für Filament {filament} wartet auf "
+          "eine bestätigte AMS-Fachmeldung"
+        )
+        return False
+      if mapping_value != observed_tray:
+        self._pending_usage_mm[filament] = self._pending_usage_mm.get(filament, 0.0) + total_mm
+        log(
+          f"[filament-tracker] Verbrauch für Filament {filament} zurückgestellt: "
+          f"3MF-Fach={mapping_value}, Drucker-Fach={observed_tray}"
+        )
+        return False
+
     tray_uid = self._tray_uid_from_mapping(mapping_value)
     if tray_uid is None:
       self._pending_usage_mm[filament] = self._pending_usage_mm.get(filament, 0.0) + total_mm
@@ -914,6 +936,7 @@ class FilamentUsageTracker:
     self._layer_tracking_status = None
     self._layer_tracking_start_time = None
     self._pending_usage_mm = {}
+    self._observed_ams_tray = None
     self._mc_remaining_time_minutes = None
     self.cumulative_length_used = {}
     self.cumulative_grams_used = {}
@@ -1144,7 +1167,12 @@ class FilamentUsageTracker:
       return
 
     mapping = list(self.ams_mapping or [])
+    previous_observed_tray = self._observed_ams_tray
+    self._observed_ams_tray = tray
     if tray in mapping:
+      if previous_observed_tray != tray:
+        log(f"[filament-tracker] Drucker bestätigt aktives AMS-Fach {tray}")
+      self._flush_all_pending_usage()
       return
 
     layer = print_obj.get("layer_num", self.current_layer)
