@@ -306,11 +306,17 @@
       }
       if (topbarPrintProgressIcon) topbarPrintProgressIcon.className = 'bi bi-layers';
       const items = [];
-      const percent = print.printer_percent != null
-        ? Math.round(Number(print.printer_percent))
-        : (print.total_layers ? Math.round(Number(print.layers_printed || 0) * 100 / Number(print.total_layers)) : null);
+      const printerPercent = Number(print.printer_percent);
+      const layersPrinted = Number(print.layers_printed);
+      const totalLayers = Number(print.total_layers);
+      const percent = Number.isFinite(printerPercent)
+        ? Math.round(printerPercent)
+        : (Number.isFinite(totalLayers) && totalLayers > 0 && Number.isFinite(layersPrinted)
+          ? Math.round(layersPrinted * 100 / totalLayers) : null);
       if (Number.isFinite(percent)) items.push(`${percent}%`);
-      if (print.total_layers) items.push(`${topbarLabels.layer} ${print.layers_printed || 0} / ${print.total_layers}`);
+      if (Number.isFinite(totalLayers) && totalLayers > 0 && Number.isFinite(layersPrinted)) {
+        items.push(`${topbarLabels.layer} ${layersPrinted} / ${totalLayers}`);
+      }
       const end = formatTopbarTime(print.predicted_end_time);
       if (end) items.push(`${topbarLabels.end} ${end}`);
       const remaining = formatTopbarRemaining(print.predicted_end_time);

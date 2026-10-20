@@ -31,6 +31,7 @@ from inventory_service import (
   trayUid,
 )
 from inventory_repository import record_consumption
+import inventory_database
 from tools_3mf import getMetaDataFrom3mf, delete3mfFromFTP
 import time
 import threading
@@ -43,11 +44,13 @@ from print_history import (
   abort_active_prints_for_new_printer_job,
   update_print_file_name,
   insert_filament_usage,
+  normalize_usage_slots,
   ensure_layer_tracking,
   update_print_image,
   update_layer_tracking,
   find_open_print_for_printer_source,
   find_active_print_for_printer_source,
+  find_recent_aborted_print,
   find_previous_metadata_print_name,
   get_filament_usage_for_reconciliation,
   mark_print_reconciled,
@@ -274,6 +277,40 @@ def _active_3mf_job_for_source(print_data):
   return None
 
 
+def _recent_aborted_3mf_job_for_source(print_data, cooldown_seconds: int = 120):
+  """Find a just-aborted attempt still replayed by Bambu as project_file."""
+  candidates = {
+    str(value or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
+    for value in (
+      print_data.get("subtask_name"),
+      print_data.get("gcode_file"),
+      print_data.get("url"),
+    ) if value
+  }
+  now = datetime.now()
+  with _ACTIVE_3MF_PRINTS_LOCK:
+    jobs = list(ACTIVE_3MF_PRINTS.values())
+  for job in reversed(jobs):
+    source = str(job.get("source") or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if not source or source not in candidates:
+      continue
+    tracking = get_layer_tracking_for_prints([job["print_id"]]).get(job["print_id"], {})
+    if tracking.get("status") != "ABORTED":
+      continue
+    ended = tracking.get("actual_end_time")
+    try:
+      age = (now - datetime.strptime(str(ended), "%Y-%m-%d %H:%M:%S")).total_seconds()
+    except (TypeError, ValueError):
+      continue
+    if 0 <= age < cooldown_seconds:
+      return job
+  file_name = next(iter(candidates), "")
+  persisted = find_recent_aborted_print(file_name, cooldown_seconds)
+  if persisted:
+    return persisted
+  return None
+
+
 def _active_tray_mapping(print_data):
   mapping = print_data.get("ams_mapping") or []
   for value in mapping:
@@ -292,6 +329,72 @@ def _active_tray_mapping(print_data):
     except (TypeError, ValueError):
       pass
   return EXTERNAL_SPOOL_ID
+
+
+def _metadata_filament_entries(metadata: dict) -> dict[int, dict]:
+  """Return 3MF filaments keyed by their zero-based G-code index."""
+  entries = {}
+  for raw_id, filament in (metadata.get("filaments") or {}).items():
+    try:
+      studio_id = int(raw_id)
+      gcode_index = int((filament or {}).get("gcode_index", studio_id - 1))
+    except (TypeError, ValueError):
+      continue
+    entries[gcode_index] = filament or {}
+  return entries
+
+
+def _normalize_3mf_ams_mapping(metadata: dict) -> None:
+  """Map zero-based M620 indices to physical AMS trays by RFID/color."""
+  def _color_key(value):
+    value = str(value or "").replace("#", "").strip().lower()
+    if len(value) >= 8:
+      value = value[:6]
+    return value
+
+  entries = _metadata_filament_entries(metadata)
+  if not entries:
+    return
+  logical_ids = sorted(entries)
+  mapping = [None] * (max(logical_ids) + 1)
+  ams_trays = []
+  for ams in (LAST_AMS_CONFIG.get("ams") or []):
+    try:
+      ams_id = int(ams.get("id") or 0)
+    except (TypeError, ValueError):
+      ams_id = 0
+    for tray in (ams.get("tray") or []):
+      try:
+        tray_id = int(tray.get("id"))
+      except (TypeError, ValueError):
+        continue
+      ams_trays.append((ams_id * 4 + tray_id, tray))
+  for logical_id, filament in entries.items():
+    wanted_rfid = str(filament.get("tray_info_idx") or "").strip().lower()
+    wanted_color = _color_key(filament.get("color_hex") or filament.get("color"))
+    color_matches = []
+    rfid_matches = []
+    for tray_value, tray in ams_trays:
+      tray_rfid = str(tray.get("tray_info_idx") or "").strip().lower()
+      tray_color = _color_key(tray.get("tray_color"))
+      if wanted_rfid and tray_rfid and wanted_rfid == tray_rfid:
+        rfid_matches.append(tray_value)
+      if wanted_color and tray_color and wanted_color == tray_color:
+        color_matches.append(tray_value)
+    # A shared Bambu profile/RFID is common for generic filament.  The exact
+    # live color therefore takes precedence whenever it identifies one tray.
+    if len(set(color_matches)) == 1:
+      mapping[logical_id] = color_matches[0]
+    elif len(set(rfid_matches)) == 1:
+      mapping[logical_id] = rfid_matches[0]
+  order = metadata.get("filamentOrder") or {}
+  first_id = min(logical_ids, key=lambda key: order.get(str(key), order.get(key, key)))
+  live_tray = _active_tray_mapping(PRINTER_STATE.get("print", {}) or {})
+  if mapping[first_id] is None and isinstance(live_tray, int) and 0 <= live_tray < 16:
+    mapping[first_id] = live_tray
+  metadata["ams_mapping"] = mapping
+  metadata["use_ams"] = any(value is not None for value in mapping)
+  log(f"[3MF] AMS-Mapping normalisiert: G-Code-Filamente={logical_ids}, zuerst={first_id}, Mapping={mapping}")
 
 
 def _spool_for_mapping(mapping_value):
@@ -362,6 +465,7 @@ def _on_3mf_job_complete(transfer_key, local_path, metadata, error):
   parsed_metadata = dict(metadata or {})
   metadata = dict(job.get("print_metadata") or {})
   metadata.update(parsed_metadata)
+  _normalize_3mf_ams_mapping(metadata)
   metadata["print_id"] = job["print_id"]
   remote_3mf_path = metadata.get("_remote_3mf_path")
   if remote_3mf_path:
@@ -396,14 +500,17 @@ def _on_3mf_job_complete(transfer_key, local_path, metadata, error):
     update_print_file_name(job["print_id"], display_name)
 
   # Create/enrich usage rows before the tracker binds physical spools.
-  for filament_id, filament in (metadata.get("filaments") or {}).items():
+  filament_entries = _metadata_filament_entries(metadata)
+  filament_ids = sorted(filament_entries)
+  normalize_usage_slots(job["print_id"], filament_ids, metadata.get("ams_mapping") or [])
+  for filament_id, filament in filament_entries.items():
     parsed_grams = _parse_grams(filament.get("used_g"))
     parsed_length_m = _parse_grams(filament.get("used_m"))
     estimated_length_mm = parsed_length_m * 1000 if parsed_length_m is not None else None
     mapping = metadata.get("ams_mapping") or []
     physical_slot = None
     try:
-      mapped_slot = int(mapping[int(filament_id) - 1])
+      mapped_slot = int(mapping[int(filament_id)])
       if mapped_slot != EXTERNAL_SPOOL_ID and 0 <= mapped_slot < 16:
         physical_slot = mapped_slot
     except (IndexError, TypeError, ValueError):
@@ -416,6 +523,7 @@ def _on_3mf_job_complete(transfer_key, local_path, metadata, error):
       estimated_length=estimated_length_mm,
       physical_ams_slot=physical_slot,
     )
+  normalize_usage_slots(job["print_id"], filament_ids, metadata.get("ams_mapping") or [])
 
   current_state = str((PRINTER_STATE.get("print") or {}).get("gcode_state") or "").upper()
   if current_state in {"FINISH", "FAILED", "STOP", "IDLE"}:
@@ -450,6 +558,19 @@ def _queue_3mf_job(print_data, *, resume=False):
       print_data["_metadata_job_queued"] = True
       _ensure_provisional_filament_usage(existing_source_job, print_data)
       return existing_source_job
+
+  # After STOP/FAILED the printer replays the old project_file packet. Do not
+  # turn that replay into a phantom new print attempt. A new RUNNING packet or
+  # a later retry outside the cooldown can create the next history row.
+  if not resume and str(print_data.get("gcode_state") or "").upper() != "RUNNING":
+    recent_abort = _recent_aborted_3mf_job_for_source(print_data)
+    if recent_abort:
+      print_data["_metadata_job_queued"] = True
+      log(
+        f"[History] Wiederholtes project_file nach Abbruch ignoriert: "
+        f"Print {recent_abort['print_id']} bleibt der letzte Versuch."
+      )
+      return recent_abort
 
   file_name = print_data.get("subtask_name") or print_data.get("gcode_file") or print_data.get("url") or "unbekannte-3mf"
   recovered = find_active_print_for_printer_source(
@@ -594,67 +715,26 @@ def _reconcile_completed_printer_job(print_data: dict) -> None:
       # the printer changes state, so logging this guard would flood the log.
       return
     print_id = int(candidate["id"])
+    # Without a printer-derived completion timestamp, this recovery cannot
+    # safely reconstruct per-filament consumption. Never bill unobserved 3MF
+    # geometry to whichever spool happens to be active at FINISH.
+    completion_time = candidate.get("predicted_end_time")
+    if not completion_time:
+      log(
+        f"[filament-tracker] Abschluss-Recovery ausgelassen: Print {print_id} "
+        "hat keine errechnete Endzeit; Verbrauch bleibt beobachtungsbasiert"
+      )
+      return
     usage_rows = get_filament_usage_for_reconciliation(print_id)
     updates = []
     for row in usage_rows:
-      expected_length = row.get("estimated_length")
-      if expected_length is None:
-        expected_length = row.get("length_used") or row.get("spoolman_length_used") or 0.0
-      expected_length = max(float(expected_length or 0.0), 0.0)
-      current_length = row.get("spoolman_length_used")
-      if current_length is None:
-        current_length = row.get("calculated_length") or row.get("length_used") or 0.0
-      current_length = max(float(current_length or 0.0), 0.0)
-      missing_length = max(expected_length - current_length, 0.0)
-      if missing_length > 0.01:
-        spool_id = row.get("spool_id")
-        if spool_id is None:
-          log(
-            f"[filament-tracker] Abschluss-Recovery wartet: Print {print_id}, "
-            f"Fach {row.get('ams_slot')} ohne Spool-Zuordnung"
-          )
-          return
-        recovery_layer = -1
-        recovery_index = int(row["id"])
-        event_status = claim_filament_usage_event(
-          print_id, recovery_layer, recovery_index, int(spool_id), missing_length
-        )
-        if event_status in {"sent", "confirmed"}:
-          continue
-        set_filament_usage_event_status(print_id, recovery_layer, recovery_index, "sent")
-        try:
-          record_consumption(
-            int(spool_id),
-            length_mm=missing_length,
-            occurred_at=candidate.get("predicted_end_time"),
-          )
-          set_filament_usage_event_status(print_id, recovery_layer, recovery_index, "confirmed")
-        except Exception as exc:
-          log(
-            f"[filament-tracker] Abschluss-Recovery fehlgeschlagen: Print {print_id}, "
-            f"Spool {spool_id}, {missing_length:.2f}mm, Fehler={exc!r}"
-          )
-          return
-        log(
-          f"[filament-tracker] Abschluss-Recovery gebucht: Print {print_id}, "
-          f"Spool {spool_id}, Differenz={missing_length:.2f}mm"
-        )
-
-      expected_grams = row.get("estimated_grams")
       current_grams = float(row.get("grams_used") or 0.0)
-      final_grams = float(expected_grams) if expected_grams is not None else current_grams
-      updates.append({"id": row["id"], "grams_used": final_grams, "length_used": expected_length})
+      current_length = float(row.get("length_used") or 0.0)
+      updates.append({"id": row["id"], "grams_used": current_grams, "length_used": current_length})
 
     # The MQTT packet arrival time is not the printer's completion time. Prefer
     # the calculated end time captured from mc_remaining_time; only use the
     # receipt time when no calculated end time exists at all.
-    completion_time = candidate.get("predicted_end_time")
-    if not completion_time:
-      log(
-        f"[filament-tracker] Abschluss-Recovery wartet: Print {print_id} "
-        "hat keine errechnete Endzeit; Empfangszeit wird nicht verwendet"
-      )
-      return
     mark_print_reconciled(print_id, updates, completion_time)
     remote_path = candidate.get("remote_3mf_path")
     if remote_path:
@@ -731,6 +811,7 @@ def map_filament(tray_tar):
 
     if filament_assigned is not None:
       mapping = PENDING_PRINT_METADATA.setdefault("ams_mapping", [])
+      # Preserve the original Bambu filament ID used by the G-code evaluator.
       filament_idx = int(filament_assigned)
       while len(mapping) <= filament_idx:
         mapping.append(None)
@@ -928,6 +1009,7 @@ def processMessage(data):
             FILAMENT_TRACKER.start_local_print_from_metadata(PENDING_PRINT_METADATA)
 
             for id, filament in PENDING_PRINT_METADATA["filaments"].items():
+              gcode_index = int(filament.get("gcode_index", int(id) - 1))
               parsed_grams = _parse_grams(filament.get("used_g"))
               parsed_length_m = _parse_grams(filament.get("used_m"))
               estimated_length_mm = parsed_length_m * 1000 if parsed_length_m is not None else None
@@ -941,7 +1023,7 @@ def processMessage(data):
                   filament["type"],
                   filament["color"],
                   grams_used,
-                  id,
+                  gcode_index,
                   estimated_grams=parsed_grams,
                   length_used=length_used,
                   estimated_length=estimated_length_mm,
@@ -1394,6 +1476,38 @@ def _merge_ams_status(incoming_ams):
   )
   return merged_ams
 
+
+def _sync_local_active_trays_from_ams(ams_data, spool_list) -> None:
+  # The AMS page is the source for tray assignments.  Snapshot its resolved
+  # assignments into the local catalog so print tracking never has to infer a
+  # spool from color, RFID, or the SpoolMan mirror.
+  spool_by_tray = {}
+  for spool in spool_list or []:
+    active_tray = (spool.get("extra") or {}).get("active_tray")
+    try:
+      active_tray = json.loads(active_tray) if active_tray else ""
+    except (TypeError, ValueError):
+      pass
+    if active_tray and spool.get("id") is not None:
+      spool_by_tray[str(active_tray)] = int(spool["id"])
+
+  assignments = {}
+  for ams in ams_data or []:
+    for tray in ams.get("tray") or []:
+      if tray.get("ams_empty") or tray.get("unmapped_bambu_tag"):
+        continue
+      tray_uid = trayUid(ams.get("id"), tray.get("id"))
+      spool_id = spool_by_tray.get(tray_uid)
+      if spool_id is not None:
+        assignments[spool_id] = tray_uid
+
+  result = inventory_database.sync_active_trays(assignments)
+  if result["changed"]:
+    log(
+      "[AMS] Lokale Fachzuordnungen synchronisiert: "
+      f"{result['assigned']} zugeordnet, {result['cleared']} entfernt"
+    )
+
 # Inspired by https://github.com/Donkie/Spoolman/issues/217#issuecomment-2303022970
 def on_message(client, userdata, msg):
   global LAST_AMS_CONFIG, LAST_AMS_CONFIG_GENERATION, LAST_LOGGED_AMS_STATE, FORCE_AMS_STATUS_LOG, PRINTER_STATE, PRINTER_STATE_LAST, PENDING_PRINT_METADATA, PRINTER_MODEL, PENDING_EXTERNAL_OPERATION, PENDING_PA_PROFILE_COMMANDS
@@ -1772,6 +1886,8 @@ def on_message(client, userdata, msg):
               log(
                   f"    - [{num2letter(ams['id'])}{int(tray['id']) + 1}]")
               log("      - Fach leer" if tray.get("ams_empty") else "      - Keine Spule")
+
+      _sync_local_active_trays_from_ams(LAST_AMS_CONFIG["ams"], spool_list)
 
       # Keep the external spool in the normal status output, after A1-A4.
       external_active_tray = json.dumps(f"{PRINTER_ID}_{EXTERNAL_SPOOL_AMS_ID}_{EXTERNAL_SPOOL_ID}")

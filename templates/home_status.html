@@ -1,71 +1,70 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="home-page">
-  <div class="row justify-content-center g-3" id="printer-status-page">
-    <div class="col-12">
-      <div class="card shadow-sm home-dashboard-card">
-        <div class="card-header">
-          <h2 class="h5 mb-0" id="home-printer-name">{{ PRINTER_NAME or PRINTER_MODEL.get('devicename') or PRINTER_MODEL.get('model') or PRINTER_ID }}</h2>
-        </div>
-        <div class="card-body">
-          <dl class="row mb-0">
-            <dt class="col-sm-5 fw-normal">{{ _('MQTT') }}</dt>
-            <dd class="col-sm-7" id="home-mqtt-status">{{ _('Verbunden') if mqtt_connected|default(false) else _('Nicht verbunden') }}</dd>
-            <dt class="col-sm-5 fw-normal">{{ _('Druckerstatus') }}</dt>
-            <dd class="col-sm-7" id="home-printer-status">{{ printer_status }}</dd>
-            <dt class="col-sm-5 fw-normal">{{ _('Humidity') }}</dt>
-            <dd class="col-sm-7" id="home-humidity">
-              {% if printer_ams_environment %}
-                {{ printer_ams_environment[0].humidity or '–' }}
-              {% else %}–{% endif %}
-            </dd>
-            <dt class="col-sm-5 fw-normal">{{ _('Temperature') }}</dt>
-            <dd class="col-sm-7" id="home-ams-temperature">
-              {% if printer_ams_environment %}
-                {{ printer_ams_environment[0].temperature or '–' }}°C
-              {% else %}–{% endif %}
-            </dd>
-            <dt class="col-sm-5 fw-normal">{{ _('Hotend') }}</dt>
-            <dd class="col-sm-7" id="home-hotend">{% if printer_temperatures.hotend is not none %}{{ printer_temperatures.hotend|round|int }}°C{% else %}–{% endif %}{% if printer_temperatures.hotend_target is not none %} / {{ printer_temperatures.hotend_target|round|int }}°C{% endif %}</dd>
-            <dt class="col-sm-5 fw-normal">{{ _('Bed') }}</dt>
-            <dd class="col-sm-7" id="home-bed">{% if printer_temperatures.bed is not none %}{{ printer_temperatures.bed|round|int }}°C{% else %}–{% endif %}{% if printer_temperatures.bed_target is not none %} / {{ printer_temperatures.bed_target|round|int }}°C{% endif %}</dd>
-          </dl>
-          <div class="border-top mt-3 pt-3" id="home-last-print"{% if not last_print %} hidden{% endif %}>
-            <div class="fw-semibold">{{ _('Last print') }}</div>
-            <dl class="row mb-0 mt-2">
-              <dt class="col-sm-5 fw-normal">{{ _('Print ID') }}</dt>
-              <dd class="col-sm-7 mb-1"><a id="home-last-print-link" href="{% if last_print %}{{ url_for('print_history', print_id=last_print.id, _anchor='print_' ~ last_print.id) }}{% else %}#{% endif %}">{% if last_print %}#{{ last_print.id }}{% else %}–{% endif %}</a></dd>
-              <dt class="col-sm-5 fw-normal">{{ _('Status') }}</dt>
-              <dd class="col-sm-7 mb-1" id="home-last-print-status">{% if last_print %}{{ _({'COMPLETED':'Finished','ABORTED':'Aborted','FAILED':'Failed','RUNNING':'Running'}.get(last_print.status, last_print.status or 'Unknown')) }}{% else %}–{% endif %}</dd>
-              <dt class="col-sm-5 fw-normal">{{ _('Auftrag') }}</dt>
-              <dd class="col-sm-7 mb-0" id="home-last-print-name">{% if last_print %}{{ last_print.file_name }}{% else %}–{% endif %}</dd>
-              <dt class="col-sm-5 fw-normal">{{ _('Progress') }}</dt>
-              <dd class="col-sm-7 mb-1" id="home-last-print-progress">{% if last_print and last_print.printer_percent is not none %}{{ '%.0f'|format(last_print.printer_percent) }}%{% elif last_print and last_print.total_layers %}{{ '%.0f'|format((last_print.layers_printed or 0) * 100 / last_print.total_layers) }}%{% else %}–{% endif %}</dd>
-              <dt class="col-sm-5 fw-normal">{{ _('Layers') }}</dt>
-              <dd class="col-sm-7 mb-1" id="home-last-print-layers">{% if last_print and last_print.total_layers %}{{ last_print.layers_printed or 0 }} / {{ last_print.total_layers }}{% else %}–{% endif %}</dd>
-              <dt class="col-sm-5 fw-normal" id="home-last-print-expected-end-label"{% if not last_print or last_print.status not in ['PREPARING', 'RUNNING', 'PAUSED'] %} hidden{% endif %}>{{ _('Erwartetes Ende:') }}</dt>
-              <dd class="col-sm-7 mb-1" id="home-last-print-expected-end"{% if not last_print or last_print.status not in ['PREPARING', 'RUNNING', 'PAUSED'] %} hidden{% endif %}>{% if last_print and last_print.predicted_end_time %}{{ format_datetime(last_print.predicted_end_time) }}{% else %}–{% endif %}</dd>
-              <dt class="col-sm-5 fw-normal" id="home-last-print-remaining-label"{% if not last_print or last_print.status not in ['PREPARING', 'RUNNING', 'PAUSED'] %} hidden{% endif %}>{{ _('Restlaufzeit:') }}</dt>
-              <dd class="col-sm-7 mb-1" id="home-last-print-remaining"{% if not last_print or last_print.status not in ['PREPARING', 'RUNNING', 'PAUSED'] %} hidden{% endif %}>–</dd>
-              <dt class="col-sm-5 fw-normal">{{ _('Consumed') }}</dt>
-              <dd class="col-sm-7 mb-1" id="home-last-print-consumed">{% if last_print and last_print.filament_grams_billed is not none %}{{ format_number(last_print.filament_grams_billed) }} g{% else %}–{% endif %}</dd>
-              <dt class="col-sm-5 fw-normal" id="home-last-print-status-at-label"{% if not last_print or last_print.status not in ['PREPARING', 'RUNNING', 'PAUSED'] %} hidden{% endif %}>{{ _('Last status') }}</dt>
-              <dd class="col-sm-7 mb-1" id="home-last-print-status-at"{% if not last_print or last_print.status not in ['PREPARING', 'RUNNING', 'PAUSED'] %} hidden{% endif %}>{% if last_print and last_print.last_status_at %}{{ format_datetime(last_print.last_status_at) }}{% else %}–{% endif %}</dd>
-            </dl>
-          </div>
-          <div id="home-3mf-status" class="small text-body-secondary mt-3 d-none"></div>
-        </div>
-        {% if mqtt_connected|default(false) %}
-        <div class="card-footer text-center">
-          <form method="post" action="{{ url_for('refresh_ams') }}" class="d-inline" id="home-refresh-form">
-            <input type="hidden" name="next_endpoint" value="home_status">
-            <button type="submit" class="btn btn-sm btn-primary rounded-pill px-3">
-              <i class="bi bi-arrow-clockwise me-1"></i> {{ _('Jetzt aktualisieren') }}
-            </button>
-          </form>
-        </div>
-        {% endif %}
+  <div class="home-dashboard-grid" id="printer-status-page">
+    <section class="card home-dashboard-card home-status-card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <h1 class="h5 mb-0"><i class="bi bi-printer me-2" aria-hidden="true"></i>{{ _('Druckerstatus') }}</h1>
+        <span class="home-status-pill" id="home-printer-status">{{ printer_status }}</span>
       </div>
+      <div class="card-body">
+        <div class="home-printer-context" id="home-printer-name">{{ PRINTER_NAME or PRINTER_MODEL.get('devicename') or PRINTER_MODEL.get('model') or PRINTER_ID }}</div>
+        <dl class="home-metric-list mb-0">
+          <div><dt><i class="bi bi-wifi me-2" aria-hidden="true"></i>{{ _('MQTT') }}</dt><dd id="home-mqtt-status">{{ _('Verbunden') if mqtt_connected|default(false) else _('Nicht verbunden') }}</dd></div>
+          <div><dt><i class="bi bi-droplet me-2" aria-hidden="true"></i>{{ _('Humidity') }}</dt><dd id="home-humidity">{% if printer_ams_environment %}{{ printer_ams_environment[0].humidity or '–' }}{% else %}–{% endif %}</dd></div>
+          <div><dt><i class="bi bi-thermometer-half me-2" aria-hidden="true"></i>{{ _('Temperature') }}</dt><dd id="home-ams-temperature">{% if printer_ams_environment %}{{ printer_ams_environment[0].temperature or '–' }}°C{% else %}–{% endif %}</dd></div>
+          <div><dt><i class="bi bi-waves me-2" aria-hidden="true"></i>{{ _('Hotend') }}</dt><dd id="home-hotend">{% if printer_temperatures.hotend is not none %}{{ printer_temperatures.hotend|round|int }}°C{% else %}–{% endif %}{% if printer_temperatures.hotend_target is not none %} / {{ printer_temperatures.hotend_target|round|int }}°C{% endif %}</dd></div>
+          <div><dt><i class="bi bi-view-stacked me-2" aria-hidden="true"></i>{{ _('Bed') }}</dt><dd id="home-bed">{% if printer_temperatures.bed is not none %}{{ printer_temperatures.bed|round|int }}°C{% else %}–{% endif %}{% if printer_temperatures.bed_target is not none %} / {{ printer_temperatures.bed_target|round|int }}°C{% endif %}</dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <section class="card home-dashboard-card home-last-print-card" id="home-last-print"{% if not last_print %} hidden{% endif %}>
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <h2 class="h5 mb-0"><i class="bi bi-file-earmark-text me-2" aria-hidden="true"></i>{{ _('Last print') }}</h2>
+        <a id="home-last-print-link" class="home-print-link" href="{% if last_print %}{{ url_for('print_history', print_id=last_print.id, _anchor='print_' ~ last_print.id) }}{% else %}#{% endif %}">{% if last_print %}#{{ last_print.id }}{% else %}–{% endif %}</a>
+      </div>
+      <div class="card-body">
+        <div class="home-last-print-name" id="home-last-print-name">{% if last_print %}{{ last_print.file_name }}{% else %}–{% endif %}</div>
+        <div class="home-print-detail-grid">
+          <div class="home-progress-ring" id="home-progress-ring" aria-label="{{ _('Progress') }}" style="--home-progress: {% if last_print and last_print.printer_percent is not none %}{{ last_print.printer_percent }}{% elif last_print and last_print.total_layers %}{{ ((last_print.layers_printed or 0) * 100 / last_print.total_layers)|round(0) }}{% else %}0{% endif %}%"><span id="home-last-print-progress">{% if last_print and last_print.printer_percent is not none %}{{ '%.0f'|format(last_print.printer_percent) }}%{% elif last_print and last_print.total_layers %}{{ '%.0f'|format((last_print.layers_printed or 0) * 100 / last_print.total_layers) }}%{% else %}–{% endif %}</span><small>{{ _('Progress') }}</small></div>
+          <dl class="home-metric-list home-print-metrics mb-0">
+            <div><dt><i class="bi bi-layers me-2" aria-hidden="true"></i>{{ _('Layers') }}</dt><dd id="home-last-print-layers">{% if last_print and last_print.total_layers %}{{ last_print.layers_printed or 0 }} / {{ last_print.total_layers }}{% else %}–{% endif %}</dd></div>
+            <div><dt><i class="bi bi-clock me-2" aria-hidden="true"></i>{{ _('Erwartetes Ende:') }}</dt><dd id="home-last-print-expected-end">{% if last_print and last_print.predicted_end_time %}{{ format_datetime(last_print.predicted_end_time) }}{% else %}–{% endif %}</dd></div>
+            <div><dt><i class="bi bi-hourglass-split me-2" aria-hidden="true"></i>{{ _('Restlaufzeit:') }}</dt><dd id="home-last-print-remaining">–</dd></div>
+            <div><dt><i class="bi bi-database me-2" aria-hidden="true"></i>{{ _('Consumed') }}</dt><dd id="home-last-print-consumed">{% if last_print and last_print.filament_grams_billed is not none %}{{ format_number(last_print.filament_grams_billed) }} g{% else %}–{% endif %}</dd></div>
+          </dl>
+        </div>
+        <div class="home-last-print-status-line"><span>{{ _('Status') }}</span><strong id="home-last-print-status">{% if last_print %}{{ _({'COMPLETED':'Finished','ABORTED':'Aborted','FAILED':'Failed','RUNNING':'Running'}.get(last_print.status, last_print.status or 'Unknown')) }}{% else %}–{% endif %}</strong></div>
+        <div id="home-3mf-status" class="small text-body-secondary mt-3 d-none"></div>
+      </div>
+    </section>
+
+    <section class="card home-dashboard-card home-activity-card">
+      <div class="card-header"><h2 class="h5 mb-0"><i class="bi bi-activity me-2" aria-hidden="true"></i>{{ _('Activity') }}</h2></div>
+      <div class="card-body">
+        <ol class="home-activity-list mb-0" id="home-activity-list">
+          <li class="active"><span class="home-activity-dot"></span><strong>{{ _('Druckerstatus') }}: {{ printer_status }}</strong><small>{{ format_datetime(now()) if now is defined else '' }}</small></li>
+          {% if last_print %}
+          <li class="active"><span class="home-activity-dot"></span><strong>{{ _('Status') }}: {{ _({'COMPLETED':'Finished','ABORTED':'Aborted','FAILED':'Failed','RUNNING':'Printing','PREPARING':'Preparing','PAUSED':'Paused'}.get(last_print.status, 'Unknown')) }}</strong><small>{{ format_datetime(last_print.last_status_at or last_print.print_date) }}</small></li>
+          {% if last_print.predicted_end_time %}<li><span class="home-activity-dot"></span><strong>{{ _('Expected end:') }}</strong><small>{{ format_datetime(last_print.predicted_end_time) }}</small></li>{% endif %}
+          {% if last_print.last_usage_event_at %}<li><span class="home-activity-dot"></span><strong>{{ _('Last booking') }}</strong><small>{{ format_datetime(last_print.last_usage_event_at) }}</small></li>{% endif %}
+          <li><span class="home-activity-dot"></span><strong>{{ _('Print ID') }} #{{ last_print.id }}</strong><small>{{ format_datetime(last_print.print_date) }}</small></li>
+          {% if last_print.actual_end_time %}<li><span class="home-activity-dot"></span><strong>{{ _('Finished') }}</strong><small>{{ format_datetime(last_print.actual_end_time) }}</small></li>{% endif %}
+          {% else %}
+          <li class="active"><span class="home-activity-dot"></span><strong>{{ _('No print history') }}</strong></li>
+          {% endif %}
+        </ol>
+      </div>
+    </section>
+
+    <div class="home-refresh-row">
+      {% if mqtt_connected|default(false) %}
+      <form method="post" action="{{ url_for('refresh_ams') }}" class="d-inline" id="home-refresh-form">
+        <input type="hidden" name="next_endpoint" value="home_status">
+        <button type="submit" class="btn btn-sm btn-primary rounded-pill px-3"><i class="bi bi-arrow-clockwise me-1"></i>{{ _('Jetzt aktualisieren') }}</button>
+      </form>
+      {% endif %}
     </div>
   </div>
 </div>
@@ -85,6 +84,7 @@
   const lastPrintStatus = document.getElementById('home-last-print-status');
   const lastPrintName = document.getElementById('home-last-print-name');
   const lastPrintProgress = document.getElementById('home-last-print-progress');
+  const progressRing = document.getElementById('home-progress-ring');
   const lastPrintLayers = document.getElementById('home-last-print-layers');
   const lastPrintExpectedEndLabel = document.getElementById('home-last-print-expected-end-label');
   const lastPrintExpectedEnd = document.getElementById('home-last-print-expected-end');
@@ -100,6 +100,53 @@
   const remainingLabel = {{ _('Verbleibend')|tojson }};
   const estimatedLabel = {{ _('(geschätzt)')|tojson }};
   const refreshForm = document.getElementById('home-refresh-form');
+  const activityList = document.getElementById('home-activity-list');
+  const activityLabels = {
+    printerStatus: {{ _('Druckerstatus')|tojson }},
+    temperatureStatus: {{ _('Temperaturstatus')|tojson }},
+    heatingBed: {{ _('Heating bed')|tojson }},
+    heatingHotend: {{ _('Heating hotend')|tojson }},
+    heatingBoth: {{ _('Heating bed and hotend')|tojson }},
+    status: {{ _('Status')|tojson }},
+    printing: {{ _('Printing')|tojson }},
+    expectedEnd: {{ _('Expected end:')|tojson }},
+    lastBooking: {{ _('Last booking')|tojson }},
+    printId: {{ _('Print ID')|tojson }},
+    finished: {{ _('Finished')|tojson }},
+    unknown: {{ _('Unknown')|tojson }}
+  };
+
+  function statusLabel(value) {
+    const labels = { COMPLETED: {{ _('Finished')|tojson }}, ABORTED: {{ _('Aborted')|tojson }}, FAILED: {{ _('Failed')|tojson }}, RUNNING: {{ _('Printing')|tojson }}, PREPARING: {{ _('Preparing')|tojson }}, PAUSED: {{ _('Paused')|tojson }} };
+    return labels[value] || value || activityLabels.unknown;
+  }
+
+  function renderActivities(item, printerStatus, temperatures) {
+    if (!activityList) return;
+    const current = Number(temperatures && temperatures.bed);
+    const bedTarget = Number(temperatures && temperatures.bed_target);
+    const hotend = Number(temperatures && temperatures.hotend);
+    const hotendTarget = Number(temperatures && temperatures.hotend_target);
+    const heatingBed = Number.isFinite(current) && Number.isFinite(bedTarget) && bedTarget > current + 2;
+    const heatingHotend = Number.isFinite(hotend) && Number.isFinite(hotendTarget) && hotendTarget > hotend + 2;
+    const temperatureEntries = [];
+    if (heatingBed || heatingHotend) {
+      const status = heatingBed && heatingHotend ? activityLabels.heatingBoth : (heatingBed ? activityLabels.heatingBed : activityLabels.heatingHotend);
+      temperatureEntries.push({ label: `${activityLabels.temperatureStatus}: ${status}`, time: new Date().toISOString(), active: true });
+    }
+    const entries = [
+      { label: `${activityLabels.printerStatus}: ${printerStatus || activityLabels.unknown}`, time: new Date().toISOString(), active: true },
+      ...temperatureEntries,
+      ...(item ? [
+        { label: `${activityLabels.status}: ${statusLabel(item.status)}`, time: item.last_status_at || item.print_date, active: true },
+        { label: activityLabels.expectedEnd, time: item.predicted_end_time },
+        { label: activityLabels.lastBooking, time: item.last_usage_event_at },
+        { label: `${activityLabels.printId} #${item.id}`, time: item.print_date },
+        { label: activityLabels.finished, time: item.actual_end_time }
+      ] : temperatureEntries)
+    ].filter(entry => entry.time);
+    activityList.innerHTML = entries.map(entry => `<li class="${entry.active ? 'active' : ''}"><span class="home-activity-dot"></span><strong>${entry.label}</strong><small>${formatUiDateTime(entry.time)}</small></li>`).join('');
+  }
 
   function update(data) {
     if (name && data.printer_name) name.textContent = data.printer_name;
@@ -123,8 +170,13 @@
         lastPrintStatus.textContent = statusLabels[item.status] || item.status || '';
       }
       if (lastPrintName) lastPrintName.textContent = item.file_name || '';
-      if (lastPrintProgress) lastPrintProgress.textContent = item.printer_percent != null ? `${Math.round(Number(item.printer_percent))}%` : (item.total_layers ? `${Math.round(Number(item.layers_printed || 0) * 100 / Number(item.total_layers))}%` : '–');
-      if (lastPrintLayers) lastPrintLayers.textContent = item.total_layers ? `${item.layers_printed || 0} / ${item.total_layers}` : '–';
+      const livePercent = Number(item.printer_percent);
+      const liveLayers = Number(item.layers_printed);
+      const liveTotalLayers = Number(item.total_layers);
+      const progress = Number.isFinite(livePercent) ? livePercent : (Number.isFinite(liveTotalLayers) && liveTotalLayers > 0 && Number.isFinite(liveLayers) ? liveLayers * 100 / liveTotalLayers : null);
+      if (lastPrintProgress) lastPrintProgress.textContent = progress === null ? '–' : `${Math.round(progress)}%`;
+      if (progressRing && progress !== null) progressRing.style.setProperty('--home-progress', `${Math.max(0, Math.min(100, progress))}%`);
+      if (lastPrintLayers) lastPrintLayers.textContent = Number.isFinite(liveTotalLayers) && liveTotalLayers > 0 && Number.isFinite(liveLayers) ? `${liveLayers} / ${liveTotalLayers}` : '–';
       const showTiming = ['PREPARING', 'RUNNING', 'PAUSED'].includes(item.status);
       [lastPrintExpectedEndLabel, lastPrintExpectedEnd, lastPrintRemainingLabel, lastPrintRemaining].forEach(element => {
         if (element) element.hidden = !showTiming;
@@ -139,6 +191,8 @@
         if (hasActiveJob) lastPrintStatusAt.textContent = formatUiDateTime(item.last_status_at);
       }
     }
+
+    renderActivities(data.last_print, data.printer_status, data.temperatures);
 
     const download = data.download || {};
     if (!downloadStatus) return;

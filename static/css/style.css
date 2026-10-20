@@ -234,6 +234,292 @@ body {
     overflow: hidden;
 }
 
+.home-dashboard-grid {
+    display: grid;
+    grid-template-columns: minmax(260px, 1fr) minmax(360px, 1.45fr) minmax(220px, .85fr);
+    gap: 1rem;
+    align-items: stretch;
+}
+
+.home-dashboard-card {
+    min-width: 0;
+}
+
+.home-dashboard-card .card-header {
+    min-height: 58px;
+    padding: 1rem 1.2rem;
+}
+
+.home-dashboard-card .card-body {
+    padding: 1rem 1.2rem 1.2rem;
+}
+
+.home-status-pill {
+    padding: .4rem .85rem;
+    color: #16834a;
+    background: #e1f5e9;
+    border-radius: 999px;
+    font-weight: 600;
+}
+
+.home-printer-context {
+    margin-bottom: .85rem;
+    color: var(--m0-muted);
+    font-weight: 600;
+}
+
+.home-metric-list {
+    display: grid;
+    gap: 0;
+}
+
+.home-metric-list > div {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    min-height: 46px;
+    border-bottom: 1px solid var(--m0-line);
+}
+
+.home-metric-list > div:last-child {
+    border-bottom: 0;
+}
+
+.home-metric-list dt,
+.home-metric-list dd {
+    margin: 0;
+}
+
+.home-metric-list dt {
+    color: var(--m0-muted);
+    font-weight: 400;
+}
+
+.home-metric-list dt .bi {
+    color: var(--m0-brand);
+}
+
+.home-metric-list dd {
+    color: var(--m0-ink);
+    font-weight: 600;
+    text-align: right;
+}
+
+.home-print-link {
+    color: var(--m0-brand);
+    font-size: 1.25rem;
+    font-weight: 700;
+}
+
+.home-last-print-name {
+    margin-bottom: 1rem;
+    font-size: 1.45rem;
+    font-weight: 700;
+}
+
+.home-print-detail-grid {
+    display: grid;
+    grid-template-columns: 150px minmax(0, 1fr);
+    gap: 1rem;
+    align-items: center;
+}
+
+.home-progress-ring {
+    display: grid;
+    place-items: center;
+    align-content: center;
+    width: 138px;
+    height: 138px;
+    margin: auto;
+    border: 11px solid #e7eef5;
+    border-top-color: var(--m0-brand);
+    border-right-color: var(--m0-brand);
+    border-radius: 50%;
+}
+
+.home-progress-ring span {
+    font-size: 1.6rem;
+    font-weight: 700;
+}
+
+.home-progress-ring small {
+    color: var(--m0-muted);
+}
+
+.home-last-print-status-line {
+    display: flex;
+    justify-content: space-between;
+    margin-top: .9rem;
+    padding-top: .85rem;
+    border-top: 1px solid var(--m0-line);
+    color: var(--m0-muted);
+}
+
+.home-last-print-status-line strong {
+    color: var(--m0-ink);
+}
+
+.home-activity-list {
+    position: relative;
+    display: grid;
+    gap: 1.2rem;
+    padding: .2rem 0 .2rem 1.5rem;
+    list-style: none;
+}
+
+.home-activity-list::before {
+    position: absolute;
+    top: .55rem;
+    bottom: .55rem;
+    left: .35rem;
+    width: 2px;
+    background: var(--m0-line);
+    content: "";
+}
+
+.home-activity-list li {
+    position: relative;
+    display: grid;
+    gap: .2rem;
+}
+
+.home-activity-dot {
+    position: absolute;
+    top: .2rem;
+    left: -1.5rem;
+    width: .75rem;
+    height: .75rem;
+    background: #aeb9c5;
+    border: 2px solid var(--m0-surface);
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px #aeb9c5;
+}
+
+.home-activity-list li.active .home-activity-dot {
+    background: var(--m0-brand);
+    box-shadow: 0 0 0 1px var(--m0-brand);
+}
+
+.home-activity-list strong {
+    font-weight: 600;
+}
+
+.home-activity-list small {
+    color: var(--m0-muted);
+}
+
+.home-refresh-row {
+    grid-column: 1 / -1;
+    text-align: center;
+}
+
+/* Home dashboard: keep the three sample cards aligned and give each card its
+   own compact content flow. */
+.home-dashboard-grid > .home-dashboard-card > .card-body {
+    display: block;
+    min-height: 296px;
+    padding: 1rem 1.2rem 1.2rem;
+}
+
+.home-status-card .card-body {
+    position: relative;
+}
+
+.home-status-card .home-printer-context {
+    margin: 0;
+    padding: .15rem 0 1rem;
+    color: var(--m0-muted);
+    font-size: 1.05rem;
+    font-weight: 500;
+}
+
+.home-status-card .home-metric-list {
+    margin-left: 0;
+    padding-left: 0;
+}
+
+.home-status-card .home-metric-list > div {
+    min-height: 45px;
+}
+
+.home-last-print-card .card-body {
+    min-height: 296px;
+}
+
+.home-last-print-card .home-print-detail-grid {
+    min-height: 172px;
+    align-items: center;
+}
+
+.home-progress-ring {
+    border: 11px solid #e7eef5;
+    background: conic-gradient(var(--m0-brand) var(--home-progress, 0%), #e7eef5 0);
+    background-clip: border-box;
+    position: relative;
+}
+
+.home-progress-ring::after {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    border-radius: 50%;
+    background: var(--m0-surface);
+    content: "";
+    transform: scale(.82);
+}
+
+.home-progress-ring > * {
+    position: relative;
+    z-index: 1;
+}
+
+.home-activity-card .card-body {
+    padding-top: 1.15rem;
+}
+
+.home-activity-list {
+    min-height: 260px;
+    gap: 1.05rem;
+}
+
+.home-activity-list li {
+    min-height: 2.5rem;
+}
+
+.home-activity-list strong {
+    color: var(--m0-ink);
+    font-size: .92rem;
+}
+
+.home-activity-list small {
+    font-size: .8rem;
+}
+
+@media (max-width: 1050px) {
+    .home-dashboard-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .home-activity-card {
+        grid-column: span 2;
+    }
+}
+
+@media (max-width: 700px) {
+    .home-dashboard-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .home-activity-card,
+    .home-refresh-row {
+        grid-column: auto;
+    }
+
+    .home-print-detail-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
 /* Keep the Home dashboard aligned with the first AMS row. */
 .home-page,
 .home-page > .row {

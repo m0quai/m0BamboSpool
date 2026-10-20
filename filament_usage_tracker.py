@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 from config import EXTERNAL_SPOOL_AMS_ID, EXTERNAL_SPOOL_ID, TRACK_LAYER_USAGE
 from inventory_repository import record_consumption
 from inventory_service import fetchSpools, getAMSFromTray, trayUid
+import inventory_database
 from tools_3mf import available_thumbnail_filename, download3mfFromCloud, download3mfFromFTP, download3mfFromLocalFilesystem, getMetaDataFrom3mf, getMetaDataFromLocal3mf, get_source_file_name
 from print_history import bind_filament_usage_spool, record_filament_usage_segment, claim_filament_usage_event, set_filament_usage_event_status, finalize_filament_usage_events, get_all_filament_usage_for_print, update_layer_tracking, update_print_image, update_print_file_name, get_print_image, get_latest_running_print_id, find_latest_print_id, printer_state_to_history_status
 
@@ -687,9 +688,12 @@ class FilamentUsageTracker:
     if self.active_model is None:
       return
 
-    log("[filament-tracker] Print end, spending remaining layers")
-    for layer in set(self.active_model.keys()) - self.spent_layers:
-      self._handle_layer_change(layer)
+    # Only bill layers that were actually reported by the printer.  A FINISH
+    # status may arrive after an interrupted object sequence; charging every
+    # unobserved model layer would assign material to the wrong AMS tray.
+    if self.current_layer is not None:
+      self._handle_layer_change(self.current_layer)
+    log("[filament-tracker] Print end, keeping only confirmed layer usage")
 
     self._flush_all_pending_usage()
     self._maybe_update_predicted_total()
@@ -968,7 +972,8 @@ class FilamentUsageTracker:
       mapping_value = self._resolve_tray_mapping(filament_index)
       bind_filament_usage_spool(
         self.print_id,
-        filament_index + 1,
+        # The G-code keeps Bambu's original filament ID (for example 2/3).
+        filament_index,
         spool_id,
         mapping_value if mapping_value is not None and mapping_value != EXTERNAL_SPOOL_ID else None,
       )
@@ -1041,17 +1046,17 @@ class FilamentUsageTracker:
     return EXTERNAL_SPOOL_ID
 
   def _lookup_spool_for_tray(self, tray_uid: str):
-    for spool in fetchSpools():
-      extra = spool.get("extra") or {}
-      active = extra.get("active_tray")
-      if not active:
-        continue
-      try:
-        active_value = json.loads(active)
-      except Exception:
-        active_value = active
-      if active_value == tray_uid:
-        return spool.get("id")
+    # Print accounting exclusively uses the tray assignments stored in the
+    # local catalog.  MQTT status keeps this catalog current; color and the
+    # SpoolMan mirror must never decide a print's spool assignment.
+    candidates = [
+      spool for spool in inventory_database.list_spools(include_archived=True)
+      if str(spool.get("active_tray") or "") == str(tray_uid)
+    ]
+    if len(candidates) == 1:
+      return candidates[0].get("id")
+    if len(candidates) > 1:
+      log(f"[filament-tracker] Mehrdeutige lokale Fachzuordnung für {tray_uid}")
     return None
 
   def _get_spool_data(self, spool_id: int):

@@ -23,6 +23,7 @@ import mqtt_bambulab
 import print_history as print_history_service
 import spoolman_client
 import spoolman_service
+import inventory_database
 from spoolman_service import augmentTrayDataWithSpoolMan, trayUid, normalize_color_hex
 from logger import log
 
@@ -688,7 +689,9 @@ def print_history():
   prints, total_prints = print_history_service.get_prints_with_filament(limit=per_page, offset=offset, include_deleted=show_deleted)
   layer_tracking_map = print_history_service.get_layer_tracking_for_prints([print["id"] for print in prints])
 
-  spool_list = mqtt_bambulab.fetchSpools()
+  # Historical print assignments are resolved from our local catalog.  They
+  # must not change when SpoolMan's current data or archive state changes.
+  spool_list = inventory_database.list_spools(include_archived=True)
 
   for print in prints:
     tracking_row = layer_tracking_map.get(print["id"])
@@ -723,6 +726,18 @@ def print_history():
       print["is_running"] = False
 
     filament_usage_data = json.loads(print["filament_info"])
+    # Keep the historical filament rows in physical AMS order (A1, A2, ...).
+    # The JSON is written in filament-index order and is not guaranteed to
+    # match the tray order shown to the user.
+    def _history_slot_order(entry):
+      physical = entry.get("physical_ams_slot")
+      logical = entry.get("ams_slot")
+      try:
+        return int(physical if physical is not None else logical)
+      except (TypeError, ValueError):
+        return 999
+
+    filament_usage_data.sort(key=_history_slot_order)
     filament_usage_sum = sum(
         _to_float(f.get("grams_used")) or 0 for f in filament_usage_data
     )
@@ -741,7 +756,12 @@ def print_history():
         for spool in spool_list:
           if spool['id'] == filament["spool_id"]:
             filament["spool"] =  spool
-            filament["cost"] = filament['grams_used'] * filament['spool']['cost_per_gram']
+            initial_weight = _to_float(spool.get("initial_weight")) or 0.0
+            price = _to_float(spool.get("price")) or 0.0
+            cost_per_gram = _to_float(spool.get("cost_per_gram"))
+            if cost_per_gram is None:
+              cost_per_gram = price / initial_weight if initial_weight > 0 else 0.0
+            filament["cost"] = (_to_float(filament.get("grams_used")) or 0.0) * cost_per_gram
             print["total_cost"] += filament["cost"]
             break
   

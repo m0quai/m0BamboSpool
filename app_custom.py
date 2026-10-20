@@ -805,16 +805,20 @@ def _current_printer_status_payload():
                 last_print = dict(last_print)
                 last_print["last_status_at"] = live_status_at
             try:
-                if print_state.get("mc_percent") is not None:
+                mc_percent = print_state.get("mc_percent")
+                if mc_percent is not None and math.isfinite(float(mc_percent)):
                     last_print = dict(last_print)
-                    last_print["printer_percent"] = float(print_state["mc_percent"])
+                    last_print["printer_percent"] = float(mc_percent)
             except (TypeError, ValueError):
                 pass
             for source, target in (("layer_num", "layers_printed"), ("total_layer_num", "total_layers")):
                 if print_state.get(source) is not None:
                     try:
+                        value = float(print_state[source])
+                        if not math.isfinite(value):
+                            continue
                         last_print = dict(last_print)
-                        last_print[target] = int(print_state[source])
+                        last_print[target] = int(value)
                     except (TypeError, ValueError):
                         pass
     return {
@@ -863,6 +867,27 @@ def _printer_temperature_status():
     }
 
 
+def _printer_temperature_waiting_code():
+    print_state = getattr(mqtt_bambulab, "PRINTER_STATE", {}).get("print", {}) or {}
+    try:
+        hotend = float(print_state.get("nozzle_temper"))
+        hotend_target = float(print_state.get("nozzle_target_temper"))
+        bed = float(print_state.get("bed_temper"))
+        bed_target = float(print_state.get("bed_target_temper"))
+    except (TypeError, ValueError):
+        return None
+
+    waiting_for_hotend = hotend_target > hotend + 2
+    waiting_for_bed = bed_target > bed + 2
+    if waiting_for_bed and waiting_for_hotend:
+        return "Waiting for bed and hotend to reach target temperature"
+    if waiting_for_bed:
+        return "Waiting for bed to reach target temperature"
+    if waiting_for_hotend:
+        return "Waiting for hotend to reach target temperature"
+    return None
+
+
 def _ams_environment_status():
     metrics = []
     for index, ams in enumerate((getattr(mqtt_bambulab, "LAST_AMS_CONFIG", {}) or {}).get("ams", []) or []):
@@ -885,11 +910,19 @@ def _printer_is_busy():
 
 
 def _printer_status_code():
-    state = str((getattr(mqtt_bambulab, "PRINTER_STATE", {}).get("print", {}) or {}).get("gcode_state") or "OFFLINE").upper()
+    print_state = (getattr(mqtt_bambulab, "PRINTER_STATE", {}).get("print", {}) or {})
+    state = str(print_state.get("gcode_state") or "OFFLINE").upper()
     # Bambu retains a terminal job state after that job ends.  It describes
     # the history entry, not the printer's current availability.
     if state in {"FINISH", "FAILED", "STOP", "CANCEL", "CANCELED", "CANCELLED", "ABORT", "ABORTED"}:
         return "Ready" if mqtt_bambulab.isMqttClientConnected() else "Offline"
+    waiting_code = _printer_temperature_waiting_code()
+    if waiting_code == "Waiting for bed and hotend to reach target temperature":
+        return "Heating bed and hotend"
+    if waiting_code == "Waiting for bed to reach target temperature":
+        return "Heating bed"
+    if waiting_code == "Waiting for hotend to reach target temperature":
+        return "Heating hotend"
     return {
         "IDLE": "Ready",
         "PREPARE": "Preparing",
@@ -907,6 +940,7 @@ def inject_m0bambospool_version():
         "printer_temperatures": _printer_temperature_status(),
         "printer_ams_environment": _ams_environment_status(),
         "printer_status": _ui_text(_printer_status_code()),
+        "printer_waiting_message": _ui_text(_printer_temperature_waiting_code() or ""),
         "mqtt_connected": mqtt_bambulab.isMqttClientConnected(),
         "PRINTER_ID": PRINTER_ID,
         "printer_is_busy": _printer_is_busy(),
@@ -1356,6 +1390,7 @@ def ams_state_generation():
         "bed_target": temperatures.get("bed_target"),
         "printer_state": print_state.get("gcode_state") or "OFFLINE",
         "printer_status": _ui_text(_printer_status_code()),
+        "printer_waiting_message": _ui_text(_printer_temperature_waiting_code() or ""),
         "print_id": active_print_id,
         "download": {
             key: value for key, value in JOBS_3MF.get().items()

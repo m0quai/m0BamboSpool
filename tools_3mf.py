@@ -736,13 +736,20 @@ def getMetaDataFrom3mf(url):
 
                     usage = {}
                     filaments = {}
-                    filamentId = 1
                     for plate in root.findall(".//plate"):
                         for filament in plate.findall(".//filament"):
+                            try:
+                                filamentId = int(filament.attrib.get("id"))
+                            except (TypeError, ValueError):
+                                filamentId = max(usage.keys(), default=0) + 1
                             used_g = filament.attrib.get("used_g")
                             usage[filamentId] = used_g
                             filaments[filamentId] = {
                                 "id": filamentId,
+                                # slice_info IDs are the one-based Studio
+                                # material positions; M620 uses zero-based
+                                # G-code indices for the same positions.
+                                "gcode_index": max(0, filamentId - 1),
                                 "tray_info_idx": filament.attrib.get("tray_info_idx"),
                                 "type": filament.attrib.get("type"),
                                 "color": filament.attrib.get("color"),
@@ -776,7 +783,8 @@ def getMetaDataFrom3mf(url):
 
                 gcode_path = "Metadata/plate_" + metadata["plateID"] + ".gcode"
                 metadata["gcode_path"] = gcode_path
-                if gcode_path in z.namelist():
+                metadata["gcode_present"] = gcode_path in z.namelist()
+                if metadata["gcode_present"]:
                     with z.open(gcode_path) as gcode_file:
                         metadata["filamentOrder"] = get_filament_order(gcode_file)
 
@@ -831,20 +839,23 @@ def getMetaDataFromLocal3mf(path: str, model_path: str | None = None) -> dict:
 
                 usage = {}
                 filaments = {}
-                filament_id = 1
                 for plate in root.findall(".//plate"):
                     for filament in plate.findall(".//filament"):
+                        try:
+                            filament_id = int(filament.attrib.get("id"))
+                        except (TypeError, ValueError):
+                            filament_id = max(usage.keys(), default=0) + 1
                         used_g = filament.attrib.get("used_g")
                         usage[filament_id] = used_g
                         filaments[filament_id] = {
                             "id": filament_id,
+                            "gcode_index": max(0, filament_id - 1),
                             "tray_info_idx": filament.attrib.get("tray_info_idx"),
                             "type": filament.attrib.get("type"),
                             "color": filament.attrib.get("color"),
                             "used_g": used_g,
                             "used_m": filament.attrib.get("used_m"),
                         }
-                        filament_id += 1
                 metadata["filaments"] = filaments
                 metadata["usage"] = usage
 
@@ -870,7 +881,8 @@ def getMetaDataFromLocal3mf(path: str, model_path: str | None = None) -> dict:
 
             gcode_path = "Metadata/plate_" + metadata["plateID"] + ".gcode"
             metadata["gcode_path"] = gcode_path
-            if gcode_path in z.namelist():
+            metadata["gcode_present"] = gcode_path in z.namelist()
+            if metadata["gcode_present"]:
                 with z.open(gcode_path) as gcode_file:
                     metadata["filamentOrder"] = get_filament_order(gcode_file)
 

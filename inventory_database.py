@@ -852,6 +852,35 @@ def set_spool_extra(spool_id: int | str, values: dict[str, Any]) -> None:
             conn.execute(f"UPDATE spools SET {','.join(f'{key} = ?' for key in fields)} WHERE id = ?", list(fields.values()) + [int(spool_id)])
 
 
+def sync_active_trays(assignments: dict[int | str, str]) -> dict[str, int]:
+    # Make the local catalog reflect the complete current AMS snapshot.
+    # Any spool absent from the snapshot is deliberately left without a tray.
+    initialize()
+    normalized = {
+        int(spool_id): str(tray_uid).strip()
+        for spool_id, tray_uid in (assignments or {}).items()
+        if str(tray_uid or "").strip()
+    }
+    changed = 0
+    cleared = 0
+    with _connect() as conn:
+        rows = conn.execute("SELECT id, active_tray FROM spools").fetchall()
+        for row in rows:
+            spool_id = int(row["id"])
+            desired = normalized.get(spool_id)
+            current = str(row["active_tray"] or "").strip() or None
+            if current == desired:
+                continue
+            conn.execute(
+                "UPDATE spools SET active_tray = ?, updated_at = ? WHERE id = ?",
+                (desired, _now(), spool_id),
+            )
+            changed += 1
+            if current and not desired:
+                cleared += 1
+    return {"assigned": len(normalized), "changed": changed, "cleared": cleared}
+
+
 def record_consumption(spool_id: int | str, weight_grams: float | None = None,
                        length_mm: float | None = None, occurred_at: str | None = None) -> None:
     if weight_grams is None and length_mm is None:

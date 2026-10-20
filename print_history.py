@@ -466,6 +466,44 @@ def find_active_print_for_printer_source(*names: str | None) -> dict | None:
     return None
 
 
+def find_recent_aborted_print(file_name: str, cooldown_seconds: int = 120):
+    """Return a recently aborted attempt for the same printer file.
+
+    Bambu sends the same source in several forms (plain name, ``.3mf`` and
+    ``.gcode.3mf`` paths).  Compare the canonical print name instead of the
+    raw database value so a delayed packet cannot create a second attempt
+    after a restart of MOS.
+    """
+    if not file_name:
+        return None
+    import datetime as _datetime
+    now = _datetime.datetime.now()
+    cutoff = now - _datetime.timedelta(seconds=int(cooldown_seconds))
+    with connect_database(db_config["db_path"]) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """SELECT p.id, p.file_name, t.remote_3mf_path, t.actual_end_time
+               FROM prints p JOIN print_layer_tracking t ON t.print_id = p.id
+               WHERE t.status = 'ABORTED'
+               ORDER BY p.id DESC""",
+        ).fetchall()
+    wanted = _normalise_print_name(str(file_name).replace("\\", "/").rsplit("/", 1)[-1])
+    for row in rows:
+        names = {
+            _normalise_print_name(str(row["file_name"] or "")),
+            _normalise_print_name(str(row["remote_3mf_path"] or "")),
+        }
+        if wanted not in names:
+            continue
+        try:
+            ended = _datetime.datetime.strptime(str(row["actual_end_time"]), "%Y-%m-%d %H:%M:%S")
+        except (TypeError, ValueError):
+            continue
+        if cutoff <= ended <= now:
+            return {"print_id": int(row["id"]), "actual_end_time": row["actual_end_time"]}
+    return None
+
+
 def find_previous_metadata_print_name(remote_3mf_path: str, current_print_id: int) -> str | None:
     # Reuse a user-facing name already extracted from metadata for this exact
     # printer file when a later attempt contains only its generated filename.
@@ -721,6 +759,54 @@ def insert_filament_usage(
     conn.commit()
     conn.close()
 
+def normalize_usage_slots(print_id: int, filament_ids: list[int], mapping: list[int | None]) -> None:
+    """Remove provisional rows whose logical slot is not present in the 3MF.
+
+    A provisional row is created from the live tray while the 3MF downloads.
+    Once the original Bambu IDs are known, rows must be keyed by those IDs;
+    physical tray matching alone can otherwise merge A1 into the wrong ID.
+    """
+    ids = sorted({int(value) for value in filament_ids})
+    if not ids:
+        return
+    conn = connect_database(db_config["db_path"])
+    placeholders = ",".join("?" for _ in ids)
+    rows = conn.execute(
+        f"SELECT id, ams_slot, physical_ams_slot, grams_used FROM spool_usage "
+        f"WHERE print_id = ? AND ams_slot NOT IN ({placeholders}) ORDER BY id",
+        (int(print_id), *ids),
+    ).fetchall()
+    for row in rows:
+        target = None
+        row_id, _row_slot, physical, row_grams = row
+        if physical is not None:
+            for filament_id in ids:
+                try:
+                    if int(mapping[int(filament_id)]) == int(physical):
+                        target = filament_id
+                        break
+                except (IndexError, TypeError, ValueError):
+                    continue
+        if target is not None:
+            existing = conn.execute(
+                "SELECT id FROM spool_usage WHERE print_id = ? AND ams_slot = ? LIMIT 1",
+                (int(print_id), int(target)),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    "UPDATE spool_usage SET grams_used = COALESCE(grams_used,0) + "
+                    "COALESCE((SELECT grams_used FROM spool_usage WHERE id = ?),0) "
+                    "WHERE id = ?",
+                    (row_id, existing[0]),
+                )
+                conn.execute("DELETE FROM spool_usage WHERE id = ?", (row_id,))
+            else:
+                conn.execute("UPDATE spool_usage SET ams_slot = ? WHERE id = ?", (int(target), row_id))
+        elif float(row_grams or 0) == 0:
+            conn.execute("DELETE FROM spool_usage WHERE id = ?", (row_id,))
+    conn.commit()
+    conn.close()
+
 def update_filament_spool(print_id: int, filament_id: int, spool_id: int) -> None:
     #
     # Updates the spool_id for a given filament usage entry, ensuring it belongs to the specified print job.
@@ -765,10 +851,10 @@ def record_filament_usage_segment(
     cursor = conn.cursor()
     cursor.execute(
         """SELECT id FROM spool_usage
-           WHERE print_id = ? AND ams_slot = ? AND spool_id = ?
+           WHERE print_id = ? AND spool_id = ?
              AND physical_ams_slot IS ?
            ORDER BY id LIMIT 1""",
-        (int(print_id), int(filament_id), int(spool_id), physical_ams_slot),
+        (int(print_id), int(spool_id), physical_ams_slot),
     )
     row = cursor.fetchone()
     if row:

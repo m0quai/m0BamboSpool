@@ -158,32 +158,47 @@ class Job3MFManager:
                 started = time.time()
                 self._update(transfer_id, state="resolving", started_at=started)
                 log(f"[3MF] Worker gestartet: job={transfer_id}, source={source!r}")
-                download_started = time.monotonic()
-                with tempfile.NamedTemporaryFile(suffix=".3mf", delete=False) as temp_file:
-                    local_path = temp_file.name
-                    self._update(transfer_id, state="downloading", local_path=local_path)
-                    remote_path = self._download(source, temp_file, transfer_id, cancel_event)
+                metadata = None
+                remote_path = None
+                for attempt in range(1, 3):
+                    download_started = time.monotonic()
+                    with tempfile.NamedTemporaryFile(suffix=".3mf", delete=False) as temp_file:
+                        local_path = temp_file.name
+                        self._update(transfer_id, state="downloading", local_path=local_path, percent=0)
+                        remote_path = self._download(source, temp_file, transfer_id, cancel_event)
 
-                if cancel_event.is_set():
-                    raise tools_3mf.DownloadCancelledError("Druck wurde abgebrochen")
+                    if cancel_event.is_set():
+                        raise tools_3mf.DownloadCancelledError("Druck wurde abgebrochen")
 
-                download_seconds = time.monotonic() - download_started
-                download_bytes = os.path.getsize(local_path)
-                log(
-                    f"[3MF] Download abgeschlossen: job={transfer_id}, "
-                    f"pfad={remote_path or source!r}, bytes={download_bytes}, "
-                    f"dauer={download_seconds:.2f}s"
-                )
-                self._update(transfer_id, state="processing", remote_path=remote_path or source)
-                parse_started = time.monotonic()
-                metadata = tools_3mf.getMetaDataFromLocal3mf(local_path, remote_path or source)
-                if not metadata:
-                    raise RuntimeError("3MF-Metadaten konnten nicht gelesen werden")
-                parse_seconds = time.monotonic() - parse_started
-                log(
-                    f"[3MF] Verarbeitung abgeschlossen: job={transfer_id}, "
-                    f"dauer={parse_seconds:.2f}s, gesamt={time.time() - started:.2f}s"
-                )
+                    download_seconds = time.monotonic() - download_started
+                    download_bytes = os.path.getsize(local_path)
+                    log(
+                        f"[3MF] Download abgeschlossen: job={transfer_id}, versuch={attempt}/2, "
+                        f"pfad={remote_path or source!r}, bytes={download_bytes}, "
+                        f"dauer={download_seconds:.2f}s"
+                    )
+                    self._update(transfer_id, state="processing", remote_path=remote_path or source)
+                    parse_started = time.monotonic()
+                    metadata = tools_3mf.getMetaDataFromLocal3mf(local_path, remote_path or source)
+                    if not metadata:
+                        raise RuntimeError("3MF-Metadaten konnten nicht gelesen werden")
+                    if not metadata.get("gcode_present", False):
+                        if attempt < 2:
+                            log(f"[3MF] Kein eingebetteter G-Code; Transfer wird mit neuem Handle wiederholt (job={transfer_id}, versuch={attempt}/2)")
+                            try:
+                                os.unlink(local_path)
+                            except OSError:
+                                pass
+                            local_path = None
+                            continue
+                        raise RuntimeError("3MF enthält keinen eingebetteten G-Code")
+                    parse_seconds = time.monotonic() - parse_started
+                    log(
+                        f"[3MF] Verarbeitung abgeschlossen: job={transfer_id}, "
+                        f"dauer={parse_seconds:.2f}s, gesamt={time.time() - started:.2f}s"
+                    )
+                    break
+
                 if cancel_event.is_set():
                     raise tools_3mf.DownloadCancelledError("Druck wurde abgebrochen")
                 self._update(transfer_id, state="ready", percent=100 if self.get(transfer_id).get("bytes_total") else None)
