@@ -31,7 +31,6 @@ def printer_state_to_history_status(state: str | None, print_error=None) -> str 
         "CANCELLED": "ABORTED",
         "ABORT": "ABORTED",
         "ABORTED": "ABORTED",
-        "IDLE": "ABORTED",
     }.get(state)
 
 
@@ -302,11 +301,19 @@ def ensure_layer_tracking(print_id: int, status: str = "PREPARING") -> None:
     if print_id is None:
         return
     conn = connect_database(db_config["db_path"])
-    conn.execute(
-        "INSERT INTO print_layer_tracking (print_id, status) VALUES (?, ?) "
-        "ON CONFLICT(print_id) DO UPDATE SET status = excluded.status",
-        (print_id, status),
-    )
+    existing = conn.execute(
+        "SELECT 1 FROM print_layer_tracking WHERE print_id = ?", (print_id,)
+    ).fetchone()
+    if existing:
+        conn.execute(
+            "UPDATE print_layer_tracking SET status = ? WHERE print_id = ?",
+            (status, print_id),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO print_layer_tracking (print_id, status) VALUES (?, ?)",
+            (print_id, status),
+        )
     conn.commit()
     conn.close()
 
@@ -900,16 +907,21 @@ def claim_filament_usage_event(print_id: int | None, layer: int, filament_index:
     if print_id is None:
         return "pending"
     conn = connect_database(db_config["db_path"])
-    conn.execute(
-        """INSERT OR IGNORE INTO filament_usage_events
-           (print_id, layer, filament_index, spool_id, length_used, created_at, status)
-           VALUES (?, ?, ?, ?, ?, ?, 'pending')""",
-        (print_id, int(layer), int(filament_index), int(spool_id), float(length_used), datetime.now().isoformat()),
-    )
     row = conn.execute(
         "SELECT status FROM filament_usage_events WHERE print_id = ? AND layer = ? AND filament_index = ?",
         (print_id, int(layer), int(filament_index)),
     ).fetchone()
+    if row is None:
+        conn.execute(
+            """INSERT INTO filament_usage_events
+               (print_id, layer, filament_index, spool_id, length_used, created_at, status)
+               VALUES (?, ?, ?, ?, ?, ?, 'pending')""",
+            (print_id, int(layer), int(filament_index), int(spool_id), float(length_used), datetime.now().isoformat()),
+        )
+        row = conn.execute(
+            "SELECT status FROM filament_usage_events WHERE print_id = ? AND layer = ? AND filament_index = ?",
+            (print_id, int(layer), int(filament_index)),
+        ).fetchone()
     conn.commit()
     conn.close()
     return row[0] if row else None
@@ -1010,7 +1022,7 @@ def get_prints_with_filament(limit: int | None = None, offset: int | None = None
         ) AS filament_info
         FROM prints p
     ''' + where_clause + '''
-        ORDER BY p.print_date DESC
+        ORDER BY p.print_date DESC, p.id DESC
     '''
     params: list[int] = []
     if limit is not None:
@@ -1024,6 +1036,64 @@ def get_prints_with_filament(limit: int | None = None, offset: int | None = None
     prints = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return prints, total_count
+
+
+def get_print_page(print_id: int, page_size: int, include_deleted: bool = False) -> int | None:
+    # Resolve the page containing one history entry using the same ordering as
+    # get_prints_with_filament. This keeps deep links independent of page 1.
+    try:
+        target_id = int(print_id)
+        size = int(page_size)
+    except (TypeError, ValueError):
+        return None
+    if target_id <= 0 or size <= 0:
+        return None
+
+    conn = connect_database(db_config["db_path"])
+    conn.row_factory = sqlite3.Row
+    visibility = "1 = 1" if include_deleted else "COALESCE(is_deleted, 0) = 0"
+    target = conn.execute(
+        f"SELECT id, print_date FROM prints WHERE id = ? AND {visibility}",
+        (target_id,),
+    ).fetchone()
+    if target is None:
+        conn.close()
+        return None
+
+    # print_date is populated for every normal print. The fallback keeps a
+    # malformed legacy row reachable instead of silently sending it to page 1.
+    if target["print_date"] is None:
+        before_count = conn.execute(
+            f"SELECT COUNT(*) FROM prints WHERE {visibility} AND print_date IS NULL AND id > ?",
+            (target_id,),
+        ).fetchone()[0]
+    else:
+        before_count = conn.execute(
+            f"""SELECT COUNT(*) FROM prints
+                WHERE {visibility}
+                  AND (print_date > ? OR (print_date = ? AND id > ?))""",
+            (target["print_date"], target["print_date"], target_id),
+        ).fetchone()[0]
+    conn.close()
+    return int(before_count) // size + 1
+
+
+def get_history_filter_options(include_deleted: bool = False) -> dict[str, list[str]]:
+    # Return the complete date and status domains for the visible history,
+    # independent of the currently paginated page.
+    conn = connect_database(db_config["db_path"])
+    visibility = "1 = 1" if include_deleted else "COALESCE(p.is_deleted, 0) = 0"
+    rows = conn.execute(
+        f"""SELECT DISTINCT substr(p.print_date, 1, 10) AS print_day,
+                          COALESCE(UPPER(t.status), 'COMPLETED') AS status
+                   FROM prints p
+                   LEFT JOIN print_layer_tracking t ON t.print_id = p.id
+                   WHERE {visibility}"""
+    ).fetchall()
+    conn.close()
+    dates = sorted({str(row[0]) for row in rows if row[0]}, reverse=True)
+    statuses = sorted({str(row[1]).upper() for row in rows if row[1]})
+    return {"dates": dates, "statuses": statuses}
 
 
 def soft_delete_print(print_id: int) -> None:
@@ -1103,10 +1173,12 @@ def get_filament_for_slot(print_id: int, ams_slot: int):
 def _ensure_layer_tracking_entry(print_id: int):
   conn = connect_database(db_config["db_path"])
   cursor = conn.cursor()
-  cursor.execute('''
-      INSERT OR IGNORE INTO print_layer_tracking (print_id)
-      VALUES (?)
-  ''', (print_id,))
+  if cursor.execute(
+      "SELECT 1 FROM print_layer_tracking WHERE print_id = ?", (print_id,)
+  ).fetchone() is None:
+    cursor.execute(
+        "INSERT INTO print_layer_tracking (print_id) VALUES (?)", (print_id,)
+    )
   conn.commit()
   conn.close()
 

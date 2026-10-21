@@ -6,6 +6,7 @@ from flask import Blueprint, jsonify, redirect, render_template, request, url_fo
 import mqtt_bambulab
 import nfc_pending_repository
 import inventory_repository as spool_repo
+import inventory_database as inventory_db
 import inventory_service
 
 bp = Blueprint("ams_nfc", __name__, url_prefix="/ams/nfc")
@@ -48,6 +49,7 @@ def _resolve_tray(tray_index):
 
 
 def _remember_pending(uid, tray_index, ams_id):
+    inventory_db.register_nfc_tag(uid)
     nfc_pending_repository.remember_pending_tag(uid, tray_index, ams_id)
 
 
@@ -57,7 +59,7 @@ def _remove_pending(uid):
 
 def _assign_spool_to_tray(spool, ams_id, tray_id):
     spool_id = spool["id"]
-    mqtt_bambulab.setActiveTray(spool_id, spool.get("extra") or {}, ams_id, tray_id)
+    mqtt_bambulab.setActiveTray(spool_id, spool.get("extra") or {}, ams_id, tray_id, source="nfc", nfc_uid=spool.get("extra", {}).get("tag"))
     from app import setActiveSpool
     setActiveSpool(ams_id, tray_id, spool)
     return spool_id
@@ -76,6 +78,11 @@ def set_nfc_tray(tray_index):
 
     try:
         if uid == "CLEAR":
+            if inventory_service.get_nfc_bound_spool_for_tray(ams_id, tray_id):
+                return jsonify({
+                    "success": False,
+                    "error": "NFC-bound spool can only be released after physical removal from the AMS.",
+                }), 409
             inventory_service.clear_active_spool_for_tray(ams_id, tray_id)
             return jsonify({"success": True, "action": "clear", "tray_index": tray_index, "ams_id": ams_id})
 
@@ -94,6 +101,8 @@ def set_nfc_tray(tray_index):
         spool_id = _assign_spool_to_tray(spool, ams_id, tray_id)
         _remove_pending(uid)
         return jsonify({"success": True, "action": "assign", "tray_index": tray_index, "ams_id": ams_id, "uid": uid, "spool_id": spool_id})
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 409
     except Exception as exc:
         traceback.print_exc()
         return jsonify({"success": False, "error": str(exc)}), 500
@@ -123,7 +132,12 @@ def assign_pending_tag(uid):
 
     extras = spool.get("extra") or {}
     spool_repo.update_spool_extra(spool_id, extras, tag=json.dumps(normalized_uid))
+    inventory_db.ensure_local_spool_from_inventory(spool)
+    inventory_db.update_spool_fields(spool_id, {"tag": normalized_uid})
     spool.setdefault("extra", {})["tag"] = json.dumps(normalized_uid)
-    _assign_spool_to_tray(spool, int(pending["ams_id"]), int(pending["tray_index"]))
+    try:
+        _assign_spool_to_tray(spool, int(pending["ams_id"]), int(pending["tray_index"]))
+    except ValueError as exc:
+        return redirect(url_for("ams_nfc.pending_tags", error=str(exc)))
     _remove_pending(normalized_uid)
     return redirect(url_for("ams_nfc.pending_tags", success="NFC-Tag wurde der Spule zugeordnet."))

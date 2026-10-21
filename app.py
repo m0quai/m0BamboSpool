@@ -10,7 +10,6 @@ from flask import Flask, request, render_template, redirect, url_for
 from config import (
     BASE_URL,
     AUTO_SPEND,
-    SPOOLMAN_BASE_URL,
     EXTERNAL_SPOOL_AMS_ID,
     EXTERNAL_SPOOL_ID,
     PRINTER_NAME,
@@ -46,7 +45,6 @@ def fronted_utilities():
   ams_models_by_id = mqtt_bambulab.getDetectedAmsModelsById()
 
   return dict(
-    SPOOLMAN_BASE_URL=SPOOLMAN_BASE_URL,
     AUTO_SPEND=AUTO_SPEND,
     AMS_MODELS_BY_ID=ams_models_by_id,
     color_is_dark=color_is_dark,
@@ -186,33 +184,10 @@ def fill():
       )
     ))
   else:
-    spools = mqtt_bambulab.fetchSpools()
-
-    materials = extract_materials(spools)
-    selected_materials = []
-
-    try:
-      last_ams_config = mqtt_bambulab.getLastAMSConfig()
-      default_material = None
-
-      if ams_id == EXTERNAL_SPOOL_AMS_ID:
-        default_material = last_ams_config.get("vt_tray", {}).get("tray_type")
-      else:
-        for ams in last_ams_config.get("ams", []):
-          if str(ams.get("id")) != str(ams_id):
-            continue
-
-          for tray in ams.get("tray", []):
-            if str(tray.get("id")) == str(tray_id):
-              default_material = tray.get("tray_type")
-              break
-
-      if default_material and default_material in materials:
-        selected_materials.append(default_material)
-    except Exception:
-      pass
-
-    return render_template('fill.html', spools=spools, ams_id=ams_id, tray_id=tray_id, materials=materials, selected_materials=selected_materials)
+    # AMS filling is handled in the local inventory editor.  The editor gets
+    # the target tray as context and exposes only its dedicated assignment
+    # action there.
+    return redirect(url_for('inventory', fill=1, ams=ams_id, tray=tray_id))
 
 @app.route("/assign_bambu_spool")
 def assign_bambu_spool():
@@ -244,7 +219,7 @@ def assign_bambu_spool():
     mqtt_bambulab.setActiveTray(spool_id, extras, ams_id, tray_id)
     setActiveSpool(ams_id, tray_id, spool_data)
 
-    return redirect(url_for('home', success_message=f"Linked Bambu spool to SpoolMan spool {spool_id} on AMS {ams_id}, Tray {tray_id}."))
+    return redirect(url_for('home', success_message=f"Bambu-Spule {spool_id} lokal mit AMS {ams_id}, Fach {int(tray_id) + 1} verknüpft."))
 
   spools = mqtt_bambulab.fetchSpools()
   materials = extract_materials(spools)
@@ -409,7 +384,7 @@ def tray_load():
     mqtt_bambulab.setActiveTray(spool_id, spool_data["extra"], ams_id, tray_id)
     setActiveSpool(ams_id, tray_id, spool_data)
 
-    return redirect(url_for('home', success_message=f"Updated Spool ID {spool_id} with TAG id {tag_id} to AMS {ams_id}, Tray {tray_id}."))
+    return redirect(url_for('home', success_message=f"Spule {spool_id} mit NFC-Tag {tag_id} dem AMS {ams_id}, Fach {int(tray_id) + 1} zugeordnet."))
   except Exception as e:
     traceback.print_exc()
     return render_template('error.html', exception=str(e))
@@ -452,6 +427,29 @@ def _resolve_bambu_profile_ids(spool_data):
   return filament_id, setting_id, "unresolved"
 
 
+def _parse_nozzle_temperature_range(value):
+  # Local inventory values may be JSON-encoded once or twice.
+  current = value
+  for _ in range(2):
+    if not isinstance(current, str):
+      break
+    text = current.strip()
+    try:
+      decoded = json.loads(text)
+    except (TypeError, ValueError):
+      break
+    if decoded == current:
+      break
+    current = decoded
+  if isinstance(current, (list, tuple)) and len(current) >= 2:
+    return int(float(current[0])), int(float(current[1]))
+  text = str(current).strip().strip('"').strip("[]")
+  parts = [part.strip() for part in text.split(",")]
+  if len(parts) < 2:
+    raise ValueError(f"Ungültiger Düsentemperaturbereich: {value!r}")
+  return int(float(parts[0])), int(float(parts[1]))
+
+
 def setActiveSpool(ams_id, tray_id, spool_data):
   if READ_ONLY_MODE:
     return None
@@ -471,9 +469,11 @@ def setActiveSpool(ams_id, tray_id, spool_data):
     ams_message["print"]["tray_color"] = ""
       
   if "nozzle_temperature" in spool_data["filament"]["extra"]:
-    nozzle_temperature_range = spool_data["filament"]["extra"]["nozzle_temperature"].strip("[]").split(",")
-    ams_message["print"]["nozzle_temp_min"] = int(nozzle_temperature_range[0])
-    ams_message["print"]["nozzle_temp_max"] = int(nozzle_temperature_range[1])
+    nozzle_min, nozzle_max = _parse_nozzle_temperature_range(
+      spool_data["filament"]["extra"]["nozzle_temperature"]
+    )
+    ams_message["print"]["nozzle_temp_min"] = nozzle_min
+    ams_message["print"]["nozzle_temp_max"] = nozzle_max
   else:
     nozzle_temperature_range_obj = generate_filament_temperatures(spool_data["filament"]["material"],
                                                                   spool_data["filament"]["vendor"]["name"])

@@ -97,7 +97,6 @@
       <span class="app-nav-divider"></span>
       <a href="{{ url_for('bambu_cloud.index') }}" class="app-nav-link{% if request.endpoint and request.endpoint.startswith('bambu_cloud.') %} active{% endif %}"><i class="bi bi-gear" aria-hidden="true"></i><span>{{ _('Settings') }}</span>{% if not mqtt_connected|default(false) %}<span class="mqtt-menu-status-dot disconnected"></span>{% endif %}</a>
       <a href="{{ url_for('about') }}" class="app-nav-link{% if request.endpoint == 'about' %} active{% endif %}"><i class="bi bi-info-circle" aria-hidden="true"></i><span>{{ _('About') }}</span></a>
-      <a href="{{ SPOOLMAN_BASE_URL }}" target="m0bambospool-spoolman" data-spoolman-window="true" class="app-nav-link"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i><span>{{ _('SpoolMan') }}</span></a>
     </nav>
     <div class="app-sidebar-footer">v{{ m0bambospool_version }} ({{ _('Build') }} {{ m0bambospool_build_number }})</div>
   </aside>
@@ -224,20 +223,6 @@
         }
       });
     }
-    document.querySelectorAll('a[data-spoolman-window]').forEach(function (link) {
-      link.addEventListener('click', function (event) {
-        const spoolmanWindow = window.open(link.href, 'm0bambospool-spoolman');
-        if (!spoolmanWindow) {
-          return;
-        }
-        event.preventDefault();
-        try {
-          spoolmanWindow.focus();
-        } catch (_) {
-          // Cross-origin windows may not expose additional properties, but focus is safe to request.
-        }
-      });
-    });
     const topbarPrintProgress = document.getElementById('app-topbar-print-progress');
     const topbarPrintProgressIcon = document.getElementById('app-topbar-print-progress-icon');
     const topbarPrintProgressText = document.getElementById('app-topbar-print-progress-text');

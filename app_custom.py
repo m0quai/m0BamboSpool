@@ -1,6 +1,7 @@
 # Custom m0BamboSpool entry point; keeps local extensions outside upstream app.py.
 import os
 import math
+import json
 import logging
 import builtins
 import socket
@@ -174,7 +175,10 @@ def _readonly_augment_tray(spool_list, tray_data, ams_id, tray_id):
             if str(tray.get("id")) != str(tray_id):
                 continue
             tray_uuid = str(tray.get("tray_uuid") or "").strip()
-            uuid_empty = not tray_uuid
+            uuid_empty = (
+                not tray_uuid
+                or tray_uuid == "00000000000000000000000000000000"
+            )
             tray_color = str(tray.get("tray_color") or "").strip().upper()
             tray_data["ams_empty"] = (
                 uuid_empty
@@ -270,7 +274,7 @@ _MOS_HISTORY_PAGE_SIZE = 20
 _original_get_prints_with_filament = print_history_service.get_prints_with_filament
 
 def _get_prints_with_mos_pagination(limit=None, offset=None, include_deleted=False):
-    """Apply MOS pagination without changing the upstream history route."""
+    # Apply MOS pagination without changing the upstream history route.
     if not has_request_context() or request.endpoint != "print_history":
         return _original_get_prints_with_filament(limit, offset, include_deleted)
 
@@ -278,11 +282,30 @@ def _get_prints_with_mos_pagination(limit=None, offset=None, include_deleted=Fal
         page = max(int(request.args.get("page", 1)), 1)
     except (TypeError, ValueError):
         page = 1
+    requested_print_id = request.args.get("print_id")
+    if requested_print_id:
+        target_page = print_history_service.get_print_page(
+            requested_print_id,
+            _MOS_HISTORY_PAGE_SIZE,
+            include_deleted=include_deleted,
+        )
+        if target_page is not None:
+            page = target_page
+    g.mos_history_page = page
     prints, total_prints = _original_get_prints_with_filament(
         limit=_MOS_HISTORY_PAGE_SIZE,
         offset=(page - 1) * _MOS_HISTORY_PAGE_SIZE,
         include_deleted=include_deleted,
     )
+    max_page = max(1, math.ceil(total_prints / _MOS_HISTORY_PAGE_SIZE))
+    if page > max_page:
+        page = max_page
+        g.mos_history_page = page
+        prints, total_prints = _original_get_prints_with_filament(
+            limit=_MOS_HISTORY_PAGE_SIZE,
+            offset=(page - 1) * _MOS_HISTORY_PAGE_SIZE,
+            include_deleted=include_deleted,
+        )
     g.mos_history_total_prints = total_prints
     return prints, total_prints
 
@@ -290,9 +313,9 @@ print_history_service.get_prints_with_filament = _get_prints_with_mos_pagination
 _original_app_render_template = _m0bambospool_app_module.render_template
 
 def _history_page_controls_script(page, total_pages):
-    """Add numbered history pages after the untouched upstream template renders."""
+    # Add numbered history pages after the untouched upstream template renders.
     return f'''<script>
-(() => {{
+window.m0InitHistoryPagination = window.m0InitHistoryPagination || (() => {{
   const currentPage = {page};
   const totalPages = {total_pages};
   const pageUrl = (targetPage) => {{
@@ -311,7 +334,7 @@ def _history_page_controls_script(page, total_pages):
     item.appendChild(link);
     list.appendChild(item);
   }};
-  document.querySelectorAll('nav[aria-label="Print history pagination"] ul').forEach((list) => {{
+  document.querySelectorAll('nav.print-history-pagination ul').forEach((list) => {{
     const items = Array.from(list.children);
     const previous = items[0];
     const next = items.at(-1);
@@ -335,7 +358,8 @@ def _history_page_controls_script(page, total_pages):
     list.insertBefore(previous, list.firstChild);
     list.appendChild(next);
   }});
-}})();
+}});
+window.m0InitHistoryPagination();
 </script>'''
 
 def _render_template_with_printer_progress(template_name, *args, **kwargs):
@@ -346,9 +370,24 @@ def _render_template_with_printer_progress(template_name, *args, **kwargs):
                 requested_page = max(int(request.args.get("page", 1)), 1)
             except (TypeError, ValueError):
                 requested_page = 1
+            requested_page = getattr(g, "mos_history_page", requested_page)
             kwargs["page"] = requested_page
             kwargs["per_page"] = _MOS_HISTORY_PAGE_SIZE
             kwargs["total_pages"] = max(1, math.ceil(total_prints / _MOS_HISTORY_PAGE_SIZE))
+        filter_options = print_history_service.get_history_filter_options(
+            request.args.get("show_deleted") == "1"
+        )
+        status_options = []
+        for status_key in filter_options["statuses"]:
+            status_label = _m0bambospool_app_module.LAYER_TRACKING_STATUS_DISPLAY.get(
+                status_key, (status_key.title(), "secondary")
+            )[0]
+            status_options.append({
+                "value": status_label.lower(),
+                "label": _ui_text(status_label),
+            })
+        kwargs["history_filter_dates"] = filter_options["dates"]
+        kwargs["history_filter_statuses"] = status_options
         requested_print_id = request.args.get("print_id")
         try:
             requested_print_id = int(requested_print_id) if requested_print_id is not None else None
@@ -1025,7 +1064,6 @@ def inject_m0bambospool_version():
         "ams_operation_pending": mqtt_bambulab.is_any_ams_operation_pending(),
         "pending_nfc": pending_nfc,
         "active_print_id": print_history_service.get_latest_active_print_id(),
-        "spoolman_public_url": _SPOOLMAN_PUBLIC_BASE_URL,
     }
 
 
@@ -1067,6 +1105,15 @@ def livecam():
 def inventory():
     # Show the Spoolman inventory together with print consumption history.
     inventory_rows = []
+    inventory_fill_context = None
+    if request.args.get("fill") == "1":
+        try:
+            inventory_fill_context = {
+                "ams_id": int(request.args["ams"]),
+                "tray_id": int(request.args["tray"]),
+            }
+        except (KeyError, TypeError, ValueError):
+            inventory_fill_context = None
     try:
         spools = spool_data.list_spools(include_archived=False)
     except Exception as exc:
@@ -1098,13 +1145,66 @@ def inventory():
         colors = inventory_db.list_colors()
         filaments = inventory_db.list_filaments()
         local_spools = inventory_db.list_spools(include_archived=True)
-        active_spool_ids = {int(spool["id"]) for spool in local_spools if spool.get("active_print_locked")}
+        inventory_last_used = {
+            str(item["spool"].get("id")): item.get("last_used")
+            for item in inventory_rows
+            if item.get("spool", {}).get("id") is not None and item.get("last_used")
+        }
+        for spool in local_spools:
+            # Keep the editor in sync with the inventory backend's authoritative
+            # timestamp, including values stored as ISO strings with a `T`.
+            backend_last_used = inventory_last_used.get(str(spool.get("id")))
+            if backend_last_used:
+                spool["last_used"] = backend_last_used
+            # The editor displays the read-only value using the central
+            # locale-aware formatter instead of the browser's native locale.
+            spool["last_used_display"] = format_ui_datetime(spool.get("last_used"), _ui_language())
+        # Include ownership metadata so a tag already assigned to another
+        # spool can be shown but not selected in the spool editor.
+        nfc_tags = inventory_db.list_nfc_tags(include_assignment=True)
+        local_spools_by_id = {
+            str(spool.get("id")): spool
+            for spool in local_spools
+            if spool.get("id") is not None
+        }
         for item in inventory_rows:
             if item["spool"].get("id") is not None:
-                item["spool"]["active_print_locked"] = int(item["spool"]["id"]) in active_spool_ids
+                spool_id = int(item["spool"]["id"])
+                local_spool = local_spools_by_id.get(str(spool_id))
+                # The local inventory database is authoritative for locks.
+                # Keep all three lock states on the row consumed by the UI so
+                # NFC-bound spools retain their distinct icon as well.
+                item["spool"]["active_print_locked"] = bool(
+                    local_spool and local_spool.get("active_print_locked")
+                )
+                item["spool"]["active_ams_locked"] = bool(
+                    local_spool and local_spool.get("active_ams_locked")
+                )
+                item["spool"]["nfc_ams_locked"] = bool(
+                    local_spool and local_spool.get("nfc_ams_locked")
+                )
+                # The local catalog owns NFC assignments. Keep the tag
+                # identity on the row so the inventory can show its NFC icon
+                # independently from the AMS/print lock state.
+                if local_spool:
+                    item["spool"]["nfc_tag_id"] = local_spool.get("nfc_tag_id")
+                    item["spool"]["nfc_tag_value"] = local_spool.get("nfc_tag_value")
+                    if not item["spool"].get("nfc_tag_value"):
+                        extra = local_spool.get("extra") or {}
+                        item["spool"]["nfc_tag_value"] = extra.get("tag")
+                item["spool"]["last_used_display"] = format_ui_datetime(item.get("last_used"), _ui_language())
     except Exception as exc:
         _log(f"Local inventory editor could not load: {exc}")
-        vendors, materials, colors, filaments, local_spools = [], [], [], [], []
+        vendors, materials, colors, filaments, local_spools, nfc_tags = [], [], [], [], [], []
+    active_tray_options = []
+    for option in _inventory_service.get_printer_tray_options(PRINTER_ID):
+        option = dict(option)
+        if option.get("kind") == "external":
+            option["label"] = _ui_text("External Spool")
+        else:
+            option["label"] = f"{_ui_text('Tray')} {option.get('tray_number')}"
+        active_tray_options.append(option)
+    active_print_running = _active_print_is_running()
     return render_template(
         "inventory.html",
         inventory_rows=inventory_rows,
@@ -1117,7 +1217,80 @@ def inventory():
         inventory_filaments=filaments,
         inventory_spools=local_spools,
         inventory_colors=colors,
+        inventory_nfc_tags=nfc_tags,
+        active_tray_options=active_tray_options,
+        active_print_running=active_print_running,
+        inventory_fill_context=inventory_fill_context,
     )
+
+
+def _normalise_active_tray_value(value):
+    text = str(value or "").strip()
+    if not text or text == '""':
+        return ""
+    try:
+        decoded = json.loads(text)
+    except (TypeError, ValueError):
+        decoded = text
+    return str(decoded or "").strip()
+
+
+def _active_print_is_running():
+    if _printer_is_busy():
+        return True
+    try:
+        return print_history_service.get_latest_active_print_id() is not None
+    except Exception:
+        return False
+
+
+def _sync_local_spool_tray_assignment(spool_id, requested_value):
+    if _active_print_is_running():
+        raise ValueError(_ui_text("Das aktive Fach kann während eines Drucks nicht geändert werden."))
+    if getattr(_m0bambospool_app_module, "READ_ONLY_MODE", False):
+        raise ValueError(_ui_text("Die AMS-Zuordnung ist im Nur-Lese-Modus deaktiviert."))
+    if not mqtt_bambulab.isMqttClientConnected():
+        raise ValueError(_ui_text("MQTT ist nicht verbunden. Das Fach wurde nicht geändert."))
+    if mqtt_bambulab.is_any_ams_operation_pending():
+        raise ValueError(_ui_text("Eine AMS-Aktualisierung läuft noch. Bitte kurz warten."))
+
+    desired = _normalise_active_tray_value(requested_value)
+    options = _inventory_service.get_printer_tray_options(PRINTER_ID)
+    option_by_value = {str(option["value"]): option for option in options}
+    desired_option = option_by_value.get(desired) if desired else None
+    if desired and desired_option is None:
+        raise ValueError(_ui_text("Ungültige Fachzuordnung."))
+
+    spool = inventory_db.get_spool(spool_id)
+    current = _normalise_active_tray_value(spool.get("active_tray"))
+    if current == desired:
+        return inventory_db.update_spool_fields(spool_id, {"active_tray": desired})
+
+    if desired:
+        for other in inventory_db.list_spools(include_archived=True):
+            if int(other.get("id")) == int(spool_id):
+                continue
+            if _normalise_active_tray_value(other.get("active_tray")) == desired:
+                raise ValueError(_ui_text("Die gewählte Spule ist bereits einem anderen Fach zugeordnet."))
+
+    current_option = option_by_value.get(current) if current else None
+    if current and current_option is None:
+        raise ValueError(_ui_text("Die bisherige Fachzuordnung ist unbekannt und wurde nicht geändert."))
+
+    if current_option and not mqtt_bambulab.clear_ams_tray_assignment(
+        current_option["ams_id"], current_option["tray_id"]
+    ):
+        raise ValueError(_ui_text("Die bisherige Fachzuordnung konnte am AMS nicht gelöscht werden."))
+
+    if desired_option:
+        try:
+            _m0bambospool_app_module.setActiveSpool(
+                desired_option["ams_id"], desired_option["tray_id"], spool
+            )
+        except Exception as exc:
+            raise ValueError(f'{_ui_text("Die neue Fachzuordnung konnte am AMS nicht gesetzt werden.")} {exc}') from exc
+
+    return inventory_db.update_spool_fields(spool_id, {"active_tray": desired})
 
 
 @app.patch("/inventory/local-filaments/<int:filament_id>")
@@ -1151,6 +1324,43 @@ def create_local_filament():
     return jsonify({"saved": True, "filament": created}), 201
 
 
+@app.post("/inventory/local-filaments/<int:filament_id>/duplicate")
+def duplicate_local_filament(filament_id):
+    try:
+        source = next((item for item in inventory_db.list_filaments() if int(item["id"]) == int(filament_id)), None)
+        if not source:
+            raise KeyError(f"No filament with ID {filament_id}")
+        values = {field: source.get(field) for field in (
+            "vendor_id", "material_id", "color_id", "color_hex", "diameter", "weight",
+            "spool_weight", "price", "nozzle_temp_min", "nozzle_temp_max",
+            "cali_idx", "bambu_filament_id", "bambu_setting_id",
+        )}
+        values["name"] = f'{source.get("name") or "Filament"} (Kopie)'
+        new_id = inventory_db.save_entity("filaments", values)
+        created = next(item for item in inventory_db.list_filaments() if int(item["id"]) == int(new_id))
+    except (KeyError, TypeError, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        _log(f"Local filament duplicate failed ({filament_id}): {exc!r}")
+        return jsonify({"error": "Kopieren fehlgeschlagen."}), 500
+    return jsonify({"saved": True, "filament": created}), 201
+
+
+@app.post("/inventory/local-vendors")
+def create_local_vendor():
+    payload = request.get_json(silent=True) or {}
+    payload.setdefault("name", "Neuer Hersteller")
+    try:
+        vendor_id = inventory_db.save_entity("vendors", payload)
+        created = next(item for item in inventory_db.list_entities("vendors") if int(item["id"]) == vendor_id)
+    except (KeyError, TypeError, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        _log(f"Local vendor create failed: {exc!r}")
+        return jsonify({"error": "Anlegen fehlgeschlagen."}), 500
+    return jsonify({"saved": True, "vendor": created}), 201
+
+
 @app.patch("/inventory/local-vendors/<int:vendor_id>")
 def update_local_vendor(vendor_id):
     payload = request.get_json(silent=True) or {}
@@ -1168,12 +1378,35 @@ def update_local_vendor(vendor_id):
 def update_local_spool(spool_id):
     payload = request.get_json(silent=True) or {}
     try:
+        if "active_tray" in payload:
+            return jsonify({
+                "error": _ui_text("Die Fachzuordnung erfolgt ausschließlich auf der AMS-Seite.")
+            }), 400
         updated = inventory_db.update_spool_fields(spool_id, payload)
     except (KeyError, TypeError, ValueError) as exc:
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:
         _log(f"Local spool inline update failed ({spool_id}): {exc!r}")
         return jsonify({"error": "Speichern fehlgeschlagen."}), 500
+    return jsonify({"saved": True, "spool": updated})
+
+
+@app.post("/inventory/local-spools/<int:spool_id>/assign-tray")
+def assign_local_spool_to_tray(spool_id):
+    payload = request.get_json(silent=True) or {}
+    try:
+        ams_id = int(payload.get("ams_id"))
+        tray_id = int(payload.get("tray_id"))
+        option = next(
+            option for option in _inventory_service.get_printer_tray_options(PRINTER_ID)
+            if int(option["ams_id"]) == ams_id and int(option["tray_id"]) == tray_id
+        )
+        updated = _sync_local_spool_tray_assignment(spool_id, option["value"])
+    except (KeyError, TypeError, ValueError, StopIteration) as exc:
+        return jsonify({"error": _ui_text(str(exc))}), 400
+    except Exception as exc:
+        _log(f"Local spool AMS assignment failed ({spool_id}): {exc!r}")
+        return jsonify({"error": _ui_text("Die Spule konnte dem AMS nicht zugeordnet werden.")}), 500
     return jsonify({"saved": True, "spool": updated})
 
 
@@ -1230,14 +1463,22 @@ def delete_local_spool(spool_id):
     return jsonify({"saved": True, "deleted": spool_id})
 
 
+@app.get("/inventory/management")
+def inventory_management_index():
+    # The central administration landing page was replaced by the settings entry.
+    return redirect(url_for("bambu_cloud.index"))
+
+
 @app.get("/inventory/management/<entity>")
 def inventory_management(entity):
     # Show one local inventory catalog in its own preview page.
     entity_config = {
         "vendors": ("Hersteller", "vendors"),
         "materials": ("Materialien", "materials"),
+        "colors": ("Farben", "colors"),
         "filaments": ("Filamente", "filaments"),
         "spools": ("Spulen", "spools"),
+        "nfc-tags": ("NFC-Tags", "nfc_tags"),
     }
     if entity not in entity_config:
         return render_template("error.html", error="Unbekannte Verwaltungsseite."), 404
@@ -1265,6 +1506,10 @@ def inventory_management(entity):
             rows = inventory_db.list_spools(include_archived=True)
         elif entity == "filaments":
             rows = inventory_db.list_filaments()
+        elif entity == "colors":
+            rows = inventory_db.list_colors()
+        elif entity == "nfc-tags":
+            rows = inventory_db.list_nfc_tags(include_assignment=True)
         else:
             rows = inventory_db.list_entities(table_name)
         if form_id:
@@ -1278,8 +1523,9 @@ def inventory_management(entity):
     except Exception as exc:
         warning = "Die lokale Verwaltung ist derzeit nicht verfügbar."
         _log(f"Inventory management preview could not load {entity}: {exc!r}")
+    template_name = "nfc_management.html" if entity == "nfc-tags" else ("reference_management.html" if entity in {"materials", "colors"} else "inventory_management.html")
     return render_template(
-        "inventory_management.html",
+        template_name,
         management_entity=entity,
         management_title=title,
         management_rows=rows,
@@ -1301,6 +1547,8 @@ def inventory_management_save(entity):
     try:
         if entity == "spools":
             inventory_db.save_spool(_inventory_payload())
+        elif entity == "colors":
+            inventory_db.save_color(_inventory_payload())
         else:
             inventory_db.save_entity(entity, _inventory_payload())
     except (ValueError, KeyError, TypeError) as exc:
@@ -1315,10 +1563,23 @@ def inventory_management_save(entity):
 def inventory_management_update(entity, entity_id):
     # Update only the local catalog; the active Spoolman backend remains unchanged.
     try:
+        payload = _inventory_payload()
+        # Technical Bambu metadata is intentionally hidden from the editor, but
+        # must survive an ordinary filament edit unchanged.
+        if entity == "filaments":
+            existing = next(
+                (row for row in inventory_db.list_filaments() if int(row.get("id")) == int(entity_id)),
+                None,
+            )
+            if existing:
+                for field in ("cali_idx", "bambu_filament_id", "bambu_setting_id"):
+                    payload.setdefault(field, existing.get(field))
         if entity == "spools":
-            inventory_db.save_spool(_inventory_payload(), entity_id)
+            inventory_db.save_spool(payload, entity_id)
+        elif entity == "colors":
+            inventory_db.save_color(payload, entity_id)
         else:
-            inventory_db.save_entity(entity, _inventory_payload(), entity_id)
+            inventory_db.save_entity(entity, payload, entity_id)
     except (ValueError, KeyError, TypeError) as exc:
         return redirect(url_for("inventory_management", entity=entity, edit=entity_id, error=str(exc)))
     except Exception as exc:
@@ -1330,10 +1591,16 @@ def inventory_management_update(entity, entity_id):
 @app.post("/inventory/management/<entity>/<int:entity_id>/delete")
 def inventory_management_delete(entity, entity_id):
     # Deletion is intentionally limited to the local preview catalog.
-    if entity == "spools":
-        inventory_db.delete_entity("spools", entity_id)
-    else:
-        inventory_db.delete_entity(entity, entity_id)
+    try:
+        if entity == "spools":
+            inventory_db.delete_entity("spools", entity_id)
+        else:
+            inventory_db.delete_entity(entity, entity_id)
+    except (ValueError, KeyError, TypeError) as exc:
+        return redirect(url_for("inventory_management", entity=entity, edit=entity_id, error=str(exc)))
+    except Exception as exc:
+        _log(f"Local management delete failed ({entity} #{entity_id}): {exc!r}")
+        return redirect(url_for("inventory_management", entity=entity, edit=entity_id, error="Löschen fehlgeschlagen."))
     return redirect(url_for("inventory_management", entity=entity, saved="deleted"))
 
 
@@ -1356,8 +1623,9 @@ def inventory_save_entity(entity, entity_id=None):
     if denied:
         return denied
     try:
-        saved_id = inventory_db.save_entity(entity, _inventory_payload(), entity_id)
-        return jsonify({"ok": True, "id": saved_id})
+        payload = _inventory_payload()
+        saved_id = inventory_db.save_color(payload, entity_id) if entity == "colors" else inventory_db.save_entity(entity, payload, entity_id)
+        return jsonify({"ok": True, "id": saved_id, "record": {"id": saved_id, **payload}})
     except (ValueError, KeyError) as exc:
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:
@@ -1377,6 +1645,8 @@ def inventory_delete_entity(entity, entity_id):
     try:
         inventory_db.delete_entity(entity, entity_id)
         return jsonify({"ok": True})
+    except ValueError as exc:
+        return jsonify({"error": _ui_text(str(exc))}), 409
     except Exception as exc:
         if "FOREIGN KEY constraint failed" in str(exc):
             return jsonify({"error": "Der Eintrag wird noch verwendet und kann nicht gelöscht werden."}), 409
@@ -1384,6 +1654,40 @@ def inventory_delete_entity(entity, entity_id):
         return jsonify({"error": "Löschen fehlgeschlagen."}), 500
 
 
+@app.post("/inventory/manage/nfc-tags")
+@app.put("/inventory/manage/nfc-tags/<int:tag_id>")
+def inventory_save_nfc_tag(tag_id=None):
+    try:
+        payload = _inventory_payload()
+        if tag_id is None:
+            value = inventory_db.normalize_nfc_tag(payload.get("tag_value"))
+            if not value:
+                raise ValueError("Der Tag-Wert darf nicht leer sein")
+            inventory_db.register_nfc_tag(value)
+            tag_id = next(item["id"] for item in inventory_db.list_nfc_tags() if item["tag_value"] == value)
+            if "comment" in payload:
+                inventory_db.update_nfc_tag(tag_id, {"comment": payload.get("comment")})
+        else:
+            inventory_db.update_nfc_tag(tag_id, payload)
+        record = next(item for item in inventory_db.list_nfc_tags(include_assignment=True) if int(item["id"]) == int(tag_id))
+        return jsonify({"ok": True, "id": int(tag_id), "record": record})
+    except (ValueError, KeyError) as exc:
+        return jsonify({"error": _ui_text(str(exc))}), 400
+    except Exception as exc:
+        _log(f"Local NFC tag save failed ({tag_id}): {exc!r}")
+        return jsonify({"error": "NFC-Tag konnte nicht gespeichert werden."}), 500
+
+
+@app.delete("/inventory/manage/nfc-tags/<int:tag_id>")
+def inventory_delete_nfc_tag(tag_id):
+    try:
+        inventory_db.delete_nfc_tag(tag_id)
+        return jsonify({"ok": True})
+    except (ValueError, KeyError) as exc:
+        return jsonify({"error": _ui_text(str(exc))}), 409
+    except Exception as exc:
+        _log(f"Local NFC tag delete failed ({tag_id}): {exc!r}")
+        return jsonify({"error": "NFC-Tag konnte nicht gelöscht werden."}), 500
 @app.post("/inventory/manage/spools")
 @app.put("/inventory/manage/spools/<int:spool_id>")
 def inventory_save_spool(spool_id=None):
@@ -1550,6 +1854,13 @@ def _custom_tray_clear():
             exception="Das Fach wird noch aktualisiert. Clear ist erst nach stabilem Fachstatus möglich.",
         )
 
+    nfc_spool = inventory_service.get_nfc_bound_spool_for_tray(ams_id, tray_id)
+    if nfc_spool:
+        return render_template(
+            "error.html",
+            exception="Diese Spule wurde per NFC erkannt und kann nur durch das physische Entfernen aus dem AMS freigegeben werden.",
+        )
+
     try:
         if not mqtt_bambulab.isMqttClientConnected():
             return render_template(
@@ -1587,12 +1898,20 @@ def _block_mutating_tray_actions_while_pending():
     # refresh_ams only sends the read-only PUSH_ALL request.  It must remain
     # available while printing so Home can refresh the printer/job status;
     # mutating tray actions below remain blocked while the printer is busy.
-    if request.endpoint not in {"fill", "tray_load", "assign_bambu_spool"}:
+    guarded_endpoints = {"fill", "tray_load", "assign_bambu_spool"}
+    if request.endpoint not in guarded_endpoints:
         return None
 
     ams_id = request.args.get("ams")
     tray_id = request.args.get("tray")
     spool_id = request.args.get("spool_id")
+    if ams_id and tray_id is not None:
+        nfc_spool = _inventory_service.get_nfc_bound_spool_for_tray(ams_id, tray_id)
+        if nfc_spool and (not spool_id or str(nfc_spool.get("id")) != str(spool_id)):
+            return render_template(
+                "error.html",
+                exception="Diese Spule wurde per NFC erkannt und kann nicht manuell ersetzt werden.",
+            )
     if not ams_id or tray_id is None or not spool_id:
         return None
     if _printer_is_busy():

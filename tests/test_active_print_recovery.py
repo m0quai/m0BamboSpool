@@ -65,6 +65,58 @@ class ActivePrintRecoveryTests(unittest.TestCase):
         self.assertEqual(history.get_layer_tracking_for_prints([active])[active]["status"], "RUNNING")
         mqtt.JOBS_3MF.enqueue.assert_called_once()
 
+    def test_project_file_waits_for_active_printer_state(self):
+        project_file = {
+            "command": "project_file",
+            "url": "same-model.gcode.3mf",
+            "subtask_name": "same-model",
+            "print_type": "local",
+        }
+        mqtt.processMessage({"print": project_file})
+        self.assertIsNone(history.get_latest_active_print_id())
+        mqtt.processMessage({
+            "print": {
+                "command": "push_status",
+                "gcode_state": "IDLE",
+                "gcode_file": "same-model.gcode.3mf",
+                "subtask_name": "same-model",
+                "print_type": "local",
+                "mc_percent": 100,
+            }
+        })
+        self.assertIsNone(history.get_latest_active_print_id())
+        mqtt.processMessage({
+            "print": {
+                "command": "push_status",
+                "gcode_state": "PREPARE",
+                "gcode_file": "same-model.gcode.3mf",
+                "subtask_name": "same-model",
+                "print_type": "local",
+            }
+        })
+        current = history.get_latest_active_print_id()
+        self.assertIsNotNone(current)
+        self.assertEqual(history.get_layer_tracking_for_prints([current])[current]["status"], "PREPARING")
+        mqtt.JOBS_3MF.enqueue.assert_called_once()
+
+    def test_idle_transition_does_not_abort_active_print(self):
+        mqtt.processMessage({"print": dict(self.report)})
+        active = history.get_latest_active_print_id()
+        cancel = patch.object(mqtt.JOBS_3MF, "cancel")
+        with cancel as cancel_mock:
+            mqtt.processMessage({
+                "print": {
+                    "command": "push_status",
+                    "gcode_state": "IDLE",
+                    "gcode_file": "same-model.gcode.3mf",
+                    "subtask_name": "same-model",
+                    "print_type": "local",
+                    "mc_percent": 100,
+                }
+            })
+        self.assertEqual(history.get_layer_tracking_for_prints([active])[active]["status"], "RUNNING")
+        cancel_mock.assert_not_called()
+
     def test_reconnect_running_report_resumes_tracker_without_state_change(self):
         active = self.add_print("RUNNING", "renamed-model")
         mqtt.ACTIVE_3MF_PRINTS[f"print-{active}"] = {
@@ -210,6 +262,7 @@ class ActivePrintRecoveryTests(unittest.TestCase):
             "print_id": 7,
             "file": "model.gcode.3mf",
             "gcode_path": "Metadata/plate_2.gcode",
+            "gcode_valid": True,
         }
         with patch.object(tracker, "_handle_print_start") as start:
             tracker.start_tracking_from_cached_model(metadata, "cached-model.3mf", {})

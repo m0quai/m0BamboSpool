@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<h1 class="mb-4 text-center">{{ _('Link Bambu Spool to SpoolMan') }}</h1>
-<p class="text-center text-muted">{{ _('Bambu tag') }} <code>{{ bambu_tag }}</code> {{ _('detected in this tray. Pick the matching SpoolMan spool to bind this tag and assign the tray.') }}</p>
+<h1 class="mb-4 text-center">{{ _('Bambu-Spule zuordnen') }}</h1>
+<p class="text-center text-muted">{{ _('Bambu tag') }} <code>{{ bambu_tag }}</code> {{ _('detected in this tray. Pick the matching local spool to bind this tag and assign the tray.') }}</p>
 {% with action_bambu_link=True, materials=materials, selected_materials=selected_materials, ams_id=ams_id, tray_id=tray_id, bambu_tag=bambu_tag %}{% include 'fragments/list_spools.html' %}{% endwith %}
 {% endblock %}

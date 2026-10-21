@@ -20,19 +20,96 @@ SPOOLS = {}
 INVENTORY_SETTINGS = {}
 
 
+def _parse_last_used(value):
+  # Accept both the SQLite timestamp returned by the local repository and
+  # the ISO-8601 timestamps used by the former remote repository layer.
+  if not value:
+    return None
+  if isinstance(value, datetime):
+    dt = value
+  else:
+    text = str(value).strip()
+    if not text:
+      return None
+    normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
+    try:
+      dt = datetime.fromisoformat(normalized)
+    except ValueError:
+      return None
+  if dt.tzinfo is None:
+    dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+  return dt
+
+
 def clear_active_spool_for_tray(ams_id: int, tray_id: int) -> None:
   #
-  # Remove any SpoolMan spool that is currently tagged with the given tray UID.
+  # Remove the local spool assignment for the given tray UID.
   target = json.dumps(trayUid(ams_id, tray_id))
   for spool in fetchSpools(cached=True):
     extras = spool.get("extra") or {}
     if extras.get("active_tray") == target:
-      spool_data.update_spool_extra(spool["id"], extras, active_tray=json.dumps(""))
+      spool_data.update_spool_extra(
+        spool["id"], extras,
+        active_tray=json.dumps(""),
+        active_tray_source="system_clear",
+        active_tray_nfc_uid=json.dumps(""),
+      )
       spool.setdefault("extra", {})["active_tray"] = json.dumps("")
+      spool["extra"]["active_tray_source"] = None
+      spool["extra"]["active_tray_nfc_uid"] = None
       break
 
-def trayUid(ams_id, tray_id):
-  return f"{PRINTER_ID}_{ams_id}_{tray_id}"
+def get_nfc_bound_spool_for_tray(ams_id: int, tray_id: int):
+  target = json.dumps(trayUid(ams_id, tray_id))
+  # The local catalog is authoritative.  Check it first so a stale remote
+  # cache cannot permit a competing write into an NFC-bound tray.
+  try:
+    import inventory_database
+    for spool in inventory_database.list_spools(include_archived=True):
+      if (
+        str(spool.get("active_tray") or "") == target
+        and str(spool.get("active_tray_source") or "").lower() == "nfc"
+      ):
+        return spool
+  except Exception:
+    pass
+  for spool in fetchSpools(cached=True):
+    extras = spool.get("extra") or {}
+    if extras.get("active_tray") == target and str(extras.get("active_tray_source") or "").lower() == "nfc":
+      return spool
+  return None
+
+def trayUid(ams_id, tray_id, printer_id=None):
+  # Keep the printer serial number in every tray key so assignments remain
+  # unambiguous when a second printer is added later.
+  printer = str(PRINTER_ID if printer_id is None else printer_id or "").strip().upper()
+  return f"{printer}_{ams_id}_{tray_id}"
+
+
+def get_printer_tray_options(printer_id=None):
+  # This is the single source for the tray choices shown by the local spool
+  # editor.  The values are the same printer-specific keys used by MQTT and
+  # the inventory database; only the labels are presentation data.
+  printer = str(PRINTER_ID if printer_id is None else printer_id or "").strip().upper()
+  options = []
+  for tray_number in range(1, 5):
+    options.append({
+      "value": trayUid(0, tray_number - 1, printer_id=printer),
+      "kind": "ams",
+      "ams_id": 0,
+      "tray_id": tray_number - 1,
+      "tray_number": tray_number,
+      "printer_id": printer,
+    })
+  options.append({
+    "value": trayUid(EXTERNAL_SPOOL_AMS_ID, EXTERNAL_SPOOL_ID, printer_id=printer),
+    "kind": "external",
+    "ams_id": EXTERNAL_SPOOL_AMS_ID,
+    "tray_id": EXTERNAL_SPOOL_ID,
+    "tray_number": None,
+    "printer_id": printer,
+  })
+  return options
 
 def getAMSFromTray(n):
     return n // 4
@@ -151,6 +228,8 @@ def augmentTrayDataWithSpoolMan(spool_list, tray_data, ams_id, tray_id):
   tray_data["ams_material_missing"] = False
   tray_data["ams_material_missing_message"] = ""
   tray_data["unmapped_bambu_tag"] = ""
+  tray_data["nfc_identified"] = False
+  tray_data["nfc_uid"] = ""
   tray_data["bambu_material"] = ""
   tray_data["bambu_color"] = ""
   tray_data["bambu_vendor"] = ""
@@ -196,6 +275,7 @@ def augmentTrayDataWithSpoolMan(spool_list, tray_data, ams_id, tray_id):
     return
 
   tray_uuid = str(tray_data.get("tray_uuid") or "")
+  tray_data["nfc_uid"] = tray_uuid
   tray_uid = trayUid(ams_id, tray_id)
   target_active_tray = json.dumps(tray_uid)
 
@@ -204,10 +284,19 @@ def augmentTrayDataWithSpoolMan(spool_list, tray_data, ams_id, tray_id):
       tray_data["name"] = spool["filament"]["name"]
       tray_data["vendor"] = spool["filament"]["vendor"]["name"]
       tray_data["spool_id"] = spool["id"]
+      spool_extra = spool.get("extra") or {}
+      tray_data["nfc_identified"] = (
+        str(spool_extra.get("active_tray_source") or "").lower() == "nfc"
+        and bool(tray_uuid)
+        and str(spool_extra.get("active_tray_nfc_uid") or "").strip('"') == tray_uuid
+      )
       tray_data["spool_material"] = spool["filament"].get("material", "")
       tray_data["spool_sub_brand"] = (spool["filament"].get("extra", {}).get("type") or "").replace('"', '').strip()
       tray_data["remaining_weight"] = spool["remaining_weight"]
-      tray_data["spool_weight"] = spool["filament"].get("weight")
+      # Compare the remaining filament with the spool's configured starting
+      # filament weight.  The filament master weight can be empty for local
+      # mirrors, which would otherwise make every non-empty spool look full.
+      tray_data["spool_weight"] = spool.get("initial_weight") or spool["filament"].get("weight")
 
       # P1S LAN/Developer Mode can acknowledge ams_filament_setting successfully
       # and retain tray_info_idx while reporting an empty tray_type afterwards.
@@ -218,14 +307,16 @@ def augmentTrayDataWithSpoolMan(spool_list, tray_data, ams_id, tray_id):
         tray_type_clean = (tray_data["tray_type"] or "").strip()
 
       if "last_used" in spool:
-        try:
-            dt = datetime.strptime(spool["last_used"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=ZoneInfo("UTC"))
-        except ValueError:
-            dt = datetime.strptime(spool["last_used"], "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=ZoneInfo("UTC"))
-
-        local_time = dt.astimezone()
-        tray_data["last_used_iso"] = local_time.isoformat()
-        tray_data["last_used"] = local_time.strftime("%d.%m.%Y %H:%M")
+        dt = _parse_last_used(spool.get("last_used"))
+        if dt is None:
+          tray_data["last_used"] = "-"
+          tray_data.pop("last_used_iso", None)
+        else:
+          local_time = dt.astimezone()
+          tray_data["last_used_iso"] = local_time.isoformat()
+          # Keep the value machine-readable; templates apply the central
+          # locale-aware date/time formatter for the visible value.
+          tray_data["last_used"] = local_time.isoformat()
       else:
           tray_data["last_used"] = "-"
           tray_data.pop("last_used_iso", None)
@@ -371,7 +462,10 @@ def augmentTrayDataWithSpoolMan(spool_list, tray_data, ams_id, tray_id):
     tray_data["bambu_color"] = normalize_color_hex(tray_data.get("tray_color") or "")
     tray_data["bambu_vendor"] = "Bambu Lab"
     tray_data["bambu_sub_brand"] = tray_sub_brands_raw.strip()
-    clear_active_spool_for_tray(ams_id, tray_id)
+    # An unknown printer UID is intentionally left unresolved here.  The AMS
+    # status remains authoritative, but only a confirmed empty bay may clear a
+    # durable local assignment.  This prevents a transient/mismatched packet
+    # from detaching a spool that is still physically present.
   else:
     tray_data["unmapped_bambu_tag"] = ""
     tray_data["bambu_material"] = ""
@@ -428,20 +522,56 @@ def spendFilaments(printdata):
         spool_data.record_consumption(spool["id"], weight_grams=used_grams)
 
 
-def setActiveTray(spool_id, spool_extra, ams_id, tray_id):
+def setActiveTray(spool_id, spool_extra, ams_id, tray_id, source="manual", nfc_uid=None):
   if spool_extra is None:
     spool_extra = {}
 
-  if not spool_extra.get("active_tray") or json.loads(spool_extra.get("active_tray")) != trayUid(ams_id, tray_id):
-    spool_data.update_spool_extra(spool_id, spool_extra,
-      active_tray=json.dumps(trayUid(ams_id, tray_id)))
+  # A spool identified by NFC owns its tray until the printer reports a
+  # confirmed physical removal.  Reject every competing assignment before any
+  # local or printer state is changed, regardless of which route called us.
+  nfc_bound_spool = get_nfc_bound_spool_for_tray(ams_id, tray_id)
+  if nfc_bound_spool and int(nfc_bound_spool.get("id")) != int(spool_id):
+    raise ValueError(
+      f"Das AMS-Fach {int(tray_id) + 1} ist durch Spule #{nfc_bound_spool.get('id')} "
+      "per NFC gebunden und kann nicht überschrieben werden."
+    )
+
+  current_tray = ""
+  try:
+    current_tray = json.loads(spool_extra.get("active_tray")) if spool_extra.get("active_tray") else ""
+  except (TypeError, ValueError):
+    current_tray = str(spool_extra.get("active_tray") or "")
+  source_name = "nfc" if str(source).lower() == "nfc" else "manual"
+  normalized_nfc_uid = nfc_uid
+  if isinstance(normalized_nfc_uid, str):
+    try:
+      decoded_uid = json.loads(normalized_nfc_uid)
+      if isinstance(decoded_uid, str):
+        normalized_nfc_uid = decoded_uid
+    except (TypeError, ValueError):
+      pass
+  source_already_set = str(spool_extra.get("active_tray_source") or "").lower() == source_name
+  if current_tray != trayUid(ams_id, tray_id) or not source_already_set:
+    spool_data.update_spool_extra(
+      spool_id, spool_extra,
+      active_tray=json.dumps(trayUid(ams_id, tray_id)),
+      active_tray_source="nfc" if str(source).lower() == "nfc" else "manual",
+      active_tray_nfc_uid=json.dumps(str(normalized_nfc_uid or "").strip().upper()) if source_name == "nfc" and normalized_nfc_uid else json.dumps(""),
+    )
 
     # Remove active tray from inactive spools
     for old_spool in fetchSpools(cached=False):
       if int(spool_id) != old_spool["id"] and old_spool.get("extra") and old_spool["extra"].get("active_tray") and json.loads(old_spool["extra"]["active_tray"]) == trayUid(ams_id, tray_id):
-        spool_data.update_spool_extra(old_spool["id"], old_spool["extra"], active_tray=json.dumps(""))
+        spool_data.update_spool_extra(
+          old_spool["id"], old_spool["extra"],
+          active_tray=json.dumps(""),
+          active_tray_source="system_clear",
+          active_tray_nfc_uid=json.dumps(""),
+        )
   else:
-    log("Skipping set active tray")
+    # The assignment is already current.  Do not flood the application log
+    # on every repeated AMS status packet.
+    return
 
 # Fetch spools from spoolman
 def fetchSpools(cached=False):
@@ -450,7 +580,7 @@ def fetchSpools(cached=False):
     try:
       fresh_spools = spool_data.list_spools()
     except Exception as exc:
-      log(f"Spoolman spool list unavailable: {exc}")
+      log(f"Local spool list unavailable: {exc}")
       return SPOOLS if isinstance(SPOOLS, list) else []
     SPOOLS = fresh_spools
 

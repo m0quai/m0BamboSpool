@@ -28,11 +28,12 @@
     <div class="row mb-2">
       <div class="col-6">
         <p class="mb-1"><strong>{{ _('Remaining Weight:') }}</strong> {{ format_number(current_spool.remaining_weight) }}g</p>
-        <p class="mb-1"><strong>{{ _('Remaining Length:') }}</strong> {{ format_number(current_spool.remaining_length, 0) }}mm</p>
+        <p class="mb-1"><strong>{{ _('Remaining Length:') }}</strong> {{ format_number(current_spool.get('remaining_length'), 0) }}mm</p>
       </div>
       <div class="col-6">
-        <p class="mb-1"><strong>{{ _('Nozzle Temp:') }}</strong> {{ current_spool.filament.extra.nozzle_temperature }}</p>
-        <p class="mb-1"><a href="{{ SPOOLMAN_BASE_URL }}/spool/show/{{ current_spool.id }}" target="m0bambospool-spoolman" data-spoolman-window="true">{{ _('view in spoolman') }} <i class="bi bi-box-arrow-up-right"></i></a></p>
+        {% set filament_extra = current_spool.filament.get('extra', {}) if current_spool.filament else {} %}
+        <p class="mb-1"><strong>{{ _('Nozzle Temp:') }}</strong> {{ filament_extra.get('nozzle_temperature', '-') }}</p>
+        <p class="mb-1"><a href="{{ url_for('inventory') }}?spool_id={{ current_spool.id }}">{{ _('Spule im Inventar öffnen') }} <i class="bi bi-box-arrow-up-right"></i></a></p>
       </div>
     </div>
   </div>

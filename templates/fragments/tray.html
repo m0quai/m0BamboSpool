@@ -18,6 +18,9 @@
           - {{ tray_data.tray_type }}{% if tray_data.tray_sub_brand %} {{ tray_data.tray_sub_brand }}{% endif %}
         {% endif %}
       </div>
+      {% if tray_data.get('nfc_identified') %}
+        <i class="bi bi-lock-fill text-warning" title="{{ _('Per NFC identifiziert und gesperrt') }}" aria-label="{{ _('Per NFC identifiziert und gesperrt') }}"></i>
+      {% endif %}
     </div>
     {% if tray_data.tray_color and tray_data.spool_id and not physically_empty %}
       {% if tray_data.color_mismatch %}
@@ -89,7 +92,7 @@
       {% if tray_data.spool_material and not physically_empty %}
         <!-- Farbname + Badge -->
         <div class="col-12 d-flex flex-column align-items-center mb-2">
-          <a class="spool-color-info rounded p-2 text-center text-decoration-none d-block" href="{{ spoolman_public_url }}/spool/show/{{ tray_data.spool_id }}" target="m0bambospool-spoolman" data-spoolman-window="true" style="border: 1px solid #212529 !important;">
+          <a class="spool-color-info rounded p-2 text-center text-decoration-none d-block" href="{{ url_for('inventory') }}?spool_id={{ tray_data.spool_id }}" style="border: 1px solid #212529 !important;">
             <!-- Farbname -->
             <div class="fw-semibold mb-1 text-center">
               {{ tray_data.name }}
@@ -126,7 +129,7 @@
           {% if tray_data.last_used and tray_data.last_used != '-' %}
             <div class="mt-2 d-flex flex-column flex-sm-row justify-content-center">
               <div class="me-sm-1">{{ _('Last used:') }}</div>
-              <div class="fw-bold">{{ format_datetime(tray_data.last_used_iso) if tray_data.last_used_iso else tray_data.last_used }}</div>
+              <div class="fw-bold">{{ format_datetime(tray_data.last_used_iso or tray_data.last_used) }}</div>
             </div>
           {% endif %}
           <!-- Remaining -->
@@ -161,30 +164,32 @@
           {% endif %}
           <div class="d-flex justify-content-center align-items-center" style="min-height: 120px;">
             <a class="btn btn-sm btn-warning rounded-pill px-2 py-1"
-               href="{{ url_for('assign_bambu_spool', ams=ams_id, tray=tray_id, tag=tray_data.unmapped_bambu_tag) }}">{{ _('Link to Spoolman') }}</a>
+               href="{{ url_for('assign_bambu_spool', ams=ams_id, tray=tray_id, tag=tray_data.unmapped_bambu_tag) }}">{{ _('Spule zuordnen') }}</a>
           </div>
         </div>
       {% endif %}
     </div>
   </div>
 
-  {% set tray_actions_locked = printer_is_busy or ams_operation_pending or tray_data.get('ams_loading', False) %}
-  {% if (pick_tray and not physically_empty) or (not pick_tray and not tray_actions_locked and (tray_data.spool_material or not physically_empty)) %}
+  {% set tray_actions_locked = printer_is_busy or ams_operation_pending or tray_data.get('ams_loading', False) or tray_data.get('nfc_identified', False) %}
+  {# An empty tray must remain manually assignable. The printer-reported
+     empty state is precisely the point at which the Fill action is needed. #}
+  {% if (pick_tray and not physically_empty) or (not pick_tray and not tray_actions_locked) %}
   <div class="card-footer text-center">
     {% if pick_tray and not physically_empty %}
       <a class="btn btn-sm btn-primary rounded-pill px-2 py-1"
          href="{{ url_for('tray_load', spool_id=current_spool['id'], tag_id=tag_id, ams=ams_id, tray=tray_id) }}">{{ _('Assign') }}</a>
     {% endif %}
     {% if not pick_tray and not tray_actions_locked %}
-      {% if tray_data.spool_material %}
+      {% if tray_data.spool_material and not tray_data.get('nfc_identified', False) %}
         <form method="post" action="{{ url_for('tray_clear') }}" class="d-inline">
           <input type="hidden" name="ams" value="{{ ams_id }}">
           <input type="hidden" name="tray" value="{{ tray_id }}">
         <button type="submit" class="btn btn-sm btn-outline-danger rounded-pill px-2 py-1"{% if tray_actions_locked %} disabled title="{{ _('Während ein AMS-Fach aktualisiert wird, deaktiviert') }}"{% endif %}><i class="bi bi-trash3"></i> {{ _('Clear') }}</button>
         </form>
-      {% elif not physically_empty %}
+      {% elif not tray_data.get('nfc_identified', False) %}
         <a class="btn btn-sm btn-primary rounded-pill px-2 py-1{% if tray_actions_locked %} disabled{% endif %}"
-               href="{{ url_for('fill', ams=ams_id, tray=tray_id) }}"{% if tray_actions_locked %} aria-disabled="true" tabindex="-1" title="{{ _('Während ein AMS-Fach aktualisiert wird, deaktiviert') }}"{% endif %}><i class="bi bi-plus-circle"></i> {{ _('Fill') }}</a>
+               href="{{ url_for('inventory', fill=1, ams=ams_id, tray=tray_id) }}"{% if tray_actions_locked %} aria-disabled="true" tabindex="-1" title="{{ _('Während ein AMS-Fach aktualisiert wird, deaktiviert') }}"{% endif %}><i class="bi bi-plus-circle"></i> {{ _('Fill') }}</a>
       {% endif %}
     {% endif %}
   </div>

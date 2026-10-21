@@ -276,6 +276,8 @@ def api_assign_tray(printer_id: str, tray_index: int):
     # Reuse the existing assignment logic from app.setActiveSpool to keep behavior aligned with /fill.
     from app import setActiveSpool  # Local import to avoid circular dependency at module load time
     setActiveSpool(ams_id, resolved_tray, spool_data)
+  except ValueError as exc:
+    return json_error("TRAY_NFC_LOCKED", str(exc), 409)
   except Exception as exc:
     traceback.print_exc()
     return json_error("ASSIGN_FAILED", f"Failed to assign spool '{spool_id}' to tray '{tray_index}': {exc}", 500)
@@ -307,6 +309,15 @@ def api_unassign_tray(printer_id: str, tray_index: int):
 
     if not spool or spool.get("id") is None:
       return json_error("SPOOL_NOT_FOUND", "No spool assigned to this tray", 404)
+
+    ams_id, _ = _resolve_tray_context(tray_index)
+    nfc_spool = inventory_service.get_nfc_bound_spool_for_tray(ams_id, tray_index) if ams_id is not None else None
+    if nfc_spool and str(nfc_spool.get("id")) == str(spool.get("id")):
+      return json_error(
+        "TRAY_NFC_LOCKED",
+        "Diese Spule wurde per NFC erkannt und kann nur durch das physische Entfernen aus dem AMS freigegeben werden.",
+        409,
+      )
 
     extras = spool.get("extra") or {}
     spool_repo.update_spool_extra(spool["id"], extras, active_tray="")

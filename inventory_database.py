@@ -1,6 +1,9 @@
 """Local, normalized spool inventory stored in the shared m0BamboSpool DB."""
 
 import sqlite3
+import json
+import threading
+from functools import wraps
 from datetime import datetime, timezone
 from typing import Any
 
@@ -11,13 +14,33 @@ DEFAULT_MATERIALS = (
     "PLA", "PLA+", "PETG", "ABS", "ASA", "TPU", "PA", "PC", "PVA", "HIPS",
 )
 
+_INITIALIZE_LOCK = threading.RLock()
+
+
+def _synchronized_initialize(function):
+    @wraps(function)
+    def wrapper(*args, **kwargs):
+        with _INITIALIZE_LOCK:
+            return function(*args, **kwargs)
+    return wrapper
+
+
+class _ClosingConnection(sqlite3.Connection):
+    # sqlite's context manager commits or rolls back but does not close the
+    # connection; close it here so temporary databases can be removed safely.
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
 
 def _connect() -> sqlite3.Connection:
     if DATABASE_TYPE != "sqlite":
         raise RuntimeError(f"Unsupported inventory database type: {DATABASE_TYPE}")
     path = DATABASE_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, timeout=15)
+    conn = sqlite3.connect(path, timeout=15, factory=_ClosingConnection)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -40,6 +63,71 @@ def _number(value: Any) -> float:
     return float(value)
 
 
+def _temperature_range(value: Any) -> tuple[int | None, int | None]:
+    # Normalize legacy single/range values into the two printer fields.
+    if value in (None, ""):
+        return None, None
+    current = value
+    for _ in range(2):
+        if not isinstance(current, str):
+            break
+        text = current.strip()
+        try:
+            decoded = json.loads(text)
+        except (TypeError, ValueError):
+            break
+        if decoded == current:
+            break
+        current = decoded
+    if isinstance(current, (list, tuple)):
+        values = list(current)
+        if len(values) >= 2:
+            return int(float(values[0])), int(float(values[1]))
+        if len(values) == 1:
+            value = values[0]
+        else:
+            return None, None
+    text = str(current).strip().strip("[]()")
+    parts = [part.strip() for part in text.replace(";", ",").split(",") if part.strip()]
+    if len(parts) >= 2:
+        return int(float(parts[0])), int(float(parts[1]))
+    try:
+        number = int(float(parts[0] if parts else text))
+    except (TypeError, ValueError):
+        return None, None
+    return number, number
+
+
+def _normalize_hex(value: Any) -> str:
+    raw = str(value or "").strip().lstrip("#")
+    if len(raw) != 6 or any(char not in "0123456789abcdefABCDEF" for char in raw):
+        raise ValueError("Ungültiger Farbcode")
+    return raw.upper()
+
+
+def _rgb_components(hex_code: Any) -> tuple[int, int, int]:
+    normalized = _normalize_hex(hex_code)
+    return int(normalized[0:2], 16), int(normalized[2:4], 16), int(normalized[4:6], 16)
+
+
+def _rgb_hex(values: dict[str, Any]) -> str:
+    components = []
+    for field in ("red", "green", "blue"):
+        raw = values.get(field)
+        if raw in (None, ""):
+            return ""
+        number = _number(raw)
+        if int(number) != number or number < 0 or number > 255:
+            raise ValueError("RGB-Werte müssen ganze Zahlen von 0 bis 255 sein")
+        components.append(int(number))
+    return "".join(f"{component:02X}" for component in components)
+
+
+def _canonical_nfc_value(value: Any) -> str:
+    return str(value or "").strip().upper().replace(":", "-")
+
+
+@_synchronized_initialize
 def initialize() -> None:
     with _connect() as conn:
         conn.executescript("""
@@ -54,7 +142,7 @@ def initialize() -> None:
             CREATE TABLE IF NOT EXISTS colors (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL COLLATE NOCASE UNIQUE,
-                hex_code TEXT NOT NULL COLLATE NOCASE UNIQUE
+                hex_code TEXT NOT NULL COLLATE NOCASE
             );
             CREATE TABLE IF NOT EXISTS filaments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,9 +154,8 @@ def initialize() -> None:
                 weight REAL,
                 spool_weight REAL,
                 price REAL,
-                extruder_temp INTEGER,
-                bed_temp INTEGER,
-                nozzle_temp INTEGER,
+                nozzle_temp_min INTEGER,
+                nozzle_temp_max INTEGER,
                 cali_idx INTEGER,
                 bambu_filament_id TEXT,
                 bambu_setting_id TEXT,
@@ -83,13 +170,20 @@ def initialize() -> None:
                 initial_weight REAL,
                 spool_weight REAL,
                 weight_correction REAL NOT NULL DEFAULT 0,
-                tag TEXT,
+                nfc_tag_id INTEGER,
                 active_tray TEXT,
+                active_tray_source TEXT,
+                active_tray_nfc_uid TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
-            CREATE UNIQUE INDEX IF NOT EXISTS ux_spools_tag
-                ON spools(tag COLLATE NOCASE) WHERE tag IS NOT NULL AND trim(tag) <> '';
+            CREATE TABLE IF NOT EXISTS nfc_tags (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tag_value TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                comment TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS inventory_migrations (
                 name TEXT PRIMARY KEY,
                 completed_at TEXT NOT NULL
@@ -103,16 +197,115 @@ def initialize() -> None:
                 created_at TEXT NOT NULL
             );
         """)
-        conn.executemany(
-            "INSERT OR IGNORE INTO materials(name) VALUES (?)",
-            [(name,) for name in DEFAULT_MATERIALS],
-        )
+        # Older databases declared the hex value UNIQUE.  Hex values describe
+        # a color only; multiple named colors may intentionally share one.
+        color_indexes = conn.execute("PRAGMA index_list(colors)").fetchall()
+        hex_unique = False
+        for index in color_indexes:
+            if not index[2]:
+                continue
+            index_columns = [row[2] for row in conn.execute(f'PRAGMA index_info("{index[1]}")')]
+            if "hex_code" in index_columns:
+                hex_unique = True
+                break
+        if hex_unique:
+            # Recreate dependent views after the table swap so SQLite does not
+            # retain a view definition pointing at the temporary table.
+            conn.execute("DROP VIEW IF EXISTS v_filaments")
+            conn.execute("DROP VIEW IF EXISTS v_spool_usage")
+            conn.execute("PRAGMA foreign_keys = OFF")
+            conn.execute("BEGIN")
+            conn.execute("""
+                CREATE TABLE colors_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                    hex_code TEXT NOT NULL COLLATE NOCASE
+                )
+            """)
+            conn.execute(
+                "INSERT INTO colors_new(id, name, hex_code) SELECT id, name, hex_code FROM colors"
+            )
+            conn.execute("DROP TABLE colors")
+            conn.execute("ALTER TABLE colors_new RENAME TO colors")
+            conn.commit()
+            conn.execute("PRAGMA foreign_keys = ON")
+        spool_columns = {row["name"] for row in conn.execute("PRAGMA table_info(spools)")}
+        if "nfc_tag_id" not in spool_columns:
+            conn.execute("ALTER TABLE spools ADD COLUMN nfc_tag_id INTEGER")
+        if "active_tray_source" not in spool_columns:
+            conn.execute("ALTER TABLE spools ADD COLUMN active_tray_source TEXT")
+        if "active_tray_nfc_uid" not in spool_columns:
+            conn.execute("ALTER TABLE spools ADD COLUMN active_tray_nfc_uid TEXT")
+        if "tag" in spool_columns:
+            # Migrate the former inline tag values into the NFC catalog before
+            # removing the redundant column from the spool table.
+            for legacy in conn.execute("SELECT id, tag, nfc_tag_id FROM spools WHERE tag IS NOT NULL AND trim(tag) <> ''").fetchall():
+                if legacy["nfc_tag_id"]:
+                    continue
+                tag_value = _canonical_nfc_value(legacy["tag"])
+                if not tag_value:
+                    continue
+                now = _now()
+                conn.execute(
+                    "INSERT INTO nfc_tags(tag_value, comment, created_at, updated_at) VALUES (?, NULL, ?, ?) "
+                    "ON CONFLICT(tag_value) DO UPDATE SET updated_at = excluded.updated_at",
+                    (tag_value, now, now),
+                )
+                tag_row = conn.execute("SELECT id FROM nfc_tags WHERE tag_value = ?", (tag_value,)).fetchone()
+                if tag_row:
+                    conn.execute("UPDATE spools SET nfc_tag_id = ? WHERE id = ?", (int(tag_row["id"]), int(legacy["id"])))
+            conn.execute("DROP INDEX IF EXISTS ux_spools_tag")
+            try:
+                conn.execute("ALTER TABLE spools DROP COLUMN tag")
+            except sqlite3.OperationalError:
+                # Older SQLite versions keep the legacy column physically, but
+                # all application queries ignore it after this migration.
+                pass
+            spool_columns.discard("tag")
+        nfc_columns = {row["name"] for row in conn.execute("PRAGMA table_info(nfc_tags)")}
+        if "comment" not in nfc_columns:
+            conn.execute("ALTER TABLE nfc_tags ADD COLUMN comment TEXT")
+        if "spool_id" in nfc_columns:
+            # Move the legacy reverse reference into the spool-owned foreign
+            # key before removing that column from the NFC catalog.
+            conn.execute(
+                "UPDATE spools SET nfc_tag_id = ("
+                "SELECT nt.id FROM nfc_tags nt WHERE nt.spool_id = spools.id) "
+                "WHERE nfc_tag_id IS NULL AND EXISTS ("
+                "SELECT 1 FROM nfc_tags nt WHERE nt.spool_id = spools.id)"
+            )
+            conn.execute("DROP INDEX IF EXISTS idx_nfc_tags_spool_id")
+            try:
+                conn.execute("ALTER TABLE nfc_tags DROP COLUMN spool_id")
+            except sqlite3.OperationalError:
+                # Older SQLite versions may not support DROP COLUMN.  The
+                # application still ignores the legacy column when present.
+                pass
+            nfc_columns.discard("spool_id")
+        # Do not allocate AUTOINCREMENT values for rows that already exist.
+        existing_materials = {
+            str(row[0]).casefold()
+            for row in conn.execute("SELECT name FROM materials")
+        }
+        for name in DEFAULT_MATERIALS:
+            key = str(name).casefold()
+            if key not in existing_materials:
+                conn.execute("INSERT INTO materials(name) VALUES (?)", (name,))
+                existing_materials.add(key)
         # The initial palette is kept locally so every color selector uses the
         # same editable source instead of a hard-coded template list.
-        conn.executemany(
-            "INSERT OR IGNORE INTO colors(name, hex_code) VALUES (?, ?)",
-            [(name, hex_code.upper()) for name, hex_code in SUNLU_COLOR_OPTIONS],
-        )
+        existing_color_names = {
+            str(row[0]).casefold() for row in conn.execute("SELECT name FROM colors")
+        }
+        for name, hex_code in SUNLU_COLOR_OPTIONS:
+            normalized_hex = str(hex_code).replace("#", "").upper()
+            name_key = str(name).casefold()
+            if name_key not in existing_color_names:
+                conn.execute(
+                    "INSERT INTO colors(name, hex_code) VALUES (?, ?)",
+                    (name, normalized_hex),
+                )
+                existing_color_names.add(name_key)
         # Keep migrations compatible with osm.db files created before Bambu
         # profile IDs became part of the internal filament record.
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(filaments)")}
@@ -140,6 +333,33 @@ def initialize() -> None:
         if "density" in columns:
             conn.execute("ALTER TABLE filaments DROP COLUMN density")
             columns.remove("density")
+        if "nozzle_temp_min" not in columns:
+            conn.execute("ALTER TABLE filaments ADD COLUMN nozzle_temp_min INTEGER")
+            columns.add("nozzle_temp_min")
+        if "nozzle_temp_max" not in columns:
+            conn.execute("ALTER TABLE filaments ADD COLUMN nozzle_temp_max INTEGER")
+            columns.add("nozzle_temp_max")
+        if "nozzle_temp" in columns:
+            for row in conn.execute("SELECT id, nozzle_temp FROM filaments WHERE nozzle_temp IS NOT NULL").fetchall():
+                minimum, maximum = _temperature_range(row["nozzle_temp"])
+                conn.execute(
+                    "UPDATE filaments SET nozzle_temp_min = COALESCE(nozzle_temp_min, ?), "
+                    "nozzle_temp_max = COALESCE(nozzle_temp_max, ?) WHERE id = ?",
+                    (minimum, maximum, row["id"]),
+                )
+        legacy_columns = [column for column in ("extruder_temp", "bed_temp", "nozzle_temp") if column in columns]
+        if legacy_columns:
+            # Drop views that use SELECT f.* before removing obsolete columns.
+            conn.execute("DROP VIEW IF EXISTS v_filaments")
+            conn.execute("DROP VIEW IF EXISTS v_spool_usage")
+            for column in legacy_columns:
+                try:
+                    conn.execute(f"ALTER TABLE filaments DROP COLUMN {column}")
+                    columns.remove(column)
+                except sqlite3.OperationalError:
+                    # Older SQLite versions may retain the legacy columns;
+                    # all application queries still ignore them.
+                    pass
         for column, definition in (
             ("bambu_filament_id", "TEXT"),
             ("bambu_setting_id", "TEXT"),
@@ -152,13 +372,30 @@ def initialize() -> None:
         conn.executescript("""
             DROP VIEW IF EXISTS v_filaments;
             CREATE VIEW v_filaments AS
-            SELECT f.*, c.name AS color_name, c.hex_code AS color_hex,
+            SELECT f.id, f.vendor_id, f.material_id, f.name, f.color_id,
+                   f.diameter, f.weight, f.spool_weight, f.price,
+                   f.nozzle_temp_min, f.nozzle_temp_max, f.cali_idx,
+                   f.bambu_filament_id, f.bambu_setting_id,
+                   f.created_at, f.updated_at,
+                   c.name AS color_name, c.hex_code AS color_hex,
                    v.name AS vendor_name, m.name AS material_name
             FROM filaments f
             LEFT JOIN colors c ON c.id = f.color_id
             LEFT JOIN vendors v ON v.id = f.vendor_id
             LEFT JOIN materials m ON m.id = f.material_id;
         """)
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'spool_usage'").fetchone():
+            conn.executescript("""
+                DROP VIEW IF EXISTS v_spool_usage;
+                CREATE VIEW v_spool_usage AS
+                SELECT u.*, f.name AS filament_name, m.name AS material_name,
+                       c.hex_code AS color_hex
+                FROM spool_usage u
+                LEFT JOIN spools s ON s.id = u.spool_id
+                LEFT JOIN filaments f ON f.id = s.filament_id
+                LEFT JOIN materials m ON m.id = f.material_id
+                LEFT JOIN colors c ON c.id = f.color_id;
+            """)
 
 
 def _color_id(conn: sqlite3.Connection, value: Any) -> int | None:
@@ -207,16 +444,16 @@ def import_spoolman(vendors: list[dict[str, Any]], filaments: list[dict[str, Any
                 vendor_id = vendor["id"]
             material_name = filament.get("material")
             material_id = _import_named(conn, "materials", None, material_name) if material_name else None
+            nozzle_min, nozzle_max = _temperature_range(_extra_value(filament.get("extra"), "nozzle_temperature"))
             conn.execute(
                 """INSERT OR IGNORE INTO filaments
                    (id, vendor_id, material_id, name, color_id, diameter, weight, spool_weight, price,
-                    extruder_temp, bed_temp, nozzle_temp, cali_idx, bambu_filament_id, bambu_setting_id, created_at, updated_at)
+                    nozzle_temp_min, nozzle_temp_max, cali_idx, bambu_filament_id, bambu_setting_id, created_at, updated_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (filament_id, vendor_id, material_id, filament.get("name") or f"Filament {filament_id}",
                  _color_id(conn, filament.get("color_id") or filament.get("color_hex")), _db_value(filament.get("diameter")) or 1.75,
                  _db_value(filament.get("weight")), _db_value(filament.get("spool_weight")), _db_value(filament.get("price")),
-                 _db_value(filament.get("settings_extruder_temp")), _db_value(filament.get("settings_bed_temp")),
-                 _db_value(_extra_value(filament.get("extra"), "nozzle_temperature")), _db_value(_extra_value(filament.get("extra"), "cali_idx")),
+                 nozzle_min, nozzle_max, _db_value(_extra_value(filament.get("extra"), "cali_idx")),
                  _db_value(_extra_value(filament.get("extra"), "filament_id")), _db_value(_extra_value(filament.get("extra"), "setting_id")), now, now),
             )
         for spool in spools:
@@ -226,18 +463,17 @@ def import_spoolman(vendors: list[dict[str, Any]], filaments: list[dict[str, Any
                 continue
             extras = spool.get("extra") or {}
             tag = _extra_value(extras, "tag")
-            if tag and conn.execute("SELECT 1 FROM spools WHERE tag = ? COLLATE NOCASE", (str(tag),)).fetchone():
-                tag = None
+            nfc_tag_id = _ensure_nfc_catalog_value(conn, tag)
             conn.execute(
                 """INSERT OR IGNORE INTO spools
-                   (id, filament_id, price, archived, initial_weight, spool_weight, weight_correction, tag, active_tray, created_at, updated_at)
+                   (id, filament_id, price, archived, initial_weight, spool_weight, weight_correction, nfc_tag_id, active_tray, created_at, updated_at)
                    VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)""",
                 (spool.get("id"), filament_id,
                  spool.get("price") if spool.get("price") is not None else filament.get("price"),
                  int(bool(spool.get("archived"))),
                  spool.get("initial_weight") if spool.get("initial_weight") is not None else filament.get("weight"),
                  spool.get("spool_weight") if spool.get("spool_weight") is not None else filament.get("spool_weight"),
-                 tag, _extra_value(extras, "active_tray"), now, now),
+                 nfc_tag_id, _extra_value(extras, "active_tray"), now, now),
             )
             imported += 1
         conn.execute("INSERT INTO inventory_migrations(name, completed_at) VALUES ('spoolman-import', ?)", (now,))
@@ -271,6 +507,168 @@ def _db_value(value: Any) -> Any:
     return value
 
 
+def normalize_nfc_tag(value: Any) -> str:
+    # NFC UIDs are stored once in a canonical, case-insensitive form.
+    return _canonical_nfc_value(value)
+
+
+def _ensure_nfc_catalog_value(conn: sqlite3.Connection, value: Any) -> int | None:
+    normalized = normalize_nfc_tag(value)
+    if not normalized:
+        return None
+    now = _now()
+    row = conn.execute("SELECT id FROM nfc_tags WHERE tag_value = ?", (normalized,)).fetchone()
+    if row:
+        conn.execute("UPDATE nfc_tags SET updated_at = ? WHERE id = ?", (now, row["id"]))
+    else:
+        conn.execute(
+            "INSERT INTO nfc_tags(tag_value, comment, created_at, updated_at) VALUES (?, NULL, ?, ?)",
+            (normalized, now, now),
+        )
+        row = conn.execute("SELECT id FROM nfc_tags WHERE tag_value = ?", (normalized,)).fetchone()
+    return int(row["id"]) if row else None
+
+
+def _sync_nfc_tag_row(
+    conn: sqlite3.Connection,
+    tag_value: Any,
+    comment: str | None = None,
+) -> int | None:
+    normalized = normalize_nfc_tag(tag_value)
+    if not normalized:
+        return None
+    now = _now()
+    row = conn.execute("SELECT id FROM nfc_tags WHERE tag_value = ?", (normalized,)).fetchone()
+    if row:
+        conn.execute(
+            "UPDATE nfc_tags SET comment = COALESCE(?, comment), updated_at = ? WHERE id = ?",
+            (comment, now, row["id"]),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO nfc_tags(tag_value, comment, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            (normalized, comment, now, now),
+        )
+        row = conn.execute("SELECT id FROM nfc_tags WHERE tag_value = ?", (normalized,)).fetchone()
+    return int(row["id"]) if row else None
+
+
+def list_nfc_tags(include_assignment: bool = False) -> list[dict[str, Any]]:
+    initialize()
+    with _connect() as conn:
+        # Existing spool tags are imported lazily as well, so older databases
+        # immediately become visible in the new selector.
+        _sync_nfc_catalog_from_spools(conn)
+        if include_assignment:
+            rows = conn.execute(
+                """SELECT nt.id, nt.tag_value, nt.comment,
+                          s.id AS spool_number, f.name AS filament_name,
+                          nt.created_at, nt.updated_at
+                   FROM nfc_tags nt
+                   LEFT JOIN spools s ON s.nfc_tag_id = nt.id
+                   LEFT JOIN filaments f ON f.id = s.filament_id
+                   ORDER BY nt.id"""
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, tag_value, comment, created_at, updated_at "
+                "FROM nfc_tags ORDER BY id"
+            ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["comment"] = str(item.get("comment") or "").strip() or None
+            item["spool_label"] = (
+                f"#{item['spool_number']} – {item['filament_name']}"
+                if include_assignment and item.get("spool_number") and item.get("filament_name")
+                else (f"#{item['spool_number']}" if item.get("spool_number") else None)
+            )
+            if not include_assignment:
+                item.pop("spool_label", None)
+            # The selector uses a stable human-readable label without exposing
+            # the raw tag as the value saved on a spool.
+            fallback_label = f"NFC #{item['id']} – {item['tag_value']}"
+            if include_assignment and item.get("spool_label"):
+                fallback_label += f" – {item['spool_label']}"
+            item["label"] = item["comment"] or fallback_label
+            result.append(item)
+        return result
+
+
+def register_nfc_tag(tag_value: Any) -> str:
+    normalized = normalize_nfc_tag(tag_value)
+    if not normalized:
+        raise ValueError("NFC tag value must not be empty")
+    initialize()
+    with _connect() as conn:
+        if not conn.execute("SELECT 1 FROM nfc_tags WHERE tag_value = ?", (normalized,)).fetchone():
+            now = _now()
+            conn.execute(
+                "INSERT INTO nfc_tags(tag_value, comment, created_at, updated_at) VALUES (?, NULL, ?, ?)",
+                (normalized, now, now),
+            )
+    return normalized
+
+
+def update_nfc_tag(tag_id: int | str, values: dict[str, Any]) -> dict[str, Any]:
+    initialize()
+    fields = {}
+    if "tag_value" in values:
+        normalized = normalize_nfc_tag(values.get("tag_value"))
+        if not normalized:
+            raise ValueError("Der Tag-Wert darf nicht leer sein")
+        fields["tag_value"] = normalized
+    if "comment" in values:
+        fields["comment"] = str(values.get("comment") or "").strip() or None
+    if not fields:
+        raise ValueError("Keine editierbaren NFC-Tag-Felder übergeben")
+    with _connect() as conn:
+        current = conn.execute("SELECT * FROM nfc_tags WHERE id = ?", (int(tag_id),)).fetchone()
+        if not current:
+            raise KeyError(f"Kein NFC-Tag mit ID {tag_id}")
+        if "tag_value" in fields:
+            assigned = conn.execute(
+                "SELECT 1 FROM spools WHERE nfc_tag_id = ? LIMIT 1",
+                (int(tag_id),),
+            ).fetchone()
+            if assigned and fields["tag_value"] != normalize_nfc_tag(current["tag_value"]):
+                raise ValueError("Der Tag-Wert kann nicht geändert werden, solange er einer Spule zugeordnet ist.")
+            owner = conn.execute(
+                "SELECT id FROM nfc_tags WHERE tag_value = ? COLLATE NOCASE AND id <> ?",
+                (fields["tag_value"], int(tag_id)),
+            ).fetchone()
+            if owner:
+                raise ValueError("Dieser NFC-Tag-Wert ist bereits bekannt")
+        fields["updated_at"] = _now()
+        conn.execute(
+            f"UPDATE nfc_tags SET {','.join(f'{key} = ?' for key in fields)} WHERE id = ?",
+            list(fields.values()) + [int(tag_id)],
+        )
+    return next(item for item in list_nfc_tags(include_assignment=True) if int(item["id"]) == int(tag_id))
+
+
+def delete_nfc_tag(tag_id: int | str) -> None:
+    initialize()
+    with _connect() as conn:
+        row = conn.execute("SELECT id FROM nfc_tags WHERE id = ?", (int(tag_id),)).fetchone()
+        if not row:
+            raise KeyError(f"Kein NFC-Tag mit ID {tag_id}")
+        if conn.execute("SELECT 1 FROM spools WHERE nfc_tag_id = ? LIMIT 1", (int(tag_id),)).fetchone():
+            raise ValueError("Der NFC-Tag ist noch einer Spule zugeordnet")
+        conn.execute("DELETE FROM nfc_tags WHERE id = ?", (int(tag_id),))
+
+
+def _sync_nfc_catalog_from_spools(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        "SELECT id, nfc_tag_id, archived FROM spools WHERE nfc_tag_id IS NOT NULL"
+    ).fetchall()
+    for row in rows:
+        if row["nfc_tag_id"]:
+            tag_row = conn.execute("SELECT tag_value FROM nfc_tags WHERE id = ?", (int(row["nfc_tag_id"]),)).fetchone()
+            if tag_row:
+                _sync_nfc_tag_row(conn, tag_row["tag_value"])
+
+
 def _import_named(conn: sqlite3.Connection, table: str, entity_id: Any, name: Any) -> int | None:
     if not name:
         return None
@@ -297,12 +695,15 @@ def list_entities(entity: str) -> list[dict[str, Any]]:
 
 
 def list_colors() -> list[dict[str, Any]]:
-    """Return the local color catalog used by all filament color selectors."""
     initialize()
     with _connect() as conn:
-        return [dict(row) for row in conn.execute(
+        rows = [dict(row) for row in conn.execute(
             "SELECT id, name, hex_code FROM colors ORDER BY name COLLATE NOCASE, id"
         )]
+    for row in rows:
+        row["hex_code"] = _normalize_hex(row["hex_code"])
+        row["red"], row["green"], row["blue"] = _rgb_components(row["hex_code"])
+    return rows
 
 
 def list_filaments() -> list[dict[str, Any]]:
@@ -348,14 +749,14 @@ def ensure_local_filament_from_inventory(filament: dict[str, Any] | None) -> Non
         conn.execute(
             """INSERT INTO filaments
                (id, vendor_id, material_id, name, color_id, diameter, weight, spool_weight, price,
-                extruder_temp, bed_temp, nozzle_temp, cali_idx, bambu_filament_id, bambu_setting_id, created_at, updated_at)
+                nozzle_temp_min, nozzle_temp_max, cali_idx, bambu_filament_id, bambu_setting_id, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 int(filament_id), vendor_id, material_id, filament.get("name") or f"Filament {filament_id}",
                 _color_id(conn, filament.get("color_id") or filament.get("color_hex")), _db_value(filament.get("diameter")) or 1.75,
                 _db_value(filament.get("weight")), _db_value(filament.get("spool_weight")), _db_value(filament.get("price")),
-                _db_value(filament.get("settings_extruder_temp")), _db_value(filament.get("settings_bed_temp")),
-                _db_value(_extra_value(filament.get("extra"), "nozzle_temperature")), _db_value(_extra_value(filament.get("extra"), "cali_idx")),
+                *_temperature_range(_extra_value(filament.get("extra"), "nozzle_temperature")),
+                _db_value(_extra_value(filament.get("extra"), "cali_idx")),
                 _db_value(_extra_value(filament.get("extra"), "filament_id")), _db_value(_extra_value(filament.get("extra"), "setting_id")),
                 now, now,
             ),
@@ -376,15 +777,16 @@ def ensure_local_spool_from_inventory(spool: dict[str, Any] | None) -> None:
         if conn.execute("SELECT 1 FROM spools WHERE id = ?", (spool_id,)).fetchone():
             return
         extras = spool.get("extra") or {}
+        nfc_tag_id = _ensure_nfc_catalog_value(conn, _extra_value(extras, "tag"))
         conn.execute(
             """INSERT INTO spools
-               (id, filament_id, price, archived, initial_weight, spool_weight, weight_correction, tag, active_tray, created_at, updated_at)
+               (id, filament_id, price, archived, initial_weight, spool_weight, weight_correction, nfc_tag_id, active_tray, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)""",
             (
                 int(spool_id), int(filament_id), spool.get("price") if spool.get("price") is not None else filament.get("price"),
                 int(bool(spool.get("archived"))), spool.get("initial_weight") if spool.get("initial_weight") is not None else filament.get("weight"),
                 spool.get("spool_weight") if spool.get("spool_weight") is not None else filament.get("spool_weight"),
-                _extra_value(extras, "tag"), _extra_value(extras, "active_tray"), now, now,
+                nfc_tag_id, _extra_value(extras, "active_tray"), now, now,
             ),
         )
 
@@ -396,8 +798,8 @@ def save_entity(entity: str, values: dict[str, Any], entity_id: int | None = Non
         "materials": ("name",),
         "filaments": (
             "vendor_id", "material_id", "name", "color_id", "diameter",
-            "weight", "spool_weight", "price", "extruder_temp", "bed_temp",
-            "nozzle_temp", "cali_idx", "bambu_filament_id", "bambu_setting_id",
+            "weight", "spool_weight", "price", "nozzle_temp_min", "nozzle_temp_max",
+            "cali_idx", "bambu_filament_id", "bambu_setting_id",
         ),
     }
     if entity not in columns:
@@ -410,7 +812,7 @@ def save_entity(entity: str, values: dict[str, Any], entity_id: int | None = Non
     if entity == "filaments":
         row["color_id"] = values.get("color_id") or values.get("color_hex")
         row["diameter"] = _number(row["diameter"]) if row["diameter"] not in (None, "") else 1.75
-        for field in ("weight", "spool_weight", "price", "extruder_temp", "bed_temp", "nozzle_temp", "cali_idx"):
+        for field in ("weight", "spool_weight", "price", "nozzle_temp_min", "nozzle_temp_max", "cali_idx"):
             if row[field] not in (None, ""):
                 row[field] = _number(row[field])
     now = _now()
@@ -436,23 +838,41 @@ def save_entity(entity: str, values: dict[str, Any], entity_id: int | None = Non
         return entity_id
 
 
+def save_color(values: dict[str, Any], color_id: int | None = None) -> int:
+    initialize()
+    name = str(values.get("name") or "").strip()
+    if not name:
+        raise ValueError("Name is required")
+    hex_code = _normalize_hex(values.get("hex_code") or _rgb_hex(values))
+    with _connect() as conn:
+        if color_id is None:
+            cursor = conn.execute(
+                "INSERT INTO colors(name, hex_code) VALUES (?, ?)", (name, hex_code)
+            )
+            return int(cursor.lastrowid)
+        if not conn.execute("SELECT 1 FROM colors WHERE id = ?", (color_id,)).fetchone():
+            raise KeyError(f"No color with ID {color_id}")
+        conn.execute("UPDATE colors SET name = ?, hex_code = ? WHERE id = ?", (name, hex_code, color_id))
+        return color_id
+
+
 def update_filament_fields(filament_id: int, values: dict[str, Any]) -> dict[str, Any]:
     """Update only changed local filament fields for the inline inventory editor."""
     initialize()
     editable = {
         "vendor_id", "material_id", "name", "color_id", "diameter",
-        "weight", "spool_weight", "price", "extruder_temp", "bed_temp",
-        "nozzle_temp", "cali_idx", "bambu_filament_id", "bambu_setting_id",
+        "weight", "spool_weight", "price",
+        "nozzle_temp_min", "nozzle_temp_max", "cali_idx", "bambu_filament_id", "bambu_setting_id",
     }
     updates = {key: value for key, value in values.items() if key in editable or key == "color_hex"}
     if not updates:
         raise ValueError("No editable filament field was supplied")
-    numeric_fields = {"vendor_id", "material_id", "diameter", "weight", "spool_weight", "price", "extruder_temp", "bed_temp", "nozzle_temp", "cali_idx"}
+    numeric_fields = {"vendor_id", "material_id", "diameter", "weight", "spool_weight", "price", "nozzle_temp_min", "nozzle_temp_max", "cali_idx"}
     for key, value in list(updates.items()):
         if value == "":
             updates[key] = None
         elif key in numeric_fields:
-            updates[key] = 1.75 if key == "diameter" and value == "" else (int(_number(value)) if key in {"vendor_id", "material_id", "extruder_temp", "bed_temp", "nozzle_temp", "cali_idx"} else _number(value))
+            updates[key] = 1.75 if key == "diameter" and value == "" else (int(_number(value)) if key in {"vendor_id", "material_id", "nozzle_temp_min", "nozzle_temp_max", "cali_idx"} else _number(value))
         elif key in {"color_hex", "color_id"}:
             updates["color_id"] = value
             if key == "color_hex":
@@ -550,16 +970,66 @@ def _spool_is_in_active_print(conn: sqlite3.Connection, spool_id: int) -> bool:
     ).fetchone())
 
 
+def _spool_is_in_active_ams(conn: sqlite3.Connection, spool_id: int) -> bool:
+    # Every spool assigned to a tray is locked in the inventory.  AMS changes
+    # are made only by the AMS workflow, never from the inventory editor.
+    return bool(conn.execute(
+        """SELECT 1 FROM spools
+          WHERE id = ? AND trim(COALESCE(active_tray, '')) <> ''
+          LIMIT 1""",
+        (int(spool_id),),
+    ).fetchone())
+
+
+def _spool_is_nfc_bound(conn: sqlite3.Connection, spool_id: int) -> bool:
+    """Return whether the printer assigned this spool from its NFC UID."""
+    return bool(conn.execute(
+        """SELECT 1 FROM spools
+           WHERE id = ?
+             AND trim(COALESCE(active_tray, '')) <> ''
+             AND lower(COALESCE(active_tray_source, '')) = 'nfc'
+           LIMIT 1""",
+        (int(spool_id),),
+    ).fetchone())
+
+
+def _spool_lock_message(conn: sqlite3.Connection, spool_id: int) -> str:
+    # Prefer the AMS-specific explanation when the spool is locked by its
+    # current tray assignment; otherwise report the active-print lock.
+    if _spool_is_nfc_bound(conn, spool_id):
+        return "Die Spule ist per NFC im AMS gebunden und gesperrt"
+    if _spool_is_in_active_ams(conn, spool_id):
+        return "Die Spule ist in der AMS gebunden und gesperrt"
+    return "Die Spule ist im aktuell laufenden Druck gebunden und gesperrt"
+
+
+def _has_active_print(conn: sqlite3.Connection) -> bool:
+    # Tray assignments are printer-wide state.  Lock them for every spool
+    # while any print is preparing, running, or paused.
+    required = conn.execute(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'print_layer_tracking'"
+    ).fetchone()[0]
+    if not int(required or 0):
+        return False
+    return bool(conn.execute(
+        "SELECT 1 FROM print_layer_tracking WHERE status IN ('PREPARING', 'RUNNING', 'PAUSED') LIMIT 1"
+    ).fetchone())
+
+
 def update_spool_fields(spool_id: int, values: dict[str, Any]) -> dict[str, Any]:
     """Persist only the explicitly changed local spool fields."""
     initialize()
-    editable = {"filament_id", "price", "archived", "initial_weight", "spool_weight", "tag", "active_tray"}
+    editable = {"filament_id", "price", "archived", "initial_weight", "spool_weight", "tag", "nfc_tag_id", "active_tray"}
     updates = {key: value for key, value in values.items() if key in editable}
     if not updates:
         raise ValueError("No editable spool field was supplied")
     numeric_fields = {"filament_id", "price", "initial_weight", "spool_weight", "weight_correction"}
     for key, value in list(updates.items()):
-        if key in {"tag", "active_tray"}:
+        if key == "tag":
+            updates[key] = normalize_nfc_tag(value) or None
+        elif key == "nfc_tag_id":
+            updates[key] = int(value) if str(value or "").strip() else None
+        elif key == "active_tray":
             updates[key] = str(value).strip() or None
         elif key == "archived":
             updates[key] = int(value is True or str(value).strip().lower() in {"1", "true", "yes", "on"})
@@ -572,16 +1042,63 @@ def update_spool_fields(spool_id: int, values: dict[str, Any]) -> dict[str, Any]
             if key in {"price", "initial_weight", "spool_weight"} and updates[key] == 0:
                 updates[key] = None
     with _connect() as conn:
-        current = conn.execute("SELECT filament_id FROM spools WHERE id = ?", (spool_id,)).fetchone()
+        current = conn.execute(
+            "SELECT filament_id, nfc_tag_id, archived FROM spools WHERE id = ?", (spool_id,)
+        ).fetchone()
         if not current:
             raise KeyError(f"No spool with ID {spool_id}")
-        if _spool_is_in_active_print(conn, spool_id):
-            raise ValueError("Die Spule ist im aktuell laufenden Druck gebunden und gesperrt")
+        if _has_active_print(conn) and {"nfc_tag_id", "tag", "active_tray"}.intersection(updates):
+            raise ValueError("NFC-Tag und aktives Fach können während eines Drucks nicht geändert werden.")
+        if "active_tray" in updates and _has_active_print(conn):
+            raise ValueError("Das aktive Fach kann während eines Drucks nicht geändert werden.")
+        if _spool_is_nfc_bound(conn, spool_id) and {"filament_id", "nfc_tag_id", "tag", "active_tray", "archived"}.intersection(updates):
+            raise ValueError(_spool_lock_message(conn, spool_id))
+        if _spool_is_in_active_print(conn, spool_id) or _spool_is_in_active_ams(conn, spool_id):
+            raise ValueError(_spool_lock_message(conn, spool_id))
+        old_nfc_id = int(current["nfc_tag_id"]) if current["nfc_tag_id"] else None
+        desired_archived = int(updates.get("archived", current["archived"]) or 0)
+        desired_nfc_id = updates.get("nfc_tag_id", old_nfc_id)
+        if "tag" in updates and "nfc_tag_id" not in updates:
+            desired_nfc_id = None
+            if updates["tag"]:
+                tag_row = conn.execute("SELECT id FROM nfc_tags WHERE tag_value = ? COLLATE NOCASE", (updates["tag"],)).fetchone()
+                if not tag_row:
+                    desired_nfc_id = _sync_nfc_tag_row(conn, updates["tag"])
+                else:
+                    desired_nfc_id = int(tag_row["id"])
+            updates["nfc_tag_id"] = desired_nfc_id
+        if desired_nfc_id:
+            tag_row = conn.execute("SELECT tag_value FROM nfc_tags WHERE id = ?", (int(desired_nfc_id),)).fetchone()
+            if not tag_row:
+                raise ValueError("Ungültiger NFC-Tag")
+            desired_tag = tag_row["tag_value"]
+            if conn.execute(
+                "SELECT 1 FROM spools WHERE nfc_tag_id = ? AND id <> ? LIMIT 1",
+                (int(desired_nfc_id), int(spool_id)),
+            ).fetchone():
+                raise ValueError("Dieser NFC-Tag ist bereits einer anderen Spule zugeordnet.")
+        else:
+            desired_tag = None
+        updates["nfc_tag_id"] = None if desired_archived else desired_nfc_id
+        if desired_archived:
+            # Archiving releases the physical NFC tag for reuse while the tag
+            # remains in the catalog for later assignment.
+            desired_tag = None
+        if desired_tag:
+            _sync_nfc_tag_row(conn, desired_tag)
+        elif desired_archived and old_nfc_id:
+            # Archiving releases the tag for reuse and removes the previous
+            # spool-specific comment; the tag record itself remains available.
+            conn.execute(
+                "UPDATE nfc_tags SET comment = NULL, updated_at = ? WHERE id = ?",
+                (_now(), old_nfc_id),
+            )
         if ("filament_id" in updates and int(updates["filament_id"]) != int(current["filament_id"])
                 and _spool_has_bookings(conn, spool_id)):
             raise ValueError("Das Filament einer gebuchten Spule kann nicht mehr geändert werden")
         if "filament_id" in updates and not conn.execute("SELECT 1 FROM filaments WHERE id = ?", (updates["filament_id"],)).fetchone():
             raise ValueError("Unknown filament")
+        updates.pop("tag", None)
         updates["updated_at"] = _now()
         conn.execute(
             f"UPDATE spools SET {','.join(f'{key} = ?' for key in updates)} WHERE id = ?",
@@ -608,8 +1125,8 @@ def adjust_spool_stock(spool_id: int | str, mode: str, amount: Any) -> dict[str,
         ).fetchone()
         if not spool:
             raise KeyError(f'No spool with ID {spool_id}')
-        if _spool_is_in_active_print(conn, spool_id):
-            raise ValueError('Die Spule ist im aktuell laufenden Druck gebunden und gesperrt')
+        if _spool_is_in_active_print(conn, spool_id) or _spool_is_in_active_ams(conn, spool_id):
+            raise ValueError(_spool_lock_message(conn, spool_id))
         used = float(conn.execute(
             'SELECT COALESCE(SUM(grams_used), 0) FROM spool_usage WHERE spool_id = ?',
             (int(spool_id),),
@@ -633,9 +1150,14 @@ def adjust_spool_stock(spool_id: int | str, mode: str, amount: Any) -> dict[str,
 
 
 def delete_entity(entity: str, entity_id: int) -> None:
-    if entity not in {"vendors", "materials", "filaments"}:
+    if entity not in {"vendors", "materials", "filaments", "colors"}:
         raise ValueError("Unknown inventory entity")
+    initialize()
     with _connect() as conn:
+        if entity == "materials" and conn.execute("SELECT 1 FROM filaments WHERE material_id = ? LIMIT 1", (entity_id,)).fetchone():
+            raise ValueError("Das Material wird noch von einem Filament verwendet")
+        if entity == "colors" and conn.execute("SELECT 1 FROM filaments WHERE color_id = ? LIMIT 1", (entity_id,)).fetchone():
+            raise ValueError("Die Farbe wird noch von einem Filament verwendet")
         conn.execute(f"DELETE FROM {entity} WHERE id = ?", (entity_id,))
 
 
@@ -643,7 +1165,7 @@ def save_spool(values: dict[str, Any], spool_id: int | None = None) -> int:
     initialize()
     if spool_id is not None and "weight_correction" in values:
         raise ValueError("Die Bestandskorrektur kann nur über die Bestandsveränderung geändert werden")
-    fields = ("filament_id", "price", "archived", "initial_weight", "spool_weight", "weight_correction", "tag", "active_tray")
+    fields = ("filament_id", "price", "archived", "initial_weight", "spool_weight", "weight_correction", "nfc_tag_id", "active_tray")
     row = {field: values.get(field) for field in fields}
     for field in ("price", "initial_weight", "spool_weight"):
         if row[field] not in (None, ""):
@@ -654,14 +1176,64 @@ def save_spool(values: dict[str, Any], spool_id: int | None = None) -> int:
     row["weight_correction"] = _number(row["weight_correction"] or 0)
     now = _now()
     with _connect() as conn:
-        existing = conn.execute("SELECT filament_id, tag, active_tray FROM spools WHERE id = ?", (spool_id,)).fetchone() if spool_id is not None else None
+        existing = conn.execute("SELECT filament_id, nfc_tag_id, active_tray, active_tray_source, archived FROM spools WHERE id = ?", (spool_id,)).fetchone() if spool_id is not None else None
         if existing and _spool_is_in_active_print(conn, spool_id):
             raise ValueError("Die Spule ist im aktuell laufenden Druck gebunden und gesperrt")
+        if existing and _spool_is_nfc_bound(conn, spool_id):
+            changed = (
+                ("filament_id" in values and str(values.get("filament_id") or "") != str(existing["filament_id"] or ""))
+                or ("active_tray" in values and str(values.get("active_tray") or "").strip() != str(existing["active_tray"] or "").strip())
+                or ("nfc_tag_id" in values and str(values.get("nfc_tag_id") or "").strip() != str(existing["nfc_tag_id"] or "").strip())
+                or ("archived" in values and int(bool(values.get("archived"))) != int(existing["archived"] or 0))
+            )
+            if changed:
+                raise ValueError(_spool_lock_message(conn, spool_id))
+        if existing and _has_active_print(conn):
+            protected = {"nfc_tag_id", "tag", "active_tray"}.intersection(values)
+            changed = any(
+                (key == "active_tray" and str(values.get(key) or "").strip() != str(existing[key] or "").strip())
+                or (key == "nfc_tag_id" and str(values.get(key) or "").strip() != str(existing[key] or "").strip())
+                or (key == "tag" and normalize_nfc_tag(values.get(key)) != normalize_nfc_tag(existing[key]))
+                for key in protected
+            )
+            if changed:
+                raise ValueError("NFC-Tag und aktives Fach können während eines Drucks nicht geändert werden.")
         if (existing and "filament_id" in values and str(row["filament_id"]) != str(existing["filament_id"])
                 and _spool_has_bookings(conn, spool_id)):
             raise ValueError("Das Filament einer gebuchten Spule kann nicht mehr geändert werden")
-        row["tag"] = str(row["tag"] or "").strip() or None if "tag" in values else (existing["tag"] if existing else None)
+        existing_tag = None
+        if existing and existing["nfc_tag_id"]:
+            existing_tag_row = conn.execute("SELECT tag_value FROM nfc_tags WHERE id = ?", (int(existing["nfc_tag_id"]),)).fetchone()
+            existing_tag = existing_tag_row["tag_value"] if existing_tag_row else None
+        row["tag"] = normalize_nfc_tag(values.get("tag")) or None if "tag" in values else existing_tag
+        row["nfc_tag_id"] = int(values["nfc_tag_id"]) if "nfc_tag_id" in values and str(values.get("nfc_tag_id") or "").strip() else (existing["nfc_tag_id"] if existing else None)
+        if "tag" in values and "nfc_tag_id" not in values and row["tag"]:
+            tag_row = conn.execute("SELECT id FROM nfc_tags WHERE tag_value = ? COLLATE NOCASE", (row["tag"],)).fetchone()
+            row["nfc_tag_id"] = int(tag_row["id"]) if tag_row else _sync_nfc_tag_row(conn, row["tag"])
+        if row["nfc_tag_id"]:
+            tag_row = conn.execute("SELECT tag_value FROM nfc_tags WHERE id = ?", (int(row["nfc_tag_id"]),)).fetchone()
+            if not tag_row:
+                raise ValueError("Ungültiger NFC-Tag")
+            if conn.execute(
+                "SELECT 1 FROM spools WHERE nfc_tag_id = ? AND id <> ? LIMIT 1",
+                (int(row["nfc_tag_id"]), int(spool_id or -1)),
+            ).fetchone():
+                raise ValueError("Dieser NFC-Tag ist bereits einer anderen Spule zugeordnet.")
+            row["tag"] = tag_row["tag_value"]
         row["active_tray"] = str(row["active_tray"] or "").strip() or None if "active_tray" in values else (existing["active_tray"] if existing else None)
+        old_nfc_id = int(existing["nfc_tag_id"]) if existing and existing["nfc_tag_id"] else None
+        if row["archived"]:
+            row["tag"] = None
+            row["nfc_tag_id"] = None
+        if row["tag"]:
+            _sync_nfc_tag_row(conn, row["tag"])
+        elif row["archived"] and old_nfc_id:
+            # Keep the catalog entry, but remove text that referred to the
+            # archived spool so the tag is clean when assigned again.
+            conn.execute(
+                "UPDATE nfc_tags SET comment = NULL, updated_at = ? WHERE id = ?",
+                (_now(), old_nfc_id),
+            )
         measured_remaining = values.get("current_remaining_weight")
         adjustment_value = values.get("adjustment_weight")
         adjustment_mode = str(values.get("adjustment_mode") or "").strip().lower()
@@ -696,7 +1268,10 @@ def save_spool(values: dict[str, Any], spool_id: int | None = None) -> int:
                 f"INSERT INTO spools ({','.join(fields)}) VALUES ({','.join('?' for _ in fields)})",
                 [row.get(field) for field in fields],
             )
-            return int(cur.lastrowid)
+            new_id = int(cur.lastrowid)
+            if row["tag"]:
+                _sync_nfc_tag_row(conn, row["tag"])
+            return new_id
         row["updated_at"] = now
         fields += ("updated_at",)
         conn.execute(
@@ -713,6 +1288,10 @@ def list_spools(include_archived: bool = False) -> list[dict[str, Any]]:
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'spool_usage'"
         ).fetchone())
         usage_select = "COALESCE(u.used_weight, 0)" if has_usage_table else "0"
+        last_used_select = """(SELECT MAX(p.print_date)
+                                  FROM spool_usage lu
+                                  JOIN prints p ON p.id = lu.print_id
+                                  WHERE lu.spool_id = s.id)""" if has_usage_table else "NULL"
         usage_join = """LEFT JOIN (SELECT spool_id, SUM(grams_used) AS used_weight
                                    FROM spool_usage WHERE spool_id IS NOT NULL GROUP BY spool_id) u
                               ON u.spool_id = s.id""" if has_usage_table else ""
@@ -723,23 +1302,28 @@ def list_spools(include_archived: bool = False) -> list[dict[str, Any]]:
                          WHERE au.spool_id = s.id
                            AND at.status IN ('PREPARING', 'RUNNING', 'PAUSED')
                        ) THEN 1 ELSE 0 END""" if has_usage_table else "0"
-        sql = f"""SELECT s.*, f.name AS filament_name, c.hex_code AS color_hex, f.diameter,
+        active_ams_select = "CASE WHEN trim(COALESCE(s.active_tray, '')) <> '' THEN 1 ELSE 0 END"
+        sql = f"""SELECT s.*, nt.tag_value AS nfc_tag_value,
+                    f.name AS filament_name, c.hex_code AS color_hex, f.diameter,
                     f.weight AS filament_default_weight,
                     f.spool_weight AS filament_default_spool_weight,
-                    f.price AS filament_default_price, f.extruder_temp,
-                    f.bed_temp, f.nozzle_temp, f.cali_idx, f.bambu_filament_id,
+                    f.price AS filament_default_price,
+                    f.nozzle_temp_min, f.nozzle_temp_max, f.cali_idx, f.bambu_filament_id,
                     f.bambu_setting_id, v.id AS vendor_id,
                     v.name AS vendor_name, m.id AS material_id, m.name AS material,
                     {usage_select} AS used_weight,
+                    {last_used_select} AS last_used,
                     CASE WHEN ABS(COALESCE(s.weight_correction, 0)) > 0.000001
                               OR EXISTS (SELECT 1 FROM spool_consumption_events ce WHERE ce.spool_id = s.id)
                               {usage_booking}
                          THEN 1 ELSE 0 END AS filament_locked
                     ,{active_print_select} AS active_print_locked
+                    ,{active_ams_select} AS active_ams_locked
              FROM spools s JOIN filaments f ON f.id = s.filament_id
              LEFT JOIN vendors v ON v.id = f.vendor_id
              LEFT JOIN materials m ON m.id = f.material_id
              LEFT JOIN colors c ON c.id = f.color_id
+             LEFT JOIN nfc_tags nt ON nt.id = s.nfc_tag_id
              {usage_join}"""
         if not include_archived:
             sql += " WHERE s.archived = 0"
@@ -755,10 +1339,9 @@ def get_spool(spool_id: int | str) -> dict[str, Any]:
 
 
 def duplicate_spool(spool_id: int | str) -> int:
-    """Create a fresh, unbooked copy of a local spool's settings."""
+    # Create a fresh copy containing only the spool master data. A locked
+    # source spool may be copied; the new spool is never bound automatically.
     source = get_spool(spool_id)
-    if source.get('active_print_locked'):
-        raise ValueError('Die Spule ist im aktuell laufenden Druck gebunden und gesperrt')
     defaults = source.get("filament_defaults") or {}
     values = {
         "filament_id": source["filament_id"],
@@ -779,8 +1362,8 @@ def delete_spool(spool_id: int | str) -> None:
         spool_id = int(spool_id)
         if not conn.execute("SELECT 1 FROM spools WHERE id = ?", (spool_id,)).fetchone():
             raise KeyError(f"No spool with ID {spool_id}")
-        if _spool_is_in_active_print(conn, spool_id):
-            raise ValueError("Die Spule ist im aktuell laufenden Druck gebunden und gesperrt")
+        if _spool_is_in_active_print(conn, spool_id) or _spool_is_in_active_ams(conn, spool_id):
+            raise ValueError(_spool_lock_message(conn, spool_id))
         if _spool_has_bookings(conn, spool_id):
             raise ValueError("Eine gebuchte Spule kann nicht gelöscht werden")
         conn.execute("DELETE FROM spools WHERE id = ?", (spool_id,))
@@ -810,6 +1393,12 @@ def _as_spool(row: sqlite3.Row) -> dict[str, Any]:
     spool["used_weight"] = used
     spool["filament_locked"] = bool(spool.pop("filament_locked"))
     spool["active_print_locked"] = bool(spool.pop("active_print_locked"))
+    spool["active_ams_locked"] = bool(spool.pop("active_ams_locked"))
+    active_tray_source = str(spool.pop("active_tray_source", "") or "").strip().lower()
+    active_tray_nfc_uid = str(spool.pop("active_tray_nfc_uid", "") or "").strip() or None
+    spool["nfc_ams_locked"] = active_tray_source == "nfc" and bool(str(spool.get("active_tray") or "").strip())
+    spool["active_tray_source"] = active_tray_source or None
+    spool["active_tray_nfc_uid"] = active_tray_nfc_uid
     spool["filament"] = {
         "id": spool["filament_id"], "name": spool.pop("filament_name"),
         "material": spool.pop("material"), "color_hex": spool.pop("color_hex"),
@@ -817,18 +1406,20 @@ def _as_spool(row: sqlite3.Row) -> dict[str, Any]:
         "vendor": {"id": spool.pop("vendor_id"), "name": spool.pop("vendor_name")},
         "weight": resolved_filament_defaults["initial_weight"], "price": resolved_filament_defaults["price"],
         "spool_weight": resolved_filament_defaults["spool_weight"],
-        "settings_extruder_temp": spool.pop("extruder_temp"),
-        "settings_bed_temp": spool.pop("bed_temp"),
         "extra": {
-            "nozzle_temperature": json.dumps(spool.pop("nozzle_temp")) if spool.get("nozzle_temp") is not None else None,
+            "nozzle_temperature": json.dumps([spool.pop("nozzle_temp_min"), spool.pop("nozzle_temp_max")])
+            if spool.get("nozzle_temp_min") is not None or spool.get("nozzle_temp_max") is not None else None,
             "cali_idx": json.dumps(spool.pop("cali_idx")) if spool.get("cali_idx") is not None else None,
             "filament_id": json.dumps(spool.pop("bambu_filament_id")) if spool.get("bambu_filament_id") is not None else None,
             "setting_id": json.dumps(spool.pop("bambu_setting_id")) if spool.get("bambu_setting_id") is not None else None,
         },
     }
+    nfc_tag_value = spool.pop("nfc_tag_value", None)
     spool["extra"] = {
-        "tag": json.dumps(spool.get("tag")) if spool.get("tag") is not None else None,
+        "tag": json.dumps(nfc_tag_value) if nfc_tag_value is not None else None,
         "active_tray": json.dumps(spool.get("active_tray")) if spool.get("active_tray") is not None else None,
+        "active_tray_source": active_tray_source or None,
+        "active_tray_nfc_uid": json.dumps(active_tray_nfc_uid) if active_tray_nfc_uid else None,
     }
     spool["archived"] = bool(spool["archived"])
     return spool
@@ -837,7 +1428,7 @@ def _as_spool(row: sqlite3.Row) -> dict[str, Any]:
 def set_spool_extra(spool_id: int | str, values: dict[str, Any]) -> None:
     import json
     fields = {}
-    for key in ("tag", "active_tray"):
+    for key in ("tag", "active_tray", "active_tray_source", "active_tray_nfc_uid"):
         if key in values:
             value = values[key]
             if isinstance(value, str):
@@ -845,10 +1436,49 @@ def set_spool_extra(spool_id: int | str, values: dict[str, Any]) -> None:
                     value = json.loads(value)
                 except (TypeError, ValueError):
                     pass
-            fields[key] = str(value or "").strip() or None
+            if key == "tag":
+                fields[key] = normalize_nfc_tag(value) or None
+            else:
+                fields[key] = str(value or "").strip() or None
     if fields:
         fields["updated_at"] = _now()
         with _connect() as conn:
+            current = conn.execute(
+                "SELECT nfc_tag_id, archived, active_tray, active_tray_source FROM spools WHERE id = ?", (int(spool_id),)
+            ).fetchone()
+            if current and _has_active_print(conn) and {"tag", "active_tray"}.intersection(fields):
+                raise ValueError("NFC-Tag und aktives Fach können während eines Drucks nicht geändert werden.")
+            system_clear = fields.get("active_tray_source") == "system_clear"
+            if current and _spool_is_nfc_bound(conn, spool_id) and "active_tray" in fields and not system_clear:
+                raise ValueError(_spool_lock_message(conn, spool_id))
+            if "active_tray" in fields:
+                if system_clear or not fields["active_tray"]:
+                    fields["active_tray_source"] = None
+                    fields["active_tray_nfc_uid"] = None
+                elif "active_tray_source" not in fields:
+                    fields["active_tray_source"] = "manual"
+                    fields["active_tray_nfc_uid"] = None
+                elif fields["active_tray_source"] != "nfc":
+                    fields["active_tray_nfc_uid"] = None
+            if system_clear:
+                fields["active_tray_source"] = None
+                fields["active_tray_nfc_uid"] = None
+            if "tag" in fields and current:
+                desired_tag = fields["tag"]
+                if current["archived"]:
+                    fields["tag"] = None
+                    desired_tag = None
+                if desired_tag:
+                    tag_id = _sync_nfc_tag_row(conn, desired_tag)
+                    fields["nfc_tag_id"] = tag_id
+                else:
+                    fields["nfc_tag_id"] = None
+                fields.pop("tag", None)
+            fields.pop("active_tray_source", None) if system_clear else None
+            fields.pop("active_tray_nfc_uid", None) if system_clear else None
+            if system_clear:
+                fields["active_tray_source"] = None
+                fields["active_tray_nfc_uid"] = None
             conn.execute(f"UPDATE spools SET {','.join(f'{key} = ?' for key in fields)} WHERE id = ?", list(fields.values()) + [int(spool_id)])
 
 
@@ -864,16 +1494,20 @@ def sync_active_trays(assignments: dict[int | str, str]) -> dict[str, int]:
     changed = 0
     cleared = 0
     with _connect() as conn:
-        rows = conn.execute("SELECT id, active_tray FROM spools").fetchall()
+        rows = conn.execute("SELECT id, active_tray, active_tray_source FROM spools").fetchall()
         for row in rows:
             spool_id = int(row["id"])
             desired = normalized.get(spool_id)
             current = str(row["active_tray"] or "").strip() or None
             if current == desired:
                 continue
+            if current and not desired and str(row["active_tray_source"] or "").lower() == "nfc":
+                # A UID-bound spool is cleared only after a confirmed physical
+                # empty status, never merely because a sparse snapshot omitted it.
+                continue
             conn.execute(
-                "UPDATE spools SET active_tray = ?, updated_at = ? WHERE id = ?",
-                (desired, _now(), spool_id),
+                "UPDATE spools SET active_tray = ?, active_tray_source = ?, active_tray_nfc_uid = ?, updated_at = ? WHERE id = ?",
+                (desired, "manual" if desired else None, None, _now(), spool_id),
             )
             changed += 1
             if current and not desired:
@@ -893,7 +1527,13 @@ def record_consumption(spool_id: int | str, weight_grams: float | None = None,
 
 
 def set_filament_extra(filament_id: int | str, values: dict[str, Any]) -> dict[str, Any]:
-    allowed = {key: value for key, value in values.items() if key in {"nozzle_temp", "cali_idx", "bambu_filament_id", "bambu_setting_id"}}
+    normalized = dict(values)
+    if "nozzle_temperature" in normalized:
+        value = normalized.pop("nozzle_temperature")
+        minimum, maximum = _temperature_range(value)
+        normalized["nozzle_temp_min"] = minimum
+        normalized["nozzle_temp_max"] = maximum
+    allowed = {key: value for key, value in normalized.items() if key in {"nozzle_temp_min", "nozzle_temp_max", "cali_idx", "bambu_filament_id", "bambu_setting_id"}}
     with _connect() as conn:
         if allowed:
             conn.execute(

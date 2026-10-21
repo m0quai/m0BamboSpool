@@ -69,7 +69,10 @@ PRINTER_IP = os.getenv("PRINTER_IP")  # Required printer IP address for the conn
 PRINTER_NAME = os.getenv("PRINTER_NAME")  # Printer name - Check wireless on printer
 SPOOLMAN_BASE_URL = os.getenv("SPOOLMAN_BASE_URL")
 SPOOLMAN_API_URL = f"{SPOOLMAN_BASE_URL}/api/v1"
-USE_SPOOLMAN = (os.getenv("USE_SPOOLMAN", "yes") or "yes").strip().lower() in {"yes", "true", "1", "on"}
+# The local m0BamboSpool catalog is authoritative.  Remote SpoolMan mode is
+# still available only when explicitly enabled in config.env for migration or
+# compatibility work.
+USE_SPOOLMAN = (os.getenv("USE_SPOOLMAN", "no") or "no").strip().lower() in {"yes", "true", "1", "on"}
 AUTO_SPEND = True
 TRACK_LAYER_USAGE = True
 LOG_AMS_MODE = (os.getenv("LOG_AMS_MODE") or "changes").strip().lower()

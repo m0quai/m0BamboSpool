@@ -74,10 +74,21 @@
         {{ spool.filament.material }} - {{ spool.filament.vendor.name }}</h6>
       <!-- Filament Name (Row 2) -->
       <small class="text-muted">{{ spool.filament.name }} - {{ format_number(spool.remaining_weight, 0) }} {{ _('g left') }}</small>
+      {% if action_fill %}
+      {% set initial_weight = spool.initial_weight|float %}
+      {% set remaining_weight = spool.remaining_weight|float %}
+      {% set remaining_percent = (remaining_weight / initial_weight * 100) if initial_weight > 0 else 0 %}
+      <div class="spool-fill-progress" aria-label="{{ _('Remaining weight') }}">
+        <div class="progress" role="progressbar" aria-valuenow="{{ [0, [remaining_percent, 100]|min]|max|round(0) }}" aria-valuemin="0" aria-valuemax="100">
+          <div class="progress-bar" style="width: {{ [0, [remaining_percent, 100]|min]|max }}%"></div>
+        </div>
+        <span class="text-muted small text-nowrap">{{ format_number(spool.remaining_weight, 1) }}g</span>
+      </div>
+      {% endif %}
     </div>
 
   <div class="spool-actions d-flex flex-column flex-sm-row align-items-start align-items-sm-center gap-2 ms-sm-3">
-    {% if action_fill or action_assign %}
+    {% if action_assign and not action_fill %}
     <a href="{{ url_for('spool_info', spool_id=spool.id) }}" class="spool-action-link">
       <span class="badge bg-primary rounded-pill">
         <i class="bi bi-info-circle"></i> {{ _('Spool info') }}
@@ -88,7 +99,7 @@
     {% if action_bambu_link %}
     <a href="{{ url_for('assign_bambu_spool', spool_id=spool.id, ams=ams_id, tray=tray_id, tag=bambu_tag) }}" class="spool-action-link">
       <span class="badge bg-warning text-dark rounded-pill">
-        <i class="bi bi-link-45deg"></i> Link to Spoolman
+        <i class="bi bi-link-45deg"></i> {{ _('Spule zuordnen') }}
       </span>
     </a>
     {% endif %}
@@ -103,7 +114,7 @@
     {% else %}
       <a href="{{ url_for('fill', spool_id=spool.id, ams=ams_id, tray=tray_id) }}" class="spool-action-link">
         <span class="badge bg-primary rounded-pill">
-          <i class="bi bi-plus-circle"></i> Fill
+          <i class="bi bi-plus-circle"></i> {{ _('Fill') }}
         </span>
       </a>
     {% endif %}

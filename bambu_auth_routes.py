@@ -130,7 +130,16 @@ def _page(**extra):
         password_saved=bambu_auth.password_saved(),
         auth_step=session.get("bambu_auth_step", "password"),
         auth_account=session.get("bambu_auth_account") or bambu_auth.configured_account(),
+        local_materials=[] ,
+        local_colors=[],
     )
+    try:
+        import inventory_database
+        args["local_materials"] = inventory_database.list_entities("materials")
+        args["local_colors"] = inventory_database.list_colors()
+        args["local_nfc_tags"] = inventory_database.list_nfc_tags(include_assignment=False)
+    except Exception:
+        args["local_nfc_tags"] = []
     args.update(extra)
     return render_template("bambu_auth.html", **args)
 

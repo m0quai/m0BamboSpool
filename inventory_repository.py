@@ -29,9 +29,12 @@ def get_backend() -> str:
 
 
 def ensure_local_catalog() -> None:
-    # Create the local catalog tables and import the remote catalog once for preview pages.
+    # Create the local catalog tables.  The local catalog is authoritative in
+    # normal operation; it must not silently re-import or refresh from a
+    # remote service.
     _local.initialize()
-    _import_remote_once()
+    if USE_SPOOLMAN:
+        _import_remote_once()
 
 
 def _import_remote_once() -> None:
@@ -48,7 +51,6 @@ def _import_remote_once() -> None:
 
 def list_spools(*, include_archived: bool = False) -> list[dict[str, Any]]:
     if get_backend() == "local":
-        _import_remote_once()
         return _local.list_spools(include_archived=include_archived)
     try:
         return _REMOTE["list"](include_archived=include_archived)
@@ -62,7 +64,6 @@ def list_spools(*, include_archived: bool = False) -> list[dict[str, Any]]:
 
 def get_spool(spool_id: int | str) -> dict[str, Any]:
     if get_backend() == "local":
-        _import_remote_once()
         return _local.get_spool(spool_id)
     try:
         return _REMOTE["get"](spool_id)
@@ -104,12 +105,23 @@ def update_filament_metadata(
     if get_backend() == "local":
         normalized = dict(values)
         if "nozzle_temperature" in normalized:
-            normalized["nozzle_temp"] = normalized.pop("nozzle_temperature")
+            value = normalized.pop("nozzle_temperature")
+            if isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except (TypeError, ValueError):
+                    pass
+            if isinstance(value, (list, tuple)):
+                normalized["nozzle_temp_min"] = value[0] if value else None
+                normalized["nozzle_temp_max"] = value[1] if len(value) > 1 else (value[0] if value else None)
+            else:
+                normalized["nozzle_temp_min"] = value
+                normalized["nozzle_temp_max"] = value
         if "filament_id" in normalized:
             normalized["bambu_filament_id"] = normalized.pop("filament_id")
         if "setting_id" in normalized:
             normalized["bambu_setting_id"] = normalized.pop("setting_id")
-        for key in ("nozzle_temp", "cali_idx", "bambu_filament_id", "bambu_setting_id"):
+        for key in ("nozzle_temp_min", "nozzle_temp_max", "cali_idx", "bambu_filament_id", "bambu_setting_id"):
             value = normalized.get(key)
             if isinstance(value, str):
                 try:

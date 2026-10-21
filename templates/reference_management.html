@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+{% block title %}{{ _(management_title) }}{% endblock %}
+{% block content %}
+<section class="reference-management" data-reference-entity="{{ management_entity }}">
+  <div class="reference-management-heading">
+    <div>
+      <a class="btn btn-sm btn-outline-secondary mb-2" href="{{ url_for('bambu_cloud.index') }}">← {{ _('Einstellungen') }}</a>
+      <h1 class="h2 mb-0">{{ _(management_title) }}</h1>
+    </div>
+  </div>
+  <div id="reference-feedback" class="alert d-none" role="status"></div>
+  <div class="reference-management-layout">
+    <div class="reference-management-list-box">
+      <div class="reference-management-list-heading">
+        <div class="reference-management-list-title"><strong>{{ _('Einträge') }}</strong><button id="reference-new" class="btn btn-sm btn-primary reference-icon-button" type="button" title="{{ _('Neu anlegen') }}" aria-label="{{ _('Neu anlegen') }}"><i class="bi bi-plus-circle" aria-hidden="true"></i></button></div>
+        <input id="reference-search" class="form-control form-control-sm" type="search" placeholder="{{ _('Name') }}">
+      </div>
+      <div id="reference-list" class="reference-management-list" role="listbox" aria-label="{{ _(management_title) }}">
+        {% for row in management_rows %}
+        <button class="reference-management-item" type="button" data-reference-id="{{ row.id }}" role="option">
+          <span class="reference-management-item-name">{{ row.name }}</span>
+          {% if management_entity == 'colors' %}
+          <span class="inventory-color-code" style="background-color:#{{ row.hex_code }}; color:{{ '#fff' if color_is_dark(row.hex_code) else '#111' }};">#{{ row.hex_code }}</span>
+          {% endif %}
+        </button>
+        {% else %}
+        <div class="reference-management-empty">{{ _('Keine Einträge vorhanden.') }}</div>
+        {% endfor %}
+      </div>
+    </div>
+    <aside id="reference-editor" class="reference-management-editor" hidden aria-live="polite">
+      <div class="reference-management-editor-heading">
+        <div><h2 id="reference-editor-title" class="h5 mb-0"></h2></div>
+        <div class="reference-management-editor-actions">
+          <span id="reference-editor-state" class="small text-muted"></span>
+          <button id="reference-copy" class="btn btn-sm btn-outline-primary reference-icon-button" type="button" hidden title="{{ _('Eintrag kopieren') }}" aria-label="{{ _('Eintrag kopieren') }}"><i class="bi bi-copy" aria-hidden="true"></i></button>
+          <button id="reference-delete" class="btn btn-sm btn-outline-danger reference-icon-button" type="button" hidden title="{{ _('Löschen') }}" aria-label="{{ _('Löschen') }}"><i class="bi bi-trash3" aria-hidden="true"></i></button>
+        </div>
+      </div>
+      <form id="reference-form" class="reference-management-form">
+        <div class="mb-3"><label class="form-label" for="reference-name">{{ _('Name') }}</label><input id="reference-name" class="form-control" type="text" required></div>
+        {% if management_entity == 'colors' %}
+        <div class="mb-3"><label class="form-label" for="reference-hex">{{ _('Farbcode') }}</label><input id="reference-hex" class="form-control" type="text" maxlength="7" pattern="^#?[0-9A-Fa-f]{6}$" placeholder="#RRGGBB" required></div>
+        <div class="row g-2 mb-3"><div class="col-4"><label class="form-label" for="reference-red">{{ _('Rot') }}</label><input id="reference-red" class="form-control" type="number" min="0" max="255"></div><div class="col-4"><label class="form-label" for="reference-green">{{ _('Grün') }}</label><input id="reference-green" class="form-control" type="number" min="0" max="255"></div><div class="col-4"><label class="form-label" for="reference-blue">{{ _('Blau') }}</label><input id="reference-blue" class="form-control" type="number" min="0" max="255"></div></div>
+        <div class="reference-color-preview" id="reference-color-preview"></div>
+        {% endif %}
+      </form>
+    </aside>
+  </div>
+</section>
+<script id="reference-data" type="application/json">{{ management_rows|tojson }}</script>
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const root = document.querySelector('[data-reference-entity]');
+  const entity = root.dataset.referenceEntity;
+  const records = new Map(JSON.parse(document.getElementById('reference-data').textContent).map(row => [String(row.id), row]));
+  const list = document.getElementById('reference-list');
+  const search = document.getElementById('reference-search');
+  const editor = document.getElementById('reference-editor');
+  const form = document.getElementById('reference-form');
+  const title = document.getElementById('reference-editor-title');
+  const state = document.getElementById('reference-editor-state');
+  const feedback = document.getElementById('reference-feedback');
+  const nameInput = document.getElementById('reference-name');
+  const hexInput = document.getElementById('reference-hex');
+  const rgbInputs = [document.getElementById('reference-red'), document.getElementById('reference-green'), document.getElementById('reference-blue')];
+  const colorPreview = document.getElementById('reference-color-preview');
+  const copyButton = document.getElementById('reference-copy');
+  let selectedId = null;
+  let creating = false;
+  let saveTimer = null;
+
+  const showMessage = (message, kind = 'danger') => { feedback.textContent = message; feedback.className = 'alert alert-' + kind; };
+  const hideMessage = () => { feedback.textContent = ''; feedback.className = 'alert d-none'; };
+  const normalizeHex = value => { const clean = String(value || '').replace(/^#/, '').trim().toUpperCase(); return /^[0-9A-F]{6}$/.test(clean) ? clean : ''; };
+  const updatePreview = () => { if (!hexInput || !colorPreview) return; const hex = normalizeHex(hexInput.value); colorPreview.style.backgroundColor = hex ? '#' + hex : 'transparent'; colorPreview.textContent = hex ? '#' + hex : ''; };
+  const syncRgbFromHex = () => { const hex = normalizeHex(hexInput && hexInput.value); if (!hex) return; [0, 2, 4].forEach((offset, index) => { rgbInputs[index].value = parseInt(hex.slice(offset, offset + 2), 16); }); updatePreview(); };
+  const syncHexFromRgb = () => { if (!hexInput || rgbInputs.some(input => !input)) return; const values = rgbInputs.map(input => Math.max(0, Math.min(255, Number(input.value) || 0))); hexInput.value = '#' + values.map(value => value.toString(16).padStart(2, '0')).join('').toUpperCase(); updatePreview(); };
+  const updateSelection = () => list.querySelectorAll('[data-reference-id]').forEach(item => item.classList.toggle('is-selected', !creating && item.dataset.referenceId === String(selectedId)));
+  const appendListItem = record => {
+    const item = document.createElement('button');
+    item.className = 'reference-management-item'; item.type = 'button'; item.dataset.referenceId = String(record.id); item.setAttribute('role', 'option');
+    const itemName = document.createElement('span'); itemName.className = 'reference-management-item-name'; itemName.textContent = record.name || ''; item.append(itemName);
+    if (entity === 'colors') { const badge = document.createElement('span'); badge.className = 'inventory-color-code'; const hex = normalizeHex(record.hex_code) || '000000'; badge.textContent = '#' + hex; badge.style.backgroundColor = '#' + hex; badge.style.color = '#fff'; item.append(badge); }
+    item.addEventListener('click', () => { hideMessage(); setEditor(records.get(item.dataset.referenceId)); });
+    list.append(item);
+    return item;
+  };
+  const setEditor = record => {
+    creating = false; selectedId = String(record.id); editor.hidden = false; title.textContent = record.name || ''; state.textContent = ''; nameInput.value = record.name || '';
+    if (hexInput) { hexInput.value = record.hex_code ? '#' + record.hex_code : '#000000'; syncRgbFromHex(); }
+    document.getElementById('reference-delete').hidden = false; copyButton.hidden = false; copyButton.title = entity === 'colors' ? {{ _('Farbe kopieren')|tojson }} : {{ _('Material kopieren')|tojson }}; copyButton.setAttribute('aria-label', copyButton.title); updateSelection(); nameInput.focus();
+  };
+  const renderList = () => { const filter = search.value.trim().toLowerCase(); list.querySelectorAll('[data-reference-id]').forEach(item => { item.hidden = filter && !item.querySelector('.reference-management-item-name').textContent.toLowerCase().includes(filter); }); };
+  list.addEventListener('click', event => { const item = event.target.closest('[data-reference-id]'); if (!item) return; hideMessage(); setEditor(records.get(item.dataset.referenceId)); });
+  search.addEventListener('input', renderList);
+  const createRecord = async payload => {
+    const response = await fetch('/inventory/manage/' + entity, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || {{ _('Speichern fehlgeschlagen.')|tojson }});
+    const record = { id: result.id, ...payload, ...(result.record || {}) };
+    records.set(String(result.id), record);
+    appendListItem(record);
+    setEditor(record);
+    renderList();
+    return record;
+  };
+  document.getElementById('reference-new').addEventListener('click', async () => {
+    hideMessage();
+    const button = document.getElementById('reference-new'); button.disabled = true;
+    try { await createRecord(entity === 'colors' ? { name: {{ _('Neue Farbe')|tojson }}, hex_code: '000000' } : { name: {{ _('Neues Material')|tojson }} }); }
+    catch (error) { showMessage(error.message); }
+    finally { button.disabled = false; }
+  });
+  copyButton.addEventListener('click', async () => {
+    if (creating || selectedId === null) return;
+    const source = records.get(String(selectedId));
+    const payload = { name: (source.name || '') + ' (Kopie)' };
+    if (entity === 'colors') payload.hex_code = normalizeHex(source.hex_code);
+    copyButton.disabled = true; state.textContent = {{ _('Kopiert …')|tojson }}; hideMessage();
+    try { await createRecord(payload); state.textContent = {{ _('Kopiert …')|tojson }}; } catch (error) { state.textContent = ''; showMessage(error.message); } finally { copyButton.disabled = false; }
+  });
+  const collectPayload = () => {
+    const payload = { name: nameInput.value.trim() };
+    if (entity === 'colors') { payload.hex_code = normalizeHex(hexInput.value); payload.red = rgbInputs[0].value; payload.green = rgbInputs[1].value; payload.blue = rgbInputs[2].value; }
+    return payload;
+  };
+  const saveCurrent = async () => {
+    if (creating || selectedId === null) return;
+    hideMessage(); state.textContent = {{ _('Speichert …')|tojson }};
+    const payload = collectPayload();
+    if (!payload.name || (entity === 'colors' && !payload.hex_code)) { state.textContent = ''; showMessage({{ _('Bitte Name und gültigen Farbcode eingeben.')|tojson }}); return; }
+    try {
+      const response = await fetch('/inventory/manage/' + entity + '/' + selectedId, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || {{ _('Speichern fehlgeschlagen.')|tojson }});
+      records.set(String(selectedId), { ...records.get(String(selectedId)), ...payload }); state.textContent = {{ _('Gespeichert.')|tojson }}; title.textContent = payload.name;
+      const row = list.querySelector('[data-reference-id="' + CSS.escape(String(selectedId)) + '"]'); const item = row && row.querySelector('.reference-management-item-name'); if (item) item.textContent = payload.name;
+      if (row && entity === 'colors') { const badge = row.querySelector('.inventory-color-code'); if (badge) { badge.textContent = '#' + payload.hex_code; badge.style.backgroundColor = '#' + payload.hex_code; } }
+    } catch (error) { state.textContent = ''; showMessage(error.message); }
+  };
+  const scheduleSave = () => { clearTimeout(saveTimer); saveTimer = setTimeout(saveCurrent, 350); };
+  nameInput.addEventListener('change', scheduleSave);
+  hexInput && hexInput.addEventListener('input', () => { syncRgbFromHex(); scheduleSave(); });
+  rgbInputs.forEach(input => input && input.addEventListener('input', () => { syncHexFromRgb(); scheduleSave(); }));
+  form.addEventListener('submit', event => { event.preventDefault(); saveCurrent(); });
+  document.getElementById('reference-delete').addEventListener('click', async () => {
+    if (creating || selectedId === null) return;
+    if (!window.confirm({{ _('Diesen Eintrag wirklich löschen?')|tojson }})) return;
+    state.textContent = {{ _('Löscht …')|tojson }}; hideMessage();
+    try {
+      const response = await fetch('/inventory/manage/' + entity + '/' + selectedId, { method: 'DELETE' });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || {{ _('Löschen fehlgeschlagen.')|tojson }});
+      records.delete(String(selectedId)); list.querySelector('[data-reference-id="' + CSS.escape(String(selectedId)) + '"]')?.remove(); editor.hidden = true; selectedId = null; state.textContent = ''; showMessage({{ _('Eintrag gelöscht.')|tojson }}, 'success');
+    } catch (error) { state.textContent = ''; showMessage(error.message); }
+  });
+  updatePreview(); renderList();
+  const requestedId = new URLSearchParams(window.location.search).get('edit');
+  if (requestedId && records.has(String(requestedId))) setEditor(records.get(String(requestedId)));
+});
+</script>
+{% endblock %}

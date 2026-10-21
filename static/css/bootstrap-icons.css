@@ -240,6 +240,7 @@ url("./fonts/bootstrap-icons.woff?dd67030699838ea613ee6dbda90effa6") format("wof
 .bi-brightness-low-fill::before { content: "\f1d3"; }
 .bi-brightness-low::before { content: "\f1d4"; }
 .bi-broadcast-pin::before { content: "\f1d5"; }
+.bi-nfc::before { content: "\f1d5"; }
 .bi-broadcast::before { content: "\f1d6"; }
 .bi-brush-fill::before { content: "\f1d7"; }
 .bi-brush::before { content: "\f1d8"; }

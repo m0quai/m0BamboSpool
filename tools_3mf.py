@@ -19,7 +19,8 @@ from logger import log
 
 _BBL_PATH_CACHE = {}
 FTP_LOW_SPEED_LIMIT = 1024
-FTP_LOW_SPEED_TIME = 120
+# Reopen the printer connection quickly when no bytes arrive at all.
+FTP_LOW_SPEED_TIME = 30
 FTP_RECEIVE_BUFFER_SIZE = 512 * 1024
 RUNTIME_METADATA_NAMESPACE = "printer_3mf_paths"
 

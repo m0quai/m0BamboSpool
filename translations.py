@@ -17,6 +17,10 @@ UI_TRANSLATIONS = {
     "de": {
         "Home": "Home",
         "AMS": "AMS",
+        "In AMS": "In AMS",
+        "Wird dem AMS zugeordnet …": "Wird dem AMS zugeordnet …",
+        "Die Spule konnte dem AMS nicht zugeordnet werden.": "Die Spule konnte dem AMS nicht zugeordnet werden.",
+        "Spule für AMS-Fach auswählen": "Spule für AMS-Fach auswählen",
         "History": "Historie",
         "LiveCam": "LiveCam",
         "Inventory": "Inventar",
@@ -38,6 +42,8 @@ UI_TRANSLATIONS = {
         "Open SpoolMan": "SpoolMan öffnen",
         "Open current project": "Aktuelles Projekt öffnen",
         "Spool": "Spule",
+        "Bambu-Spule zuordnen": "Bambu-Spule zuordnen",
+        "detected in this tray. Pick the matching local spool to bind this tag and assign the tray.": "in diesem Fach erkannt. Wähle die passende lokale Spule, um diesen Tag zu verknüpfen und das Fach zuzuordnen.",
         "Hersteller": "Hersteller",
         "Material": "Material",
         "Filament": "Filament",
@@ -124,6 +130,20 @@ UI_TRANSLATIONS = {
         "Solve issue": "Problem lösen",
         "Livebild": "Livebild",
         "NFC-Tags": "NFC-Tags",
+        "Tag-Wert": "Tag-Wert",
+        "Kommentar": "Kommentar",
+        "Zugeordnete Spule": "Zugeordnete Spule",
+        "NFC-Tag anlegen": "NFC-Tag anlegen",
+        "NFC-Tag kopieren": "NFC-Tag kopieren",
+        "NFC-Tag löschen": "NFC-Tag löschen",
+        "Kein NFC-Tag zugeordnet": "Kein NFC-Tag zugeordnet",
+        "Bekannte NFC-Tags können wiederverwendet und einer anderen Spule zugeordnet werden.": "Bekannte NFC-Tags können wiederverwendet und einer anderen Spule zugeordnet werden.",
+        "NFC-Tag konnte nicht gespeichert werden.": "NFC-Tag konnte nicht gespeichert werden.",
+        "NFC-Tag konnte nicht gelöscht werden.": "NFC-Tag konnte nicht gelöscht werden.",
+        "Diesen NFC-Tag wirklich löschen?": "Diesen NFC-Tag wirklich löschen?",
+        "Stammdateneinstellungen": "Stammdateneinstellungen",
+        "Materialien, NFC-Tags und Farben werden auf eigenen Verwaltungsseiten bearbeitet.": "Materialien, NFC-Tags und Farben werden auf eigenen Verwaltungsseiten bearbeitet.",
+        "NFC-Tags bearbeiten": "NFC-Tags bearbeiten",
         "Zurück": "Zurück",
         "Unbekannter NFC-Tag": "Unbekannter NFC-Tag",
         "Spule auswählen ...": "Spule auswählen ...",
@@ -259,6 +279,10 @@ UI_TRANSLATIONS = {
     "en": {
         "Home": "Home",
         "AMS": "AMS",
+        "In AMS": "To AMS",
+        "Wird dem AMS zugeordnet …": "Assigning to AMS …",
+        "Die Spule konnte dem AMS nicht zugeordnet werden.": "The spool could not be assigned to the AMS.",
+        "Spule für AMS-Fach auswählen": "Select a spool for the AMS tray",
         "History": "History",
         "LiveCam": "LiveCam",
         "Inventory": "Inventory",
@@ -280,6 +304,8 @@ UI_TRANSLATIONS = {
         "Open SpoolMan": "Open SpoolMan",
         "Open current project": "Open current project",
         "Spool": "Spool",
+        "Bambu-Spule zuordnen": "Assign Bambu spool",
+        "detected in this tray. Pick the matching local spool to bind this tag and assign the tray.": "was detected in this tray. Select the matching local spool to bind the tag and assign the tray.",
         "Hersteller": "Manufacturer",
         "Material": "Material",
         "Filament": "Filament",
@@ -366,6 +392,20 @@ UI_TRANSLATIONS = {
         "Solve issue": "Solve issue",
         "Livebild": "Live view",
         "NFC-Tags": "NFC tags",
+        "Tag-Wert": "Tag value",
+        "Kommentar": "Comment",
+        "Zugeordnete Spule": "Assigned spool",
+        "NFC-Tag anlegen": "Create NFC tag",
+        "NFC-Tag kopieren": "Copy NFC tag",
+        "NFC-Tag löschen": "Delete NFC tag",
+        "Kein NFC-Tag zugeordnet": "No NFC tag assigned",
+        "Bekannte NFC-Tags können wiederverwendet und einer anderen Spule zugeordnet werden.": "Known NFC tags can be reused and assigned to another spool.",
+        "NFC-Tag konnte nicht gespeichert werden.": "The NFC tag could not be saved.",
+        "NFC-Tag konnte nicht gelöscht werden.": "The NFC tag could not be deleted.",
+        "Diesen NFC-Tag wirklich löschen?": "Delete this NFC tag?",
+        "Stammdateneinstellungen": "Master data settings",
+        "Materialien, NFC-Tags und Farben werden auf eigenen Verwaltungsseiten bearbeitet.": "Materials, NFC tags and colors are edited on their own management pages.",
+        "NFC-Tags bearbeiten": "Edit NFC tags",
         "Zurück": "Back",
         "Unbekannter NFC-Tag": "Unknown NFC tag",
         "Spule auswählen ...": "Select spool ...",
@@ -502,22 +542,47 @@ UI_TRANSLATIONS = {
 
 # Labels for the local inventory management preview and editor.
 UI_TRANSLATIONS["de"].update({
-    "Hersteller": "Hersteller", "Materialien": "Materialien", "Filamente": "Filamente", "Spulen": "Spulen",
+    "Die Fachzuordnung erfolgt ausschließlich auf der AMS-Seite.": "Die Fachzuordnung erfolgt ausschließlich auf der AMS-Seite.",
+    "Hersteller": "Hersteller", "Materialien": "Materialien", "Farben": "Farben", "Filamente": "Filamente", "Spulen": "Spulen", "Verwaltung": "Verwaltung", "Einstellungen": "Einstellungen", "Material- und Farbeinstellungen": "Material- und Farbeinstellungen", "Lokale Material- und Farbkataloge für die Filamentverwaltung.": "Lokale Material- und Farbkataloge für die Filamentverwaltung.", "Materialien bearbeiten": "Materialien bearbeiten", "Farben bearbeiten": "Farben bearbeiten", "Spule im Inventar öffnen": "Spule im Inventar öffnen", "Spule zuordnen": "Spule zuordnen", "Zuordnungsstatus": "Zuordnungsstatus",
     "Verwaltungsseiten": "Verwaltungsseiten", "Eigene Verwaltung": "Eigene Verwaltung",
     "Vorschau der lokalen Tabellen, ohne die aktuelle Verwaltung umzustellen.": "Vorschau der lokalen Tabellen, ohne die aktuelle Verwaltung umzustellen.",
-    "Einträge": "Einträge", "Neu anlegen": "Neu anlegen", "Bearbeiten": "Bearbeiten", "Gespeichert.": "Gespeichert.",
+    "Einträge": "Einträge", "Neu anlegen": "Neu anlegen", "Neues Material": "Neues Material", "Neue Farbe": "Neue Farbe", "Filament anlegen": "Filament anlegen", "Hersteller anlegen": "Hersteller anlegen", "Neues Filament": "Neues Filament", "Neuer Hersteller": "Neuer Hersteller", "Neue Spule": "Neue Spule", "Filament kopieren": "Filament kopieren", "Spule kopieren": "Spule kopieren", "Spule löschen": "Spule löschen", "Material kopieren": "Material kopieren", "Farbe kopieren": "Farbe kopieren", "Eintrag kopieren": "Eintrag kopieren", "Kopiert …": "Kopiert …", "Kopieren fehlgeschlagen.": "Kopieren fehlgeschlagen.", "Wird angelegt …": "Wird angelegt …", "Anlegen fehlgeschlagen.": "Anlegen fehlgeschlagen.", "Bearbeiten": "Bearbeiten", "Gespeichert.": "Gespeichert.", "Lokale Stammdaten": "Lokale Stammdaten", "Speichert …": "Speichert …", "Löscht …": "Löscht …", "Bitte Name und gültigen Farbcode eingeben.": "Bitte Name und gültigen Farbcode eingeben.", "Diesen Eintrag wirklich löschen?": "Diesen Eintrag wirklich löschen?", "Eintrag gelöscht.": "Eintrag gelöscht.", "Löschen fehlgeschlagen.": "Löschen fehlgeschlagen.", "Das Material wird noch von einem Filament verwendet": "Das Material wird noch von einem Filament verwendet", "Die Farbe wird noch von einem Filament verwendet": "Die Farbe wird noch von einem Filament verwendet", "Spule im aktuellen Druck": "Spule im aktuellen Druck",
     "Keine Einträge vorhanden.": "Keine Einträge vorhanden.", "Startgewicht": "Startgewicht", "Leergewicht": "Leergewicht",
-    "Preis": "Preis", "NFC-Tag": "NFC-Tag", "AMS-Fach": "AMS-Fach", "Abbrechen": "Abbrechen",
-    "Bestandskorrektur": "Bestandskorrektur", "Differenz (+/- g)": "Differenz (+/- g)", "Absoluter Restbestand (g)": "Absoluter Restbestand (g)", "Korrekturwert": "Korrekturwert", "Farbe auswählen": "Farbe auswählen", "Speichern fehlgeschlagen.": "Speichern fehlgeschlagen.",
+    "Preis": "Preis", "NFC-Tag": "NFC-Tag", "Der NFC-Tag kann während eines Drucks nicht geändert werden.": "Der NFC-Tag kann während eines Drucks nicht geändert werden.", "Der NFC-Tag ist noch einer Spule zugeordnet.": "Der NFC-Tag ist noch einer Spule zugeordnet.", "Der Tag-Wert kann bei einer zugeordneten Spule nicht geändert werden.": "Der Tag-Wert kann bei einer zugeordneten Spule nicht geändert werden.", "Der Tag-Wert kann nicht geändert werden, solange er einer Spule zugeordnet ist.": "Der Tag-Wert kann nicht geändert werden, solange er einer Spule zugeordnet ist.", "AMS-Fach": "AMS-Fach", "Spulennummer": "Spulennummer", "Abbrechen": "Abbrechen",
+    "Bestandskorrektur": "Bestandskorrektur", "Differenz (+/- g)": "Differenz (+/- g)", "Absoluter Restbestand (g)": "Absoluter Restbestand (g)", "Korrekturwert": "Korrekturwert", "Farbe auswählen": "Farbe auswählen", "Farbcode": "Farbcode", "RGB": "RGB", "Rot": "Rot", "Grün": "Grün", "Blau": "Blau", "Speichern fehlgeschlagen.": "Speichern fehlgeschlagen.", "Bestandskorrektur fehlgeschlagen.": "Bestandskorrektur fehlgeschlagen.", "Filament-Standard": "Filament-Standard", "Leergewicht Spule (g)": "Leergewicht Spule (g)", "Düsentemperatur (°C)": "Düsentemperatur (°C)", "Bett-Temperatur (°C)": "Bett-Temperatur (°C)", "Extruder-Temperatur (°C)": "Extruder-Temperatur (°C)", "Kalibrierungsindex": "Kalibrierungsindex", "Bambu Filament-ID": "Bambu Filament-ID", "Bambu Setting-ID": "Bambu Setting-ID",
 })
 UI_TRANSLATIONS["en"].update({
-    "Hersteller": "Manufacturers", "Materialien": "Materials", "Filamente": "Filaments", "Spulen": "Spools",
+    "Die Fachzuordnung erfolgt ausschließlich auf der AMS-Seite.": "Tray assignments can only be changed on the AMS page.",
+    "Hersteller": "Manufacturers", "Materialien": "Materials", "Farben": "Colors", "Filamente": "Filaments", "Spulen": "Spools", "Verwaltung": "Management", "Einstellungen": "Settings", "Material- und Farbeinstellungen": "Material and color settings", "Lokale Material- und Farbkataloge für die Filamentverwaltung.": "Local material and color catalogs for filament management.", "Materialien bearbeiten": "Edit materials", "Farben bearbeiten": "Edit colors", "Spule im Inventar öffnen": "Open spool in inventory", "Spule zuordnen": "Assign spool", "Zuordnungsstatus": "Assignment status",
     "Verwaltungsseiten": "Management pages", "Eigene Verwaltung": "Local management",
     "Vorschau der lokalen Tabellen, ohne die aktuelle Verwaltung umzustellen.": "Preview of the local tables without switching the active management backend.",
-    "Einträge": "Entries", "Neu anlegen": "Create new", "Bearbeiten": "Edit", "Gespeichert.": "Saved.",
+    "Einträge": "Entries", "Neu anlegen": "Create new", "Neues Material": "New material", "Neue Farbe": "New color", "Filament anlegen": "Create filament", "Hersteller anlegen": "Create manufacturer", "Neues Filament": "New filament", "Neuer Hersteller": "New manufacturer", "Neue Spule": "New spool", "Filament kopieren": "Copy filament", "Spule kopieren": "Copy spool", "Spule löschen": "Delete spool", "Material kopieren": "Copy material", "Farbe kopieren": "Copy color", "Eintrag kopieren": "Copy entry", "Kopiert …": "Copying …", "Kopieren fehlgeschlagen.": "Copy failed.", "Wird angelegt …": "Creating …", "Anlegen fehlgeschlagen.": "Creation failed.", "Bearbeiten": "Edit", "Gespeichert.": "Saved.", "Lokale Stammdaten": "Local master data", "Speichert …": "Saving …", "Löscht …": "Deleting …", "Bitte Name und gültigen Farbcode eingeben.": "Please enter a name and a valid color code.", "Diesen Eintrag wirklich löschen?": "Delete this entry?", "Eintrag gelöscht.": "Entry deleted.", "Löschen fehlgeschlagen.": "Delete failed.", "Das Material wird noch von einem Filament verwendet": "The material is still used by a filament", "Die Farbe wird noch von einem Filament verwendet": "The color is still used by a filament", "Spule im aktuellen Druck": "Spool in current print",
     "Keine Einträge vorhanden.": "No entries available.", "Startgewicht": "Initial weight", "Leergewicht": "Empty spool weight",
-    "Preis": "Price", "NFC-Tag": "NFC tag", "AMS-Fach": "AMS tray", "Abbrechen": "Cancel",
-    "Bestandskorrektur": "Stock correction", "Differenz (+/- g)": "Difference (+/- g)", "Absoluter Restbestand (g)": "Absolute remaining stock (g)", "Korrekturwert": "Correction value", "Farbe auswählen": "Select color", "Speichern fehlgeschlagen.": "Save failed.",
+    "Preis": "Price", "NFC-Tag": "NFC tag", "Der NFC-Tag kann während eines Drucks nicht geändert werden.": "The NFC tag cannot be changed while a print is running.", "Der NFC-Tag ist noch einer Spule zugeordnet.": "The NFC tag is still assigned to a spool.", "Der Tag-Wert kann bei einer zugeordneten Spule nicht geändert werden.": "The tag value cannot be changed while assigned to a spool.", "Der Tag-Wert kann nicht geändert werden, solange er einer Spule zugeordnet ist.": "The tag value cannot be changed while assigned to a spool.", "AMS-Fach": "AMS tray", "Spulennummer": "Spool number", "Abbrechen": "Cancel",
+    "Bestandskorrektur": "Stock correction", "Differenz (+/- g)": "Difference (+/- g)", "Absoluter Restbestand (g)": "Absolute remaining stock (g)", "Korrekturwert": "Correction value", "Farbe auswählen": "Select color", "Farbcode": "Color code", "RGB": "RGB", "Rot": "Red", "Grün": "Green", "Blau": "Blue", "Speichern fehlgeschlagen.": "Save failed.", "Bestandskorrektur fehlgeschlagen.": "Stock correction failed.", "Filament-Standard": "Filament default", "Leergewicht Spule (g)": "Empty spool weight (g)", "Düsentemperatur (°C)": "Nozzle temperature (°C)", "Bett-Temperatur (°C)": "Bed temperature (°C)", "Extruder-Temperatur (°C)": "Extruder temperature (°C)", "Kalibrierungsindex": "Calibration index", "Bambu Filament-ID": "Bambu filament ID", "Bambu Setting-ID": "Bambu setting ID",
+})
+
+# Inventory page labels and messages.
+UI_TRANSLATIONS["de"].update({
+    "Inventar": "Inventar", "Gruppieren": "Gruppieren", "Filament": "Filament", "Keine Gruppierung": "Keine Gruppierung", "Sortieren": "Sortieren", "Letzte Verwendung": "Letzte Verwendung", "Name": "Name", "Restgewicht": "Restgewicht", "Filtern": "Filtern", "Filament, Hersteller oder Material": "Filament, Hersteller oder Material", "Archivierte anzeigen": "Archivierte anzeigen", "Filament öffnen": "Filament öffnen", "Filament duplizieren": "Filament duplizieren", "Spule duplizieren": "Spule duplizieren", "Bestand verändern": "Bestand verändern", "Aktuelles Gewicht (g)": "Aktuelles Gewicht (g)", "Aktuelles Spulengewicht": "Aktuelles Spulengewicht", "Gewicht": "Gewicht", "Gemessenes Gewicht": "Gemessenes Gewicht", "Neues Gesamtgewicht": "Neues Gesamtgewicht", "Verbrauchsmenge": "Verbrauchsmenge", "Positive Werte verbrauchen Filament, negative Werte buchen Filament zurück.": "Positive Werte verbrauchen Filament, negative Werte buchen Filament zurück.", "Gesamtgewicht der Spule plus Restfilament, wie von einer Waage abgelesen.": "Gesamtgewicht der Spule plus Restfilament, wie von einer Waage abgelesen.", "OK": "OK", "Drucke dieser Spule": "Drucke dieser Spule", "unbenutzt": "unbenutzt", "verwendet vor %s Min.": "verwendet vor %s Min.", "verwendet vor %s Std.": "verwendet vor %s Std.", "verwendet vor %s Tg.": "verwendet vor %s Tg.", "Unbekannt": "Unbekannt", "Ohne Namen": "Ohne Namen", "Farbe auswählen": "Farbe auswählen", "Aktuell (#%s)": "Aktuell (#%s)", "Das Filament kann nach einer Buchung nicht mehr geändert werden.": "Das Filament kann nach einer Buchung nicht mehr geändert werden.", "Speichert …": "Speichert …", "Gespeichert": "Gespeichert", "Gespeichern fehlgeschlagen.": "Speichern fehlgeschlagen.", "Gebundene Spulen können nicht dupliziert werden.": "Gebundene Spulen können nicht dupliziert werden.", "Gebundene Spulen können nicht gelöscht werden.": "Gebundene Spulen können nicht gelöscht werden.", "Gebundene Spulen können nicht verändert werden.": "Gebundene Spulen können nicht verändert werden.", "Keine Drucke zugeordnet.": "Keine Drucke zugeordnet.", "Druck": "Druck", "Min.": "Min.", "Keine Filamente gefunden.": "Keine Filamente gefunden.", "Herstellergruppe": "Herstellergruppe", "Materialgruppe": "Materialgruppe", "Spule": "Spule", "Spulen": "Spulen", "Keine Spule": "Keine Spule", "Spule ist in einem Druck gebunden und gesperrt.": "Spule ist in einem Druck gebunden und gesperrt.", "Legt an …": "Legt an …", "Dupliziert …": "Dupliziert …", "Duplizieren fehlgeschlagen.": "Duplizieren fehlgeschlagen.", "Löscht …": "Löscht …", "Spule #%s wirklich löschen?": "Spule #%s wirklich löschen?", "Löschen fehlgeschlagen.": "Löschen fehlgeschlagen.", "Filament (aktueller Druck)": "Filament (aktueller Druck)", "Gewicht (g)": "Gewicht (g)", "Leergewicht Spule (g)": "Leergewicht Spule (g)", "Preis (EUR)": "Preis (EUR)", "Gewicht korrigieren (g)": "Gewicht korrigieren (g)", "Aktives Fach": "Aktives Fach", "Archiviert": "Archiviert", "Durchmesser (mm)": "Durchmesser (mm)", "Düs *": "Düs *", "Düsentemperatur (°C)": "Düsentemperatur (°C)", "Bett-Temperatur (°C)": "Bett-Temperatur (°C)", "Extruder-Temperatur (°C)": "Extruder-Temperatur (°C)", "Kalibrierungsindex": "Kalibrierungsindex", "Bambu Filament-ID": "Bambu Filament-ID", "Bambu Setting-ID": "Bambu Setting-ID", "Farbe": "Farbe", "Material": "Material", "Hersteller": "Hersteller", "Spule im aktuellen Druck": "Spule im aktuellen Druck", "COMPLETED": "Abgeschlossen", "Zugeordnete Spulen": "Zugeordnete Spulen", "Keine Spulen zugeordnet.": "Keine Spulen zugeordnet.", "Kopieren": "Kopieren", "Löschen": "Löschen", "Leergewicht Spule": "Leergewicht Spule", "Unbekannte Verwaltungsseite.": "Unbekannte Verwaltungsseite.", "Die lokale Verwaltung ist derzeit nicht verfügbar.": "Die lokale Verwaltung ist derzeit nicht verfügbar."
+})
+UI_TRANSLATIONS["en"].update({
+    "Inventar": "Inventory", "Gruppieren": "Group by", "Filament": "Filament", "Keine Gruppierung": "No grouping", "Sortieren": "Sort by", "Letzte Verwendung": "Last used", "Name": "Name", "Restgewicht": "Remaining weight", "Filtern": "Filter", "Filament, Hersteller oder Material": "Filament, manufacturer or material", "Archivierte anzeigen": "Show archived", "Filament öffnen": "Open filament", "Filament duplizieren": "Duplicate filament", "Spule duplizieren": "Duplicate spool", "Bestand verändern": "Adjust stock", "Aktuelles Gewicht (g)": "Current weight (g)", "Aktuelles Spulengewicht": "Current spool weight", "Gewicht": "Weight", "Gemessenes Gewicht": "Measured weight", "Neues Gesamtgewicht": "New total weight", "Verbrauchsmenge": "Consumption amount", "Positive Werte verbrauchen Filament, negative Werte buchen Filament zurück.": "Positive values consume filament; negative values add filament back.", "Gesamtgewicht der Spule plus Restfilament, wie von einer Waage abgelesen.": "Total spool weight including remaining filament as read from a scale.", "OK": "OK", "Drucke dieser Spule": "Prints using this spool", "unbenutzt": "unused", "verwendet vor %s Min.": "used %s min ago", "verwendet vor %s Std.": "used %s hr ago", "verwendet vor %s Tg.": "used %s days ago", "Unbekannt": "Unknown", "Ohne Namen": "Unnamed", "Farbe auswählen": "Select color", "Aktuell (#%s)": "Current (#%s)", "Das Filament kann nach einer Buchung nicht mehr geändert werden.": "Filament cannot be changed after a booking.", "Speichert …": "Saving …", "Gespeichert": "Saved", "Speichern fehlgeschlagen.": "Save failed.", "Gebundene Spulen können nicht dupliziert werden.": "Spools bound to a print cannot be duplicated.", "Gebundene Spulen können nicht gelöscht werden.": "Spools bound to a print cannot be deleted.", "Gebundene Spulen können nicht verändert werden.": "Spools bound to a print cannot be changed.", "Keine Drucke zugeordnet.": "No prints assigned.", "Druck": "Print", "Min.": "min", "Keine Filamente gefunden.": "No filaments found.", "Herstellergruppe": "Manufacturer group", "Materialgruppe": "Material group", "Spule": "Spool", "Spulen": "Spools", "Keine Spule": "No spool", "Spule ist in einem Druck gebunden und gesperrt.": "Spool is bound to a print and locked.", "Legt an …": "Creating …", "Dupliziert …": "Duplicating …", "Duplizieren fehlgeschlagen.": "Duplication failed.", "Löscht …": "Deleting …", "Spule #%s wirklich löschen?": "Really delete spool #%s?", "Löschen fehlgeschlagen.": "Delete failed.", "Filament (aktueller Druck)": "Filament (current print)", "Gewicht (g)": "Weight (g)", "Leergewicht Spule (g)": "Empty spool weight (g)", "Preis (EUR)": "Price (EUR)", "Gewicht korrigieren (g)": "Weight correction (g)", "Aktives Fach": "Active tray", "Archiviert": "Archived", "Durchmesser (mm)": "Diameter (mm)", "Düsentemperatur (°C)": "Nozzle temperature (°C)", "Bett-Temperatur (°C)": "Bed temperature (°C)", "Extruder-Temperatur (°C)": "Extruder temperature (°C)", "Kalibrierungsindex": "Calibration index", "Bambu Filament-ID": "Bambu filament ID", "Bambu Setting-ID": "Bambu setting ID", "Farbe": "Color", "Material": "Material", "Hersteller": "Manufacturer", "Spule im aktuellen Druck": "Spool in current print", "COMPLETED": "Completed", "Zugeordnete Spulen": "Assigned spools", "Keine Spulen zugeordnet.": "No spools assigned.", "Kopieren": "Copy", "Löschen": "Delete", "Leergewicht Spule": "Empty spool weight", "Unbekannte Verwaltungsseite.": "Unknown management page.", "Die lokale Verwaltung ist derzeit nicht verfügbar.": "Local management is currently unavailable."
+})
+
+UI_TRANSLATIONS["de"].update({
+    "Sortieren nach": "Sortieren nach", "Richtung": "Richtung", "Aufsteigend": "Aufsteigend", "Absteigend": "Absteigend",
+})
+UI_TRANSLATIONS["en"].update({
+    "Sortieren nach": "Sort by", "Richtung": "Direction", "Aufsteigend": "Ascending", "Absteigend": "Descending",
+})
+
+# Inventory lock message: the lock reflects the spool's AMS assignment.
+UI_TRANSLATIONS["de"].update({
+    "Spule ist in der AMS gebunden und gesperrt.": "Spule ist in der AMS gebunden und gesperrt.",
+})
+UI_TRANSLATIONS["en"].update({
+    "Spule ist in der AMS gebunden und gesperrt.": "Spool is bound in the AMS and locked.",
 })
 
 UI_TRANSLATIONS["de"].update({
@@ -632,4 +697,57 @@ UI_TRANSLATIONS["en"].update({
     "Purifying chamber air": "Purifying chamber air",
     "Preparing AMS": "Preparing AMS",
     "Preparing printer": "Preparing printer",
+})
+
+UI_TRANSLATIONS["de"].update({
+    "Das aktive Fach kann während eines Drucks nicht geändert werden.": "Das aktive Fach kann während eines Drucks nicht geändert werden.",
+    "Die AMS-Zuordnung ist im Nur-Lese-Modus deaktiviert.": "Die AMS-Zuordnung ist im Nur-Lese-Modus deaktiviert.",
+    "MQTT ist nicht verbunden. Das Fach wurde nicht geändert.": "MQTT ist nicht verbunden. Das Fach wurde nicht geändert.",
+    "Eine AMS-Aktualisierung läuft noch. Bitte kurz warten.": "Eine AMS-Aktualisierung läuft noch. Bitte kurz warten.",
+    "Ungültige Fachzuordnung.": "Ungültige Fachzuordnung.",
+    "Die gewählte Spule ist bereits einem anderen Fach zugeordnet.": "Die gewählte Spule ist bereits einem anderen Fach zugeordnet.",
+    "Die bisherige Fachzuordnung ist unbekannt und wurde nicht geändert.": "Die bisherige Fachzuordnung ist unbekannt und wurde nicht geändert.",
+    "Die bisherige Fachzuordnung konnte am AMS nicht gelöscht werden.": "Die bisherige Fachzuordnung konnte am AMS nicht gelöscht werden.",
+    "Die neue Fachzuordnung konnte am AMS nicht gesetzt werden.": "Die neue Fachzuordnung konnte am AMS nicht gesetzt werden.",
+    "Per NFC identifiziert und gesperrt": "Per NFC identifiziert und gesperrt",
+    "Diese Spule wurde per NFC erkannt und kann nur durch das physische Entfernen aus dem AMS freigegeben werden.": "Diese Spule wurde per NFC erkannt und kann nur durch das physische Entfernen aus dem AMS freigegeben werden.",
+    "Diese Spule wurde per NFC erkannt und kann nicht manuell ersetzt werden.": "Diese Spule wurde per NFC erkannt und kann nicht manuell ersetzt werden.",
+})
+
+UI_TRANSLATIONS["en"].update({
+    "Das aktive Fach kann während eines Drucks nicht geändert werden.": "The active tray cannot be changed while a print is running.",
+    "Die AMS-Zuordnung ist im Nur-Lese-Modus deaktiviert.": "AMS assignment is disabled in read-only mode.",
+    "MQTT ist nicht verbunden. Das Fach wurde nicht geändert.": "MQTT is not connected. The tray was not changed.",
+    "Eine AMS-Aktualisierung läuft noch. Bitte kurz warten.": "An AMS update is still in progress. Please wait a moment.",
+    "Ungültige Fachzuordnung.": "Invalid tray assignment.",
+    "Die gewählte Spule ist bereits einem anderen Fach zugeordnet.": "The selected spool is already assigned to another tray.",
+    "Die bisherige Fachzuordnung ist unbekannt und wurde nicht geändert.": "The existing tray assignment is unknown and was not changed.",
+    "Die bisherige Fachzuordnung konnte am AMS nicht gelöscht werden.": "The existing tray assignment could not be cleared on the AMS.",
+    "Die neue Fachzuordnung konnte am AMS nicht gesetzt werden.": "The new tray assignment could not be sent to the AMS.",
+    "Per NFC identifiziert und gesperrt": "Identified by NFC and locked",
+    "Diese Spule wurde per NFC erkannt und kann nur durch das physische Entfernen aus dem AMS freigegeben werden.": "This spool was identified by NFC and can only be released by physically removing it from the AMS.",
+    "Diese Spule wurde per NFC erkannt und kann nicht manuell ersetzt werden.": "This spool was identified by NFC and cannot be replaced manually.",
+    "Düsentemperatur": "Nozzle temperature",
+    "Düsentemperatur (°C) von": "Nozzle temperature (°C) from",
+    "bis (°C)": "to (°C)",
+    "bis": "to",
+    "Von": "From",
+    "Bis": "To",
+    "Düsentemperatur von (°C)": "Nozzle temperature from (°C)",
+    "Düsentemperatur bis (°C)": "Nozzle temperature to (°C)",
+    "Düsentemperatur Min. (°C)": "Nozzle temperature min. (°C)",
+    "Düsentemperatur Max. (°C)": "Nozzle temperature max. (°C)",
+})
+
+UI_TRANSLATIONS["de"].update({
+    "Düsentemperatur": "Düsentemperatur",
+    "Düsentemperatur (°C) von": "Düsentemperatur (°C) von",
+    "bis (°C)": "bis (°C)",
+    "bis": "bis",
+    "Von": "Von",
+    "Bis": "Bis",
+    "Düsentemperatur von (°C)": "Düsentemperatur von (°C)",
+    "Düsentemperatur bis (°C)": "Düsentemperatur bis (°C)",
+    "Düsentemperatur Min. (°C)": "Düsentemperatur Min. (°C)",
+    "Düsentemperatur Max. (°C)": "Düsentemperatur Max. (°C)",
 })

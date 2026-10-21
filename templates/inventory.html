@@ -1,64 +1,74 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="inventory-workspace" aria-label="Inventar">
+<section class="inventory-workspace" aria-label="{{ _('Inventar') }}">
   <div class="inventory-toolbar">
-    <label class="inventory-control">Gruppieren
+    <label class="inventory-control">{{ _('Gruppieren') }}
       <select id="inventory-group-select" class="form-select form-select-sm">
-        <option value="filament">Filament</option>
-        <option value="vendor">Hersteller</option>
-        <option value="material">Material</option>
-        <option value="none">Keine Gruppierung</option>
+        <option value="filament">{{ _('Filament') }}</option>
+        <option value="vendor">{{ _('Hersteller') }}</option>
+        <option value="material">{{ _('Material') }}</option>
+        <option value="none">{{ _('Keine Gruppierung') }}</option>
       </select>
     </label>
-    <label class="inventory-control">Sortieren
+    <label class="inventory-control">{{ _('Sortieren nach') }}
       <select id="inventory-sort-select" class="form-select form-select-sm">
-        <option value="last-used">Letzte Verwendung</option>
-        <option value="name">Name</option>
-        <option value="remaining">Restgewicht</option>
+        <option value="last-used">{{ _('Letzte Verwendung') }}</option>
+        <option value="name">{{ _('Name') }}</option>
+        <option value="spool-id">{{ _('Spulennummer') }}</option>
+        <option value="assignment">{{ _('Zuordnungsstatus') }}</option>
+        <option value="remaining">{{ _('Restgewicht') }}</option>
       </select>
     </label>
-    <label class="inventory-control inventory-search">Filtern
-      <input id="inventory-search" class="form-control form-control-sm" type="search" placeholder="Filament, Hersteller oder Material">
+    <label class="inventory-control">{{ _('Richtung') }}
+      <select id="inventory-sort-direction" class="form-select form-select-sm">
+        <option value="descending">{{ _('Absteigend') }}</option>
+        <option value="ascending">{{ _('Aufsteigend') }}</option>
+      </select>
     </label>
-    <label class="inventory-archived-toggle"><input id="inventory-show-archived" type="checkbox"><span>Archivierte anzeigen</span></label>
-    <button id="inventory-create-filament" class="btn btn-sm btn-primary" type="button">Filament anlegen</button>
+    <label class="inventory-control inventory-search">{{ _('Filtern') }}
+      <input id="inventory-search" class="form-control form-control-sm" type="search" placeholder="{{ _('Filament, Hersteller oder Material') }}">
+    </label>
+    <label class="inventory-archived-toggle"><input id="inventory-show-archived" type="checkbox"><span>{{ _('Archivierte anzeigen') }}</span></label>
   </div>
   <div class="inventory-layout">
     <div id="inventory-groups" class="inventory-groups" aria-live="polite"></div>
     <aside id="inventory-inline-editor" class="inventory-inline-editor" hidden aria-live="polite">
       <div class="inventory-editor-heading">
-        <div><div id="inventory-editor-kind" class="small text-muted">Lokale Stammdaten</div><h2 id="inventory-editor-title" class="h5 mb-0"></h2></div>
+        <div><h2 id="inventory-editor-title" class="h5 mb-0"></h2></div>
         <div class="inventory-editor-actions">
           <span id="inventory-editor-state" class="small text-muted"></span>
-          <button id="inventory-create-spool" class="btn btn-sm btn-primary" type="button" hidden>Neue Spule</button>
-          <button id="inventory-open-filament" class="btn btn-sm btn-outline-primary inventory-icon-button" type="button" hidden aria-label="Filament öffnen" title="Filament öffnen"><i class="bi bi-box-seam" aria-hidden="true"></i></button>
-          <button id="inventory-duplicate-spool" class="btn btn-sm btn-primary inventory-icon-button" type="button" hidden aria-label="Spule duplizieren" title="Spule duplizieren"><i class="bi bi-copy" aria-hidden="true"></i></button>
-          <button id="inventory-delete-spool" class="btn btn-sm btn-primary inventory-icon-button" type="button" hidden aria-label="Spule löschen" title="Spule löschen"><i class="bi bi-trash3" aria-hidden="true"></i></button>
-          <button id="inventory-adjust-stock" class="btn btn-sm btn-primary inventory-icon-button" type="button" hidden aria-label="Bestand verändern" title="Bestand verändern"><i class="bi bi-sliders" aria-hidden="true"></i></button>
+          <button id="inventory-create-context" class="btn btn-sm btn-primary inventory-icon-button" type="button" hidden></button>
+          <button id="inventory-create-spool" class="btn btn-sm btn-primary inventory-icon-button" type="button" hidden></button>
+          <button id="inventory-open-filament" class="btn btn-sm btn-outline-primary inventory-icon-button" type="button" hidden aria-label="{{ _('Filament öffnen') }}" title="{{ _('Filament öffnen') }}"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i></button>
+          <button id="inventory-duplicate-filament" class="btn btn-sm btn-primary inventory-icon-button" type="button" hidden></button>
+          <button id="inventory-duplicate-spool" class="btn btn-sm btn-primary inventory-icon-button" type="button" hidden aria-label="{{ _('Spule duplizieren') }}" title="{{ _('Spule duplizieren') }}"><i class="bi bi-copy" aria-hidden="true"></i></button>
+          <button id="inventory-delete-spool" class="btn btn-sm btn-primary inventory-icon-button" type="button" hidden aria-label="{{ _('Spule löschen') }}" title="{{ _('Spule löschen') }}"><i class="bi bi-trash3" aria-hidden="true"></i></button>
+          <button id="inventory-adjust-stock" class="btn btn-sm btn-primary inventory-icon-button" type="button" hidden aria-label="{{ _('Bestand verändern') }}" title="{{ _('Bestand verändern') }}"><i class="bi bi-sliders" aria-hidden="true"></i></button>
+          <button id="inventory-assign-ams" class="btn btn-sm btn-primary inventory-icon-button" type="button" hidden aria-label="{{ _('In AMS') }}" title="{{ _('In AMS') }}"><i class="bi bi-box-arrow-in-right" aria-hidden="true"></i></button>
         </div>
       </div>
       <div id="inventory-current-weight" class="inventory-current-weight" hidden>
-        <div class="inventory-current-weight-heading"><span>Aktuelles Gewicht (g)</span><strong id="inventory-current-weight-value"></strong></div>
-        <div class="inventory-current-weight-bar" role="progressbar" aria-label="Aktuelles Spulengewicht"><i id="inventory-current-weight-fill"></i></div>
+        <div class="inventory-current-weight-heading"><span>{{ _('Aktuelles Gewicht (g)') }}</span><strong id="inventory-current-weight-value"></strong></div>
+        <div class="inventory-current-weight-bar" role="progressbar" aria-label="{{ _('Aktuelles Spulengewicht') }}"><i id="inventory-current-weight-fill"></i></div>
       </div>
       <div id="inventory-stock-adjustment" class="inventory-stock-adjustment" hidden>
-        <div class="inventory-stock-tabs" role="tablist" aria-label="Bestandskorrektur">
-          <button type="button" class="btn btn-sm btn-primary" data-stock-mode="delta">Gewicht</button>
-          <button type="button" class="btn btn-sm btn-outline-secondary" data-stock-mode="absolute">Gemessenes Gewicht</button>
+        <div class="inventory-stock-tabs" role="tablist" aria-label="{{ _('Bestandskorrektur') }}">
+          <button type="button" class="btn btn-sm btn-primary" data-stock-mode="delta">{{ _('Gewicht') }}</button>
+          <button type="button" class="btn btn-sm btn-outline-secondary" data-stock-mode="absolute">{{ _('Gemessenes Gewicht') }}</button>
         </div>
         <div class="inventory-stock-entry">
-          <label id="inventory-stock-label" class="form-label small mb-0" for="inventory-stock-value">Neues Gesamtgewicht</label>
+          <label id="inventory-stock-label" class="form-label small mb-0" for="inventory-stock-value">{{ _('Neues Gesamtgewicht') }}</label>
           <div class="input-group input-group-sm">
             <input id="inventory-stock-value" class="form-control" type="text" inputmode="decimal" autocomplete="off">
             <span class="input-group-text">g</span>
           </div>
-          <button id="inventory-stock-apply" class="btn btn-sm btn-primary" type="button">OK</button>
+          <button id="inventory-stock-apply" class="btn btn-sm btn-primary" type="button">{{ _('OK') }}</button>
         </div>
-        <div id="inventory-stock-help" class="small text-muted">Gesamtgewicht der Spule plus Restfilament, wie von einer Waage abgelesen.</div>
+        <div id="inventory-stock-help" class="small text-muted">{{ _('Gesamtgewicht der Spule plus Restfilament, wie von einer Waage abgelesen.') }}</div>
       </div>
       <div id="inventory-editor-fields" class="row g-2"></div>
       <section id="inventory-spool-prints" class="inventory-spool-prints" hidden aria-labelledby="inventory-spool-prints-title">
-        <div id="inventory-spool-prints-title" class="inventory-spool-prints-title">Drucke dieser Spule</div>
+        <div id="inventory-spool-prints-title" class="inventory-spool-prints-title">{{ _('Drucke dieser Spule') }}</div>
         <div id="inventory-spool-prints-list" class="inventory-spool-prints-list"></div>
       </section>
     </aside>
@@ -70,6 +80,9 @@
 <script id="local-material-data" type="application/json">{{ inventory_materials|tojson }}</script>
 <script id="local-spool-data" type="application/json">{{ inventory_spools|tojson }}</script>
 <script id="inventory-color-data" type="application/json">{{ inventory_colors|tojson }}</script>
+<script id="inventory-active-tray-data" type="application/json">{{ active_tray_options|tojson }}</script>
+<script id="inventory-nfc-tag-data" type="application/json">{{ inventory_nfc_tags|tojson }}</script>
+<script id="inventory-fill-context" type="application/json">{{ inventory_fill_context|tojson }}</script>
 <script>
 document.addEventListener('DOMContentLoaded', () => {
   const inventory = JSON.parse(document.getElementById('inventory-data').textContent);
@@ -78,23 +91,89 @@ document.addEventListener('DOMContentLoaded', () => {
   const localSpools = new Map(JSON.parse(document.getElementById('local-spool-data').textContent).map(item => [String(item.id), item]));
   const materials = JSON.parse(document.getElementById('local-material-data').textContent);
   const colorOptions = JSON.parse(document.getElementById('inventory-color-data').textContent);
+  const activeTrayOptions = JSON.parse(document.getElementById('inventory-active-tray-data').textContent);
+  const nfcTagOptions = JSON.parse(document.getElementById('inventory-nfc-tag-data').textContent);
+  const inventoryFillContext = JSON.parse(document.getElementById('inventory-fill-context').textContent || 'null');
+  const activePrintRunning = {{ active_print_running|tojson }};
+  const inventoryText = {
+    unused: {{ _('unbenutzt')|tojson }},
+    usedMinutes: {{ _('verwendet vor %s Min.')|tojson }},
+    usedHours: {{ _('verwendet vor %s Std.')|tojson }},
+    usedDays: {{ _('verwendet vor %s Tg.')|tojson }},
+    unknown: {{ _('Unbekannt')|tojson }},
+    unnamed: {{ _('Ohne Namen')|tojson }},
+    currentColor: {{ _('Aktuell (#%s)')|tojson }},
+    saveFailed: {{ _('Speichern fehlgeschlagen.')|tojson }},
+    saving: {{ _('Speichert …')|tojson }},
+    saved: {{ _('Gespeichert')|tojson }},
+    noPrints: {{ _('Keine Drucke zugeordnet.')|tojson }},
+    print: {{ _('Druck')|tojson }},
+    minutes: {{ _('Min.')|tojson }},
+    completed: {{ _('COMPLETED')|tojson }},
+    noFilaments: {{ _('Keine Filamente gefunden.')|tojson }},
+    manufacturerGroup: {{ _('Herstellergruppe')|tojson }},
+    materialGroup: {{ _('Materialgruppe')|tojson }},
+    spool: {{ _('Spule')|tojson }},
+    spools: {{ _('Spulen')|tojson }},
+    noSpool: {{ _('Keine Spule')|tojson }},
+    boundLocked: {{ _('Spule ist in der AMS gebunden und gesperrt.')|tojson }},
+    nfcBound: {{ _('Per NFC identifiziert und gesperrt')|tojson }},
+    creating: {{ _('Legt an …')|tojson }},
+    duplicating: {{ _('Dupliziert …')|tojson }},
+    duplicateFailed: {{ _('Duplizieren fehlgeschlagen.')|tojson }},
+    deleting: {{ _('Löscht …')|tojson }},
+    deleteConfirm: {{ _('Spule #%s wirklich löschen?')|tojson }},
+    deleteFailed: {{ _('Löschen fehlgeschlagen.')|tojson }},
+    filamentCurrentPrint: {{ _('Filament (aktueller Druck)')|tojson }},
+    filament: {{ _('Filament')|tojson }},
+    filamentDefault: {{ _('Filament-Standard')|tojson }},
+    weight: {{ _('Gewicht (g)')|tojson }},
+    emptySpoolWeight: {{ _('Leergewicht Spule (g)')|tojson }},
+    price: {{ _('Preis (EUR)')|tojson }},
+    correction: {{ _('Gewicht korrigieren (g)')|tojson }},
+    adjustStock: {{ _('Bestand verändern')|tojson }},
+    lastUsed: {{ _('Letzte Verwendung')|tojson }},
+    activeTray: {{ _('Aktives Fach')|tojson }},
+    activeTrayLocked: {{ _('Das aktive Fach kann während eines Drucks nicht geändert werden.')|tojson }},
+    activeTrayReadOnly: {{ _('Die Fachzuordnung erfolgt ausschließlich auf der AMS-Seite.')|tojson }},
+    nfcTag: {{ _('NFC-Tag')|tojson }},
+    nfcTagLocked: {{ _('Der NFC-Tag kann während eines Drucks nicht geändert werden.')|tojson }},
+    archived: {{ _('Archiviert')|tojson }},
+    diameter: {{ _('Durchmesser (mm)')|tojson }},
+    nozzleTemperatureFrom: {{ _('Düsentemperatur Min. (°C)')|tojson }},
+    nozzleTemperatureTo: {{ _('Düsentemperatur Max. (°C)')|tojson }},
+    nozzleTemperatureMin: {{ _('Düsentemperatur Min. (°C)')|tojson }},
+    nozzleTemperatureMax: {{ _('Düsentemperatur Max. (°C)')|tojson }},
+    color: {{ _('Farbe')|tojson }},
+    material: {{ _('Material')|tojson }},
+    manufacturer: {{ _('Hersteller')|tojson }},
+    stockCorrectionFailed: {{ _('Bestandskorrektur fehlgeschlagen.')|tojson }},
+    boundDelete: {{ _('Gebundene Spulen können nicht gelöscht werden.')|tojson }},
+    boundChange: {{ _('Gebundene Spulen können nicht verändert werden.')|tojson }},
+    assignAms: {{ _('In AMS')|tojson }},
+    assigningAms: {{ _('Wird dem AMS zugeordnet …')|tojson }},
+    assignAmsFailed: {{ _('Die Spule konnte dem AMS nicht zugeordnet werden.')|tojson }},
+    selectForAms: {{ _('Spule für AMS-Fach auswählen')|tojson }}
+  };
   const vendorIdByName = new Map([...localVendors.values()].map(item => [String(item.name || '').toLocaleLowerCase(), String(item.id)]));
   const groupsNode = document.getElementById('inventory-groups');
   const editor = document.getElementById('inventory-inline-editor');
-  const editorKind = document.getElementById('inventory-editor-kind');
   const editorTitle = document.getElementById('inventory-editor-title');
   const editorState = document.getElementById('inventory-editor-state');
   const editorFields = document.getElementById('inventory-editor-fields');
   const groupSelect = document.getElementById('inventory-group-select');
   const sortSelect = document.getElementById('inventory-sort-select');
+  const sortDirection = document.getElementById('inventory-sort-direction');
   const search = document.getElementById('inventory-search');
   const showArchived = document.getElementById('inventory-show-archived');
-  const createFilamentButton = document.getElementById('inventory-create-filament');
+  const createContextButton = document.getElementById('inventory-create-context');
   const createSpoolButton = document.getElementById('inventory-create-spool');
+  const duplicateFilamentButton = document.getElementById('inventory-duplicate-filament');
   const duplicateSpoolButton = document.getElementById('inventory-duplicate-spool');
   const deleteSpoolButton = document.getElementById('inventory-delete-spool');
   const openFilamentButton = document.getElementById('inventory-open-filament');
   const adjustStockButton = document.getElementById('inventory-adjust-stock');
+  const assignAmsButton = document.getElementById('inventory-assign-ams');
   const stockAdjustment = document.getElementById('inventory-stock-adjustment');
   const stockValue = document.getElementById('inventory-stock-value');
   const stockLabel = document.getElementById('inventory-stock-label');
@@ -114,10 +193,10 @@ document.addEventListener('DOMContentLoaded', () => {
       button.classList.toggle('btn-primary', active);
       button.classList.toggle('btn-outline-secondary', !active);
     });
-    stockLabel.textContent = stockMode === 'delta' ? 'Verbrauchsmenge' : 'Neues Gesamtgewicht';
+    stockLabel.textContent = stockMode === 'delta' ? {{ _('Verbrauchsmenge')|tojson }} : {{ _('Neues Gesamtgewicht')|tojson }};
     stockHelp.textContent = stockMode === 'delta'
-      ? 'Positive Werte verbrauchen Filament, negative Werte buchen Filament zurück.'
-      : 'Gesamtgewicht der Spule plus Restfilament, wie von einer Waage abgelesen.';
+      ? {{ _('Positive Werte verbrauchen Filament, negative Werte buchen Filament zurück.')|tojson }}
+      : {{ _('Gesamtgewicht der Spule plus Restfilament, wie von einer Waage abgelesen.')|tojson }};
     stockValue.value = '';
   };
   stockModeButtons.forEach(button => button.addEventListener('click', () => setStockMode(button.dataset.stockMode)));
@@ -126,25 +205,32 @@ document.addEventListener('DOMContentLoaded', () => {
   let selectedEditor = null;
   let savedState = {};
   try { savedState = JSON.parse(localStorage.getItem(stateKey) || '{}'); } catch (_) {}
+  // Reset only the expanded-group state once after migrating away from native
+  // details elements; grouping, sorting, direction and filter preferences stay.
+  if (savedState.groupLayoutVersion !== 2) {
+    savedState.openGroups = {};
+    savedState.groupLayoutVersion = 2;
+  }
   groupSelect.value = ['filament', 'vendor', 'material', 'none'].includes(savedState.group) ? savedState.group : 'filament';
-  sortSelect.value = ['last-used', 'name', 'remaining'].includes(savedState.sort) ? savedState.sort : 'last-used';
+  sortSelect.value = ['last-used', 'name', 'spool-id', 'assignment', 'remaining'].includes(savedState.sort) ? savedState.sort : 'last-used';
+  sortDirection.value = ['ascending', 'descending'].includes(savedState.direction) ? savedState.direction : 'descending';
   showArchived.checked = Boolean(savedState.showArchived);
 
   const text = value => String(value ?? '');
   const filamentOf = entry => entry.spool?.filament || {};
-  const vendorOf = entry => filamentOf(entry).vendor?.name || 'Unbekannt';
-  const materialOf = entry => filamentOf(entry).material || 'Unbekannt';
-  const filamentNameOf = entry => filamentOf(entry).name || 'Ohne Namen';
+  const vendorOf = entry => filamentOf(entry).vendor?.name || inventoryText.unknown;
+  const materialOf = entry => filamentOf(entry).material || inventoryText.unknown;
+  const filamentNameOf = entry => filamentOf(entry).name || inventoryText.unnamed;
   const numberLocale = document.documentElement.lang.startsWith('de') ? 'de-DE' : 'en-US';
   const formatDecimal = value => Number(value).toLocaleString(numberLocale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const formatWeight = grams => { const value = Number(grams || 0); if (value < 1000) return `${formatDecimal(value)} g`; return `${formatDecimal(value / 1000)} kg`; };
   const relativeDate = value => {
-    if (!value) return 'unbenutzt';
+    if (!value) return inventoryText.unused;
     const date = new Date(value.replace(' ', 'T'));
     const minutes = Math.max(0, Math.round((Date.now() - date.getTime()) / 60000));
-    if (minutes < 60) return `verwendet vor ${minutes} Min.`;
-    if (minutes < 1440) return `verwendet vor ${Math.round(minutes / 60)} Std.`;
-    return `verwendet vor ${Math.round(minutes / 1440)} Tg.`;
+    if (minutes < 60) return inventoryText.usedMinutes.replace('%s', String(minutes));
+    if (minutes < 1440) return inventoryText.usedHours.replace('%s', String(Math.round(minutes / 60)));
+    return inventoryText.usedDays.replace('%s', String(Math.round(minutes / 1440)));
   };
   const make = (tag, className, value) => { const node = document.createElement(tag); if (className) node.className = className; if (value !== undefined) node.textContent = value; return node; };
   const storeView = () => { try { localStorage.setItem(stateKey, JSON.stringify(savedState)); } catch (_) {} };
@@ -159,13 +245,14 @@ document.addEventListener('DOMContentLoaded', () => {
       const mode = details.dataset.groupMode;
       if (!savedState.openGroups || typeof savedState.openGroups !== 'object') savedState.openGroups = {};
       if (!savedState.openGroups[mode] || typeof savedState.openGroups[mode] !== 'object') savedState.openGroups[mode] = {};
-      savedState.openGroups[mode][details.dataset.groupKey] = details.open;
+      savedState.openGroups[mode][details.dataset.groupKey] = details.dataset.open === 'true';
     });
   };
   const persistView = () => {
     rememberOpenGroups();
     savedState.group = groupSelect.value;
     savedState.sort = sortSelect.value;
+    savedState.direction = sortDirection.value;
     savedState.showArchived = showArchived.checked;
     storeView();
   };
@@ -175,6 +262,18 @@ document.addEventListener('DOMContentLoaded', () => {
     const number = Number(value);
     if (!Number.isFinite(number)) return value;
     return formatDecimal(number);
+  };
+  const formatDisplayDateTime = value => {
+    if (!value) return '';
+    const date = new Date(String(value).replace(' ', 'T'));
+    if (Number.isNaN(date.getTime())) return String(value);
+    const language = String(document.documentElement.lang || 'de').toLowerCase();
+    const locale = language.startsWith('en') ? 'en-US' : 'de-DE';
+    return new Intl.DateTimeFormat(locale, {
+      dateStyle: 'short',
+      timeStyle: 'short',
+      hour12: locale === 'en-US',
+    }).format(date);
   };
   const moneyOrWeightField = name => name === 'price' || name.includes('weight');
 
@@ -204,9 +303,16 @@ document.addEventListener('DOMContentLoaded', () => {
       groups.get(key).entries.push(entry);
     });
     const sorted = [...groups.values()];
+    const direction = sortDirection.value === 'ascending' ? 1 : -1;
     const usedAt = entry => Date.parse((entry.last_used || '').replace(' ', 'T')) || 0;
     const compareText = (left, right) => String(left || '').localeCompare(String(right || ''), undefined, { sensitivity: 'base' });
     const spoolId = entry => Number(entry.spool?.id || 0);
+    const assignmentRank = entry => {
+      if (entry.localOnly) return 3;
+      if (entry.spool?.active_print_locked) return 0;
+      const activeTray = String(entry.spool?.active_tray || '').replace(/^"|"$/g, '').trim();
+      return activeTray || entry.spool?.active_ams_locked ? 1 : 2;
+    };
     const compareByName = (left, right) => {
       const leftFilament = filamentOf(left);
       const rightFilament = filamentOf(right);
@@ -226,16 +332,20 @@ document.addEventListener('DOMContentLoaded', () => {
       return result || spoolId(left) - spoolId(right);
     };
     sorted.forEach(group => group.entries.sort((left, right) => {
-      if (sortSelect.value === 'name') return compareByName(left, right);
-      const byLastUse = usedAt(right) - usedAt(left);
+      if (sortSelect.value === 'name') return direction * compareByName(left, right);
+      if (sortSelect.value === 'spool-id') return direction * (spoolId(left) - spoolId(right));
+      if (sortSelect.value === 'assignment') return direction * (assignmentRank(left) - assignmentRank(right) || spoolId(left) - spoolId(right));
+      const byLastUse = direction * (usedAt(left) - usedAt(right));
       if (byLastUse) return byLastUse;
-      return spoolId(right) - spoolId(left);
+      return direction * (spoolId(left) - spoolId(right));
     }));
     const latest = group => Math.max(...group.entries.map(entry => Date.parse((entry.last_used || '').replace(' ', 'T')) || 0));
     sorted.sort((left, right) => {
-      if (sortSelect.value === 'remaining') return right.entries.reduce((sum, entry) => sum + Number(entry.spool.remaining_weight || 0), 0) - left.entries.reduce((sum, entry) => sum + Number(entry.spool.remaining_weight || 0), 0);
-      if (sortSelect.value === 'name') return compareByName(left.entries[0], right.entries[0]);
-      return latest(right) - latest(left) || compareText(left.label, right.label);
+      if (sortSelect.value === 'remaining') return direction * (left.entries.reduce((sum, entry) => sum + Number(entry.spool.remaining_weight || 0), 0) - right.entries.reduce((sum, entry) => sum + Number(entry.spool.remaining_weight || 0), 0));
+      if (sortSelect.value === 'name') return direction * compareByName(left.entries[0], right.entries[0]);
+      if (sortSelect.value === 'spool-id') return direction * (Math.min(...left.entries.map(spoolId)) - Math.min(...right.entries.map(spoolId)));
+      if (sortSelect.value === 'assignment') return direction * (Math.min(...left.entries.map(assignmentRank)) - Math.min(...right.entries.map(assignmentRank)) || compareText(left.label, right.label));
+      return direction * (latest(left) - latest(right)) || direction * compareText(left.label, right.label);
     });
     return sorted;
   }
@@ -246,28 +356,47 @@ document.addEventListener('DOMContentLoaded', () => {
     const filamentDefaultValue = filamentDefaultField ? record.filament?.[filamentDefaultField] : null;
     const hasFilamentDefault = filamentDefaultValue !== null && filamentDefaultValue !== undefined;
     const defaultFromFilament = Boolean(record.filament_defaults?.[name]);
-    const wrap = make('div', name === 'name' || name === 'tag' || name === 'active_tray' ? 'col-12' : 'col-12 col-md-6');
+    const wrap = make('div', name === 'name' || name === 'nfc_tag_id' || name === 'active_tray' ? 'col-12' : 'col-12 col-md-6');
+    wrap.dataset.fieldWrap = name;
     const labelNode = make('label', 'form-label small mb-1', label);
     let input;
     let colorPreview;
     let clearingToDefault = false;
-    if (type === 'select' || type === 'color') {
+    if (type === 'readonly') {
+      input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'form-control form-control-sm inventory-readonly';
+      const current = String(record[name] || '').replace(/^"|"$/g, '').trim();
+      const currentOption = (options || []).find(option => String(option.value) === current);
+      input.value = currentOption?.label || current || '—';
+      input.readOnly = true;
+      input.setAttribute('aria-readonly', 'true');
+      input.title = inventoryText.activeTrayReadOnly;
+    } else if (type === 'select' || type === 'color') {
       input = document.createElement('select');
       input.className = 'form-select form-select-sm';
       if (type === 'select') {
         input.append(new Option('\u2014', ''));
         options.forEach(option => {
-          const label = name === 'filament_id' && option.material_name
+          const label = name === 'active_tray'
+            ? option.label
+            : name === 'nfc_tag_id'
+            ? option.label
+            : name === 'filament_id' && option.material_name
             ? `${option.name} · ${option.material_name}`
             : option.name;
-          input.append(new Option(label, option.id));
+          const optionNode = new Option(label, name === 'active_tray' ? option.value : option.id);
+          if (name === 'nfc_tag_id' && option.spool_number && String(option.spool_number) !== String(record.id)) {
+            optionNode.disabled = true;
+          }
+          input.append(optionNode);
         });
         input.value = record[name] ?? '';
       } else {
         const current = localColor(record[name]);
-        input.append(new Option('Farbe ausw\u00e4hlen', ''));
+        input.append(new Option({{ _('Farbe auswählen')|tojson }}, ''));
         colorOptions.forEach(color => input.append(new Option(color.name, color.hex_code)));
-        if (![...input.options].some(option => option.value === current)) input.append(new Option(`Aktuell (#${current})`, current));
+        if (![...input.options].some(option => option.value === current)) input.append(new Option(inventoryText.currentColor.replace('%s', current), current));
         input.value = current;
         colorPreview = make('span', 'inventory-color-preview');
         colorPreview.style.backgroundColor = `#${current}`;
@@ -283,12 +412,18 @@ document.addEventListener('DOMContentLoaded', () => {
       input.type = 'text';
       input.inputMode = type === 'numeric' ? 'decimal' : 'text';
       input.className = 'form-control form-control-sm';
-      input.value = defaultFromFilament ? '' : (type === 'numeric'
+      input.value = defaultFromFilament ? '' : (type === 'datetime'
+        ? (record[`${name}_display`] || formatDisplayDateTime(record[name]))
+        : type === 'numeric'
         ? formatEditorNumber(name, record[name])
         : (record[name] ?? ''));
+      if (type === 'datetime') {
+        input.readOnly = true;
+        input.classList.add('inventory-readonly');
+      }
       if (type === 'numeric') input.placeholder = formatEditorNumber(name, 0);
       if (hasFilamentDefault) {
-        input.placeholder = `${formatEditorNumber(name, filamentDefaultValue)} · Filament-Standard`;
+        input.placeholder = `${formatEditorNumber(name, filamentDefaultValue)} · ${inventoryText.filamentDefault}`;
         input.classList.toggle('inventory-filament-default', defaultFromFilament);
       }
     }
@@ -297,7 +432,11 @@ document.addEventListener('DOMContentLoaded', () => {
     input.disabled = Boolean(locked);
     input.dataset.originalValue = type === 'checkbox' ? String(input.checked) : input.value;
     if (locked) {
-      input.title = 'Das Filament kann nach einer Buchung nicht mehr geändert werden.';
+      input.title = name === 'active_tray'
+        ? inventoryText.activeTrayLocked
+        : name === 'nfc_tag_id'
+          ? inventoryText.nfcTagLocked
+          : {{ _('Das Filament kann nach einer Buchung nicht mehr geändert werden.')|tojson }};
     }
     input.addEventListener('input', () => {
       if (!hasFilamentDefault) return;
@@ -314,7 +453,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const value = type === 'checkbox' ? input.checked : (clearingToDefault || usesFilamentDefault ? '' : input.value);
       if (String(value) === input.dataset.originalValue) return;
       input.disabled = true;
-      editorState.textContent = 'Speichert \u2026';
+      editorState.textContent = inventoryText.saving;
       try {
         const savedValue = type === 'numeric' && value !== '' ? value.replace(',', '.') : value;
         const result = await save(name, savedValue);
@@ -323,10 +462,10 @@ document.addEventListener('DOMContentLoaded', () => {
           colorPreview.style.backgroundColor = `#${localColor(value)}`;
           colorPreview.title = `#${localColor(value)}`;
         }
-        editorState.textContent = 'Gespeichert';
+        editorState.textContent = inventoryText.saved;
         return result;
       } catch (error) {
-        editorState.textContent = error.message || 'Speichern fehlgeschlagen.';
+        editorState.textContent = error.message || inventoryText.saveFailed;
         if (type === 'checkbox') input.checked = input.dataset.originalValue === 'true';
         else input.value = input.dataset.originalValue;
       } finally { input.disabled = false; }
@@ -347,21 +486,37 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!record) return;
     const endpoint = { vendor: 'local-vendors', filament: 'local-filaments', spool: 'local-spools' }[kind];
     const resultKey = { vendor: 'vendor', filament: 'filament', spool: 'spool' }[kind];
-    const label = { vendor: 'Hersteller', filament: 'Filament', spool: 'Spule' }[kind];
+    const label = { vendor: inventoryText.manufacturer, filament: inventoryText.filament, spool: inventoryText.spool }[kind];
     selectedEditor = { kind, id: String(id) };
     updateSelectionMarker();
     editor.hidden = false;
-    const spoolLocked = kind === 'spool' && Boolean(record.active_print_locked);
-    createSpoolButton.hidden = kind !== 'filament';
-    duplicateSpoolButton.hidden = kind !== 'spool';
-    deleteSpoolButton.hidden = kind !== 'spool';
-    adjustStockButton.hidden = kind !== 'spool';
-    duplicateSpoolButton.disabled = spoolLocked;
-    duplicateSpoolButton.title = spoolLocked ? 'Gebundene Spulen können nicht dupliziert werden.' : 'Spule duplizieren';
+    const spoolLocked = kind === 'spool' && Boolean(record.active_print_locked || record.active_ams_locked || record.nfc_ams_locked);
+    const fillMode = Boolean(inventoryFillContext);
+    createContextButton.hidden = fillMode || !['vendor', 'filament'].includes(kind);
+    createContextButton.innerHTML = '<i class="bi bi-plus-circle" aria-hidden="true"></i>';
+    createContextButton.title = kind === 'vendor' ? {{ _('Hersteller anlegen')|tojson }} : {{ _('Filament anlegen')|tojson }};
+    createContextButton.setAttribute('aria-label', createContextButton.title);
+    createSpoolButton.hidden = fillMode || kind !== 'filament';
+    createSpoolButton.innerHTML = '<i class="bi bi-plus-square" aria-hidden="true"></i>';
+    createSpoolButton.title = {{ _('Neue Spule')|tojson }};
+    createSpoolButton.setAttribute('aria-label', createSpoolButton.title);
+    duplicateFilamentButton.hidden = fillMode || kind !== 'filament';
+    duplicateFilamentButton.innerHTML = '<i class="bi bi-copy" aria-hidden="true"></i>';
+    duplicateFilamentButton.title = {{ _('Filament kopieren')|tojson }};
+    duplicateFilamentButton.setAttribute('aria-label', duplicateFilamentButton.title);
+    duplicateSpoolButton.hidden = fillMode || kind !== 'spool';
+    deleteSpoolButton.hidden = fillMode || kind !== 'spool';
+    adjustStockButton.hidden = fillMode || kind !== 'spool';
+    assignAmsButton.hidden = !fillMode || kind !== 'spool';
+    openFilamentButton.hidden = fillMode || kind !== 'spool';
+    duplicateSpoolButton.disabled = false;
+    duplicateSpoolButton.title = {{ _('Spule kopieren')|tojson }};
     deleteSpoolButton.disabled = spoolLocked;
-    deleteSpoolButton.title = spoolLocked ? 'Gebundene Spulen können nicht gelöscht werden.' : 'Spule löschen';
+    deleteSpoolButton.title = spoolLocked ? inventoryText.boundDelete : {{ _('Spule löschen')|tojson }};
     adjustStockButton.disabled = spoolLocked;
-    adjustStockButton.title = spoolLocked ? 'Gebundene Spulen können nicht verändert werden.' : 'Bestand verändern';
+    adjustStockButton.title = spoolLocked ? inventoryText.boundChange : {{ _('Bestand verändern')|tojson }};
+    assignAmsButton.disabled = spoolLocked;
+    assignAmsButton.title = spoolLocked ? inventoryText.boundLocked : inventoryText.assignAms;
     currentWeight.hidden = kind !== 'spool';
     spoolPrints.hidden = kind !== 'spool';
     spoolPrintsList.replaceChildren();
@@ -370,7 +525,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const prints = Array.isArray(liveEntry?.prints) ? liveEntry.prints : [];
       if (!prints.length) {
         const empty = make('div', 'small text-muted');
-        empty.textContent = 'Keine Drucke zugeordnet.';
+        empty.textContent = inventoryText.noPrints;
         spoolPrintsList.append(empty);
       } else {
         prints.forEach(print => {
@@ -379,12 +534,12 @@ document.addEventListener('DOMContentLoaded', () => {
           const link = make('a', 'inventory-spool-print-link');
           const printId = print.print_id ?? print.id;
           link.href = `/print_history?print_id=${encodeURIComponent(printId)}#print_${encodeURIComponent(printId)}`;
-          link.textContent = `#${printId} · ${print.file_name || 'Druck'}`;
+          link.textContent = `#${printId} · ${print.file_name || inventoryText.print}`;
           const meta = make('div', 'small text-muted');
           const date = print.print_date ? new Date(String(print.print_date).replace(' ', 'T')).toLocaleString(numberLocale, { dateStyle: 'short', timeStyle: 'short' }) : '–';
-          const duration = print.duration_minutes != null ? ` · ${print.duration_minutes} Min.` : '';
+          const duration = print.duration_minutes != null ? ` · ${print.duration_minutes} ${inventoryText.minutes}` : '';
           const amount = print.grams_used != null ? ` · ${formatDecimal(print.grams_used)} g` : '';
-          meta.textContent = `${date} · ${print.status || 'COMPLETED'}${duration}${amount}`;
+          meta.textContent = `${date} · ${print.status || inventoryText.completed}${duration}${amount}`;
           details.append(link, meta);
           row.append(details);
           spoolPrintsList.append(row);
@@ -406,7 +561,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     stockAdjustment.hidden = true;
     stockValue.value = '';
+    // The correction value is calculated and must remain disabled. The
+    // adjustment dialog itself follows the selected spool's lock state and
+    // must be re-enabled when switching back from a locked spool.
+    stockModeButtons.forEach(button => { button.disabled = spoolLocked; });
+    stockValue.disabled = spoolLocked;
+    stockApply.disabled = spoolLocked;
     createSpoolButton.onclick = () => createSpoolForFilament(record);
+    duplicateFilamentButton.onclick = () => duplicateFilament(record);
+    createContextButton.onclick = () => createLocalEntity(kind);
     duplicateSpoolButton.onclick = () => duplicateSpool(record);
     deleteSpoolButton.onclick = () => deleteSpool(record);
     openFilamentButton.onclick = () => selectEditor('filament', record.filament_id);
@@ -417,18 +580,35 @@ document.addEventListener('DOMContentLoaded', () => {
         stockValue.focus();
       }
     };
+    assignAmsButton.onclick = async () => {
+      if (!inventoryFillContext || spoolLocked) return;
+      assignAmsButton.disabled = true;
+      editorState.textContent = inventoryText.assigningAms;
+      try {
+        const response = await fetch(`/inventory/local-spools/${encodeURIComponent(id)}/assign-tray`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(inventoryFillContext),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || inventoryText.assignAmsFailed);
+        window.location.href = '/ams';
+      } catch (error) {
+        editorState.textContent = error.message || inventoryText.assignAmsFailed;
+        assignAmsButton.disabled = false;
+      }
+    };
     stockApply.onclick = async () => {
       const value = stockValue.value.trim();
       if (!value) return;
       stockApply.disabled = true;
-      editorState.textContent = 'Speichert …';
+      editorState.textContent = inventoryText.saving;
       try {
         const response = await fetch(`/inventory/local-spools/${id}/stock-adjustment`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ mode: stockMode, value: value.replace(',', '.') }),
         });
         const result = await response.json();
-        if (!response.ok) throw new Error(result.error || 'Bestandskorrektur fehlgeschlagen.');
+        if (!response.ok) throw new Error(result.error || inventoryText.stockCorrectionFailed);
         localSpools.set(String(id), result.spool);
         const entry = inventory.find(item => String(item.spool?.id) === String(id));
         if (entry) entry.spool = result.spool;
@@ -437,17 +617,16 @@ document.addEventListener('DOMContentLoaded', () => {
         setStockMode(stockMode);
         render();
       } catch (error) {
-        editorState.textContent = error.message || 'Bestandskorrektur fehlgeschlagen.';
+        editorState.textContent = error.message || inventoryText.stockCorrectionFailed;
       } finally { stockApply.disabled = false; }
     };
-    editorKind.textContent = `${label} \u00b7 lokale Stammdaten`;
-    editorTitle.textContent = kind === 'vendor' ? record.name : kind === 'spool' ? `#${record.id} \u00b7 ${record.filament?.name || 'Spule'}` : `${record.vendor_name || 'Unbekannt'} \u00b7 ${record.name}`;
+    editorTitle.textContent = kind === 'vendor' ? record.name : kind === 'spool' ? `#${record.id} \u00b7 ${record.filament?.name || inventoryText.spool}` : `${record.vendor_name || inventoryText.unknown} \u00b7 ${record.name}`;
     editorState.textContent = '';
     editorFields.replaceChildren();
     const save = async (name, value) => {
       const response = await fetch(`/inventory/${endpoint}/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ [name]: value }) });
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error || 'Speichern fehlgeschlagen.');
+      if (!response.ok) throw new Error(result.error || inventoryText.saveFailed);
       records[kind].set(String(id), result[resultKey]);
       if (kind === 'spool') {
         const entry = inventory.find(item => String(item.spool?.id) === String(id));
@@ -473,17 +652,38 @@ document.addEventListener('DOMContentLoaded', () => {
     const definitions = kind === 'vendor'
       ? [['name', 'Name', 'text']]
       : kind === 'spool'
-        ? [['filament_id', record.active_print_locked ? 'Filament (aktueller Druck)' : 'Filament', 'select', [...localFilaments.values()], Boolean(record.active_print_locked)], ['initial_weight', 'Gewicht (g)', 'numeric'], ['spool_weight', 'Leergewicht Spule (g)', 'numeric'], ['price', 'Preis (EUR)', 'numeric'], ['weight_correction', 'Bestandskorrektur (g)', 'numeric'], ['tag', 'NFC-Tag', 'text'], ['active_tray', 'Aktives Fach', 'text'], ['archived', 'Archiviert', 'checkbox']]
-        : [['name', 'Name', 'text'], ['vendor_id', 'Hersteller', 'select', [...localVendors.values()]], ['material_id', 'Material', 'select', materials], ['color_hex', 'Farbe', 'color'], ['diameter', 'Durchmesser (mm)', 'numeric'], ['weight', 'Gewicht (g)', 'numeric'], ['spool_weight', 'Leergewicht Spule (g)', 'numeric'], ['price', 'Preis (EUR)', 'numeric'], ['nozzle_temp', 'D\u00fcsentemperatur (\u00b0C)', 'numeric'], ['bed_temp', 'Bett-Temperatur (\u00b0C)', 'numeric'], ['extruder_temp', 'Extruder-Temperatur (\u00b0C)', 'numeric'], ['cali_idx', 'Kalibrierungsindex', 'numeric'], ['bambu_filament_id', 'Bambu Filament-ID', 'text'], ['bambu_setting_id', 'Bambu Setting-ID', 'text']];
+        ? [['filament_id', record.active_print_locked ? inventoryText.filamentCurrentPrint : inventoryText.filament, 'select', [...localFilaments.values()], Boolean(record.active_print_locked)], ['initial_weight', inventoryText.weight, 'numeric'], ['spool_weight', inventoryText.emptySpoolWeight, 'numeric'], ['price', inventoryText.price, 'numeric'], ['weight_correction', inventoryText.correction, 'numeric'], ['last_used', inventoryText.lastUsed, 'datetime', null, true], ['nfc_tag_id', inventoryText.nfcTag, 'select', nfcTagOptions, activePrintRunning], ['active_tray', inventoryText.activeTray, 'readonly', activeTrayOptions], ['archived', inventoryText.archived, 'checkbox']]
+        : [['name', {{ _('Name')|tojson }}, 'text'], ['vendor_id', inventoryText.manufacturer, 'select', [...localVendors.values()]], ['material_id', inventoryText.material, 'select', [...materials]], ['color_hex', inventoryText.color, 'color'], ['diameter', inventoryText.diameter, 'numeric'], ['weight', inventoryText.weight, 'numeric'], ['spool_weight', inventoryText.emptySpoolWeight, 'numeric'], ['price', inventoryText.price, 'numeric'], ['nozzle_temp_min', inventoryText.nozzleTemperatureMin, 'numeric'], ['nozzle_temp_max', inventoryText.nozzleTemperatureMax, 'numeric']];
     definitions.forEach(definition => editorFields.append(buildInput(definition, record, save)));
+    if (kind === 'filament') {
+      const minimumWrap = editorFields.querySelector('[data-field-wrap="nozzle_temp_min"]');
+      const maximumWrap = editorFields.querySelector('[data-field-wrap="nozzle_temp_max"]');
+      if (minimumWrap && maximumWrap) {
+        const group = make('div', 'col-12 col-md-6');
+        const row = make('div', 'row g-2');
+        editorFields.insertBefore(group, minimumWrap);
+        minimumWrap.className = 'col-6';
+        maximumWrap.className = 'col-6';
+        minimumWrap.querySelector('label').textContent = inventoryText.nozzleTemperatureFrom;
+        maximumWrap.querySelector('label').textContent = inventoryText.nozzleTemperatureTo;
+        group.append(row);
+        row.append(minimumWrap, maximumWrap);
+      }
+    }
     if (kind === 'spool') {
       const filamentInput = editorFields.querySelector('select');
       const filamentField = filamentInput?.parentElement;
       if (filamentInput && filamentField) {
         const control = make('div', 'inventory-filament-control');
+        const filamentColor = localColor(record.filament?.color_hex);
+        const colorPreview = make('span', 'inventory-color-preview inventory-filament-color-preview');
+        colorPreview.style.backgroundColor = `#${filamentColor}`;
+        colorPreview.title = inventoryText.color;
+        colorPreview.setAttribute('aria-label', inventoryText.color);
+        colorPreview.setAttribute('role', 'img');
         filamentInput.replaceWith(control);
-        control.append(filamentInput, openFilamentButton);
-        openFilamentButton.hidden = false;
+        control.append(filamentInput, colorPreview);
+        if (!fillMode) control.append(openFilamentButton);
       }
       const correctionInput = editorFields.querySelector('[data-field-name="weight_correction"]');
       const correctionField = correctionInput?.parentElement;
@@ -492,6 +692,8 @@ document.addEventListener('DOMContentLoaded', () => {
         correctionInput.disabled = true;
         correctionInput.tabIndex = -1;
         correctionInput.setAttribute('aria-readonly', 'true');
+        correctionInput.title = inventoryText.adjustStock;
+        correctionInput.classList.add('inventory-correction-input');
         correctionInput.classList.add('inventory-readonly');
         const control = make('div', 'inventory-correction-control');
         correctionInput.replaceWith(control);
@@ -501,51 +703,99 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
     if (spoolLocked) {
-      editorFields.querySelectorAll('input, select, textarea, button').forEach(field => { field.disabled = true; });
-      editorState.textContent = 'Spule ist in einem Druck gebunden und gesperrt.';
+      editorFields.querySelectorAll('input, select, textarea, button').forEach(field => {
+        if (field !== openFilamentButton) field.disabled = true;
+      });
+      editorState.textContent = inventoryText.boundLocked;
+    }
+    if (fillMode) {
+      editorFields.querySelectorAll('input, select, textarea, button').forEach(field => {
+        field.disabled = true;
+      });
+      editorState.textContent = inventoryText.selectForAms;
     }
   }
 
   async function createSpoolForFilament(filament) {
     createSpoolButton.disabled = true;
-    editorState.textContent = 'Legt an …';
+    editorState.textContent = inventoryText.creating;
     try {
       const response = await fetch('/inventory/local-spools', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filament_id: filament.id }) });
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error || 'Anlegen fehlgeschlagen.');
+      if (!response.ok) throw new Error(result.error || {{ _('Anlegen fehlgeschlagen.')|tojson }});
       localSpools.set(String(result.spool.id), result.spool);
       inventory.push({ spool: result.spool, last_used: null });
       selectEditor('spool', result.spool.id);
       render();
     } catch (error) {
-      editorState.textContent = error.message || 'Anlegen fehlgeschlagen.';
+      editorState.textContent = error.message || {{ _('Anlegen fehlgeschlagen.')|tojson }};
     } finally { createSpoolButton.disabled = false; }
+  }
+
+  async function createLocalEntity(kind) {
+    const isVendor = kind === 'vendor';
+    const endpoint = isVendor ? '/inventory/local-vendors' : '/inventory/local-filaments';
+    const resultKey = isVendor ? 'vendor' : 'filament';
+    const name = isVendor ? {{ _('Neuer Hersteller')|tojson }} : {{ _('Neues Filament')|tojson }};
+    createContextButton.disabled = true;
+    editorState.textContent = {{ _('Wird angelegt …')|tojson }};
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || {{ _('Anlegen fehlgeschlagen.')|tojson }});
+      const created = result[resultKey];
+      (isVendor ? localVendors : localFilaments).set(String(created.id), created);
+      selectEditor(kind, created.id);
+      render();
+    } catch (error) {
+      editorState.textContent = error.message || {{ _('Anlegen fehlgeschlagen.')|tojson }};
+    } finally {
+      createContextButton.disabled = false;
+    }
+  }
+
+  async function duplicateFilament(filament) {
+    duplicateFilamentButton.disabled = true;
+    editorState.textContent = {{ _('Kopiert …')|tojson }};
+    try {
+      const response = await fetch(`/inventory/local-filaments/${filament.id}/duplicate`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || {{ _('Kopieren fehlgeschlagen.')|tojson }});
+      localFilaments.set(String(result.filament.id), result.filament);
+      selectEditor('filament', result.filament.id);
+      render();
+    } catch (error) {
+      editorState.textContent = error.message || {{ _('Kopieren fehlgeschlagen.')|tojson }};
+    } finally { duplicateFilamentButton.disabled = false; }
   }
 
   async function duplicateSpool(spool) {
     duplicateSpoolButton.disabled = true;
-    editorState.textContent = 'Dupliziert …';
+    editorState.textContent = inventoryText.duplicating;
     try {
       const response = await fetch(`/inventory/local-spools/${spool.id}/duplicate`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error || 'Duplizieren fehlgeschlagen.');
+      if (!response.ok) throw new Error(result.error || inventoryText.duplicateFailed);
       localSpools.set(String(result.spool.id), result.spool);
       inventory.push({ spool: result.spool, last_used: null });
       selectEditor('spool', result.spool.id);
       render();
     } catch (error) {
-      editorState.textContent = error.message || 'Duplizieren fehlgeschlagen.';
+      editorState.textContent = error.message || inventoryText.duplicateFailed;
     } finally { duplicateSpoolButton.disabled = false; }
   }
 
   async function deleteSpool(spool) {
-    if (spool.active_print_locked || !window.confirm(`Spule #${spool.id} wirklich löschen?`)) return;
+    if (spool.active_print_locked || spool.active_ams_locked || spool.nfc_ams_locked || !window.confirm(inventoryText.deleteConfirm.replace('%s', String(spool.id)))) return;
     deleteSpoolButton.disabled = true;
-    editorState.textContent = 'Löscht …';
+    editorState.textContent = inventoryText.deleting;
     try {
       const response = await fetch(`/inventory/local-spools/${spool.id}`, { method: 'DELETE' });
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error || 'Löschen fehlgeschlagen.');
+      if (!response.ok) throw new Error(result.error || inventoryText.deleteFailed);
       localSpools.delete(String(spool.id));
       const index = inventory.findIndex(item => String(item.spool?.id) === String(spool.id));
       if (index >= 0) inventory.splice(index, 1);
@@ -553,7 +803,7 @@ document.addEventListener('DOMContentLoaded', () => {
       editor.hidden = true;
       render();
     } catch (error) {
-      editorState.textContent = error.message || 'Löschen fehlgeschlagen.';
+      editorState.textContent = error.message || inventoryText.deleteFailed;
       deleteSpoolButton.disabled = false;
     }
   }
@@ -578,33 +828,64 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function renderSpoolRow(entry, mode) {
-    if (entry.localOnly) return make('div', 'inventory-spool-row text-muted', 'Keine Spule');
+    if (entry.localOnly) return make('div', 'inventory-spool-row text-muted', inventoryText.noSpool);
     const button = make('button', 'inventory-spool-row');
     button.type = 'button';
+    if (mode === 'filament') button.classList.add('inventory-spool-row-compact');
     button.classList.add('inventory-selectable');
     button.dataset.selectionKind = 'spool';
     button.dataset.selectionId = String(entry.spool.id);
-    if (entry.spool.active_print_locked) {
-      button.classList.add('inventory-active-print');
-      button.title = 'Spule im aktuell laufenden Druck gebunden';
-    }
+    const nfcLocked = Boolean(entry.spool.nfc_ams_locked);
+    const spoolInUse = Boolean(entry.spool.active_print_locked || entry.spool.active_ams_locked || nfcLocked);
+    // The NFC marker describes the spool itself, while the lock describes
+    // whether the spool is currently bound in the AMS/print workflow. They
+    // are independent states and must therefore be rendered independently.
+    const nfcTagId = entry.spool.nfc_tag_id;
+    const nfcTagValue = entry.spool.nfc_tag_value || entry.spool.extra?.tag;
+    const hasNfcTag = (nfcTagId !== null && nfcTagId !== undefined && String(nfcTagId).trim() !== '')
+      || Boolean(nfcTagValue && String(nfcTagValue).replace(/^"|"$/g, '').trim());
     const filament = filamentOf(entry);
     const material = materialOf(entry);
     const vendor = vendorOf(entry);
-    const name = filament.name || 'Ohne Namen';
+    const name = filament.name || inventoryText.unnamed;
     const diameter = filament.diameter ? `${formatDecimal(filament.diameter)} mm` : '';
     const title = mode === 'vendor' || mode === 'filament' ? name : `${vendor} · ${name}`;
     const meta = [material, diameter].filter(Boolean).join(' · ');
     const left = make('span', `inventory-spool-left${mode === 'filament' ? ' inventory-spool-left-compact' : ''}`);
-    left.append(make('strong', '', `#${entry.spool.id}`));
-    if (mode === 'filament') {
-      left.append(make('small', '', relativeDate(entry.last_used)));
+    const spoolNumber = make('strong', 'inventory-spool-number', `#${entry.spool.id}`);
+    if (spoolInUse) {
+      const lock = make('i', 'bi bi-lock-fill inventory-spool-lock');
+      lock.setAttribute('aria-hidden', 'true');
+      const lockTitle = nfcLocked
+        ? inventoryText.nfcBound
+        : entry.spool.active_print_locked
+        ? {{ _('Spule im aktuellen Druck')|tojson }}
+        : inventoryText.boundLocked;
+      lock.title = lockTitle;
+      spoolNumber.append(lock);
+      button.title = lockTitle;
     } else {
+      // Reserve the lock column so all rows keep the same alignment.
+      spoolNumber.append(make('span', 'inventory-spool-icon-placeholder'));
+    }
+    if (hasNfcTag) {
+      const nfcIcon = make('i', 'bi bi-nfc inventory-spool-lock inventory-spool-nfc-lock');
+      nfcIcon.setAttribute('aria-hidden', 'true');
+      nfcIcon.title = inventoryText.nfcTag;
+      nfcIcon.setAttribute('aria-label', inventoryText.nfcTag);
+      spoolNumber.append(nfcIcon);
+      if (!button.title) button.title = inventoryText.nfcTag;
+    } else {
+      // Reserve the NFC column independently from the lock column.
+      spoolNumber.append(make('span', 'inventory-spool-icon-placeholder'));
+    }
+    left.append(spoolNumber);
+    if (mode !== 'filament') {
       const color = make('span', 'inventory-spool-color');
       color.style.backgroundColor = `#${localColor(filament.color_hex)}`;
       left.append(color);
       const copy = make('span', 'inventory-spool-copy');
-      copy.append(make('strong', '', title), make('small', '', `${meta}${meta ? ' · ' : ''}${relativeDate(entry.last_used)}`));
+      copy.append(make('strong', '', title), make('small', '', meta));
       left.append(copy);
     }
     const maximum = Number(entry.spool.initial_weight || filament.weight || entry.spool.remaining_weight || 1);
@@ -613,7 +894,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const fill = make('i');
     fill.style.width = `${percent}%`;
     bar.append(fill);
-    button.append(left, bar, make('span', 'inventory-spool-remaining', formatWeight(entry.spool.remaining_weight)));
+    const progress = make('span', 'inventory-spool-progress');
+    progress.append(bar, make('small', 'inventory-spool-used', relativeDate(entry.last_used)));
+    button.append(left, progress, make('span', 'inventory-spool-remaining', formatWeight(entry.spool.remaining_weight)));
     if (selectedEditor?.kind === 'spool' && selectedEditor.id === String(entry.spool.id)) button.classList.add('is-selected');
     button.addEventListener('click', () => selectEditor('spool', entry.spool.id));
     return button;
@@ -623,7 +906,7 @@ document.addEventListener('DOMContentLoaded', () => {
     persistView();
     groupsNode.replaceChildren();
     const groups = groupEntries();
-    if (!groups.length) { groupsNode.append(make('p', 'text-muted p-3', 'Keine Filamente gefunden.')); return; }
+    if (!groups.length) { groupsNode.append(make('p', 'text-muted p-3', inventoryText.noFilaments)); return; }
     if (groupSelect.value === 'none') {
       const list = make('div', 'inventory-spool-list inventory-flat-list');
       groups.flatMap(group => group.entries).forEach(entry => list.append(renderSpoolRow(entry, 'none')));
@@ -636,13 +919,20 @@ document.addEventListener('DOMContentLoaded', () => {
       const firstFilament = filamentOf(first);
       const spoolEntries = group.entries.filter(entry => !entry.localOnly);
       const total = spoolEntries.reduce((sum, entry) => sum + Number(entry.spool.remaining_weight || 0), 0);
-      const details = make('details', 'inventory-group');
+      // Use an explicit container instead of the browser-native details layout.
+      // Native details can lose the expanded content height inside the scroll grid.
+      const details = make('div', 'inventory-group');
       details.dataset.groupMode = groupSelect.value;
       details.dataset.groupKey = group.key;
       const rememberedOpen = savedState.openGroups?.[groupSelect.value]?.[group.key];
-      details.open = rememberedOpen === undefined ? true : Boolean(rememberedOpen);
-      const summary = make('summary', 'inventory-group-summary');
+      const initialOpen = rememberedOpen === undefined ? true : Boolean(rememberedOpen);
+      details.dataset.open = String(initialOpen);
+      details.classList.toggle('is-open', initialOpen);
+      const summary = make('button', 'inventory-group-summary');
+      summary.type = 'button';
       summary.classList.add('inventory-selectable');
+      const showGroupColor = groupSelect.value === 'filament';
+      if (!showGroupColor) summary.classList.add('inventory-group-summary-no-color');
       if (groupSelect.value === 'filament') {
         summary.dataset.selectionKind = 'filament';
         summary.dataset.selectionId = String(firstFilament.id);
@@ -651,54 +941,54 @@ document.addEventListener('DOMContentLoaded', () => {
         summary.dataset.selectionKind = 'vendor';
         summary.dataset.selectionId = String(vendorId || '');
       }
-      const color = make('span', 'inventory-group-color');
-      color.style.backgroundColor = `#${localColor(firstFilament.color_hex)}`;
       const copy = make('span', 'inventory-group-copy');
       const name = make('strong', '', group.label);
-      const meta = make('span', 'inventory-group-meta', groupSelect.value === 'filament' || groupSelect.value === 'none' ? materialOf(first) : (groupSelect.value === 'vendor' ? 'Herstellergruppe' : 'Materialgruppe'));
+      const meta = make('span', 'inventory-group-meta', groupSelect.value === 'filament' || groupSelect.value === 'none' ? materialOf(first) : (groupSelect.value === 'vendor' ? inventoryText.manufacturerGroup : inventoryText.materialGroup));
       copy.append(name, meta);
       const totalNode = make('span', 'inventory-group-total');
-      totalNode.append(make('strong', '', spoolEntries.length ? formatWeight(total) : 'Keine Spule'), make('small', '', `${spoolEntries.length} ${spoolEntries.length === 1 ? 'Spule' : 'Spulen'}`));
+      totalNode.append(make('strong', '', spoolEntries.length ? formatWeight(total) : inventoryText.noSpool), make('small', '', `${spoolEntries.length} ${spoolEntries.length === 1 ? inventoryText.spool : inventoryText.spools}`));
       const disclosure = make('span', 'inventory-group-disclosure', '\u203a');
       disclosure.setAttribute('aria-hidden', 'true');
-      summary.append(color, copy, totalNode, disclosure);
+      if (showGroupColor) {
+        const color = make('span', 'inventory-group-color');
+        color.style.backgroundColor = `#${localColor(firstFilament.color_hex)}`;
+        summary.append(color);
+      }
+      summary.append(copy, totalNode, disclosure);
       summary.addEventListener('click', event => {
-        if (event.target.closest('.inventory-group-disclosure')) return;
-        event.preventDefault();
-        selectGroup(group);
-      });
-      details.addEventListener('toggle', () => {
-        if (!savedState.openGroups || typeof savedState.openGroups !== 'object') savedState.openGroups = {};
-        if (!savedState.openGroups[groupSelect.value] || typeof savedState.openGroups[groupSelect.value] !== 'object') savedState.openGroups[groupSelect.value] = {};
-        savedState.openGroups[groupSelect.value][group.key] = details.open;
+        const open = details.dataset.open !== 'true';
+        details.dataset.open = String(open);
+        details.classList.toggle('is-open', open);
+        list.hidden = !open;
+        savedState.openGroups ??= {};
+        savedState.openGroups[groupSelect.value] ??= {};
+        savedState.openGroups[groupSelect.value][group.key] = open;
         storeView();
+        selectGroup(group);
       });
       details.append(summary);
       const list = make('div', 'inventory-spool-list');
+      list.hidden = !initialOpen;
       group.entries.forEach(entry => list.append(renderSpoolRow(entry, groupSelect.value)));
       details.append(list);
       groupsNode.append(details);
     });
     updateSelectionMarker();
   }
-  [groupSelect, sortSelect].forEach(control => control.addEventListener('change', render));
+  [groupSelect, sortSelect, sortDirection].forEach(control => control.addEventListener('change', render));
   showArchived.addEventListener('change', () => { savedState.showArchived = showArchived.checked; render(); });
   search.addEventListener('input', render);
-  createFilamentButton.addEventListener('click', async () => {
-    createFilamentButton.disabled = true;
-    try {
-      const response = await fetch('/inventory/local-filaments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Neues Filament' }) });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || 'Anlegen fehlgeschlagen.');
-      localFilaments.set(String(result.filament.id), result.filament);
-      selectEditor('filament', result.filament.id);
-      render();
-    } catch (error) {
-      editor.hidden = false;
-      editorState.textContent = error.message || 'Anlegen fehlgeschlagen.';
-    } finally { createFilamentButton.disabled = false; }
-  });
   render();
+  const requestedSpoolId = new URLSearchParams(window.location.search).get('spool_id');
+  if (requestedSpoolId && localSpools.has(String(requestedSpoolId))) {
+    if (localSpools.get(String(requestedSpoolId)).archived && !showArchived.checked) {
+      showArchived.checked = true;
+      savedState.showArchived = true;
+      render();
+    }
+    selectEditor('spool', requestedSpoolId);
+    editor.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
 });
 </script>
 {% endblock %}

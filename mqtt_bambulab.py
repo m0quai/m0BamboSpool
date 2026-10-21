@@ -463,6 +463,13 @@ def _on_3mf_job_complete(transfer_key, local_path, metadata, error):
   if not job:
     log(f"[3MF] Ergebnis für unbekannten Transfer ignoriert: {transfer_key}")
     return
+  # A completed worker callback is terminal for this transfer.  Protect the
+  # metadata, usage, tracker, and checkpoint side effects from a repeated
+  # callback or a replayed completion notification.
+  with _ACTIVE_3MF_PRINTS_LOCK:
+    if job.get("metadata_ready"):
+      log(f"[3MF] Doppelte Transfer-Rückmeldung ignoriert: {transfer_key}")
+      return
   if error:
     log(f"[3MF] Transfer {transfer_key} fehlgeschlagen: {error}")
     return
@@ -859,8 +866,6 @@ def processMessage(data):
     if incoming_print.get("command") == "stop" and incoming_print.get("result") == "success":
       PRINTER_STATE.setdefault("print", {})["gcode_state"] = "STOP"
       log("[History] Bambu bestätigt command=stop; Druck und zugehöriger 3MF-Download werden abgebrochen.")
-    if incoming_print.get("command") == "project_file" and incoming_print.get("gcode_state") is None:
-      PRINTER_STATE.setdefault("print", {})["gcode_state"] = "PREPARE"
     current_print = PRINTER_STATE.get("print", {}) or incoming_print
     current_state = str(current_print.get("gcode_state") or "").upper()
     history_status = printer_state_to_history_status(current_state, current_print.get("print_error"))
@@ -880,7 +885,11 @@ def processMessage(data):
       )
 
     active_job = _active_3mf_job_for_source(current_print)
-    if incoming_print.get("command") == "project_file" and (
+    project_file_state = str(
+      incoming_print.get("gcode_state") or current_print.get("gcode_state") or ""
+    ).upper()
+    project_file_is_active = project_file_state in {"PREPARE", "RUNNING", "PAUSE", "PAUSED"}
+    if incoming_print.get("command") == "project_file" and project_file_is_active and (
         incoming_print.get("url") or current_print.get("gcode_file")
     ):
       # Local Bambu task identifiers are not unique. Directly after MOS
@@ -934,9 +943,6 @@ def processMessage(data):
         predicted_end_time=predicted_end_time, layers_printed=observed_layer,
       )
       state = current_state
-      if incoming_print.get("command") == "project_file" and incoming_print.get("gcode_state") is None:
-        state = "PREPARE"
-        PRINTER_STATE.setdefault("print", {})["gcode_state"] = "PREPARE"
       status = printer_state_to_history_status(state, current_print.get("print_error"))
       tracking_status = get_layer_tracking_for_prints([active_job["print_id"]]).get(
         active_job["print_id"], {}
@@ -1287,6 +1293,10 @@ def _persist_confirmed_pa_profile(ams_id, tray_id, cali_idx, reported_filament_i
     extras,
     {"cali_idx": index},
   )
+  log(
+    f"PA PROFIL gespeichert: Filament={spool['filament']['id']}; "
+    f"Fach={ams_id}/{tray_id}; cali_idx={index}"
+  )
   return True
 
 def _repeat_ams_status_query(label, confirmation_key, attempt=1):
@@ -1349,6 +1359,10 @@ def _apply_confirmed_ams_filament_settings(ams_data):
       key = _ams_tray_key(ams_id, tray.get("id"))
       confirmed = LAST_CONFIRMED_AMS_FILAMENT_SETTINGS.get(key)
       if not confirmed:
+        continue
+      # An explicit physical-presence bit overrides any stale cached material
+      # setting; never resurrect a spool in a bay the printer reports empty.
+      if tray.get("_ams_explicit_empty"):
         continue
 
       tray_uuid = str(tray.get("tray_uuid") or "")
@@ -1424,7 +1438,7 @@ def clear_ams_tray_assignment(ams_id, tray_id):
   return True
 
 
-def _merge_ams_status(incoming_ams):
+def _merge_ams_status(incoming_ams, tray_exist_bits=None):
   # Merge sparse AMS MQTT updates into the last known complete snapshot.
   #
   #   During RFID/material reads the printer sends tray objects such as
@@ -1457,16 +1471,48 @@ def _merge_ams_status(incoming_ams):
     }
     incoming_trays = incoming.get("tray")
     if isinstance(incoming_trays, list):
+      # The printer's tray_exist_bits is the physical-presence bitmap. A
+      # sparse tray object together with a cleared bit is an explicit empty
+      # bay, not merely an RFID-read-in-progress update.
+      tray_bits = str(incoming.get("tray_exist_bits") or tray_exist_bits or "").strip()
+      try:
+        tray_presence_mask = int(tray_bits, 16) if tray_bits else None
+      except ValueError:
+        try:
+          tray_presence_mask = int(tray_bits, 10)
+        except ValueError:
+          tray_presence_mask = None
       merged_trays = dict(previous_trays)
       for incoming_tray in incoming_trays:
         if not isinstance(incoming_tray, dict) or incoming_tray.get("id") is None:
           continue
         tray_id = str(incoming_tray.get("id"))
         current = copy.deepcopy(previous_trays.get(tray_id, {}))
-        current.update(copy.deepcopy(incoming_tray))
-        current["_ams_update_complete"] = all(
-          field in incoming_tray for field in _AMS_STATUS_FIELDS
-        )
+        tray_present = True
+        if tray_presence_mask is not None:
+          try:
+            tray_present = bool(tray_presence_mask & (1 << int(tray_id)))
+          except (TypeError, ValueError):
+            tray_present = True
+        if not tray_present:
+          current = {
+            "id": incoming_tray.get("id"),
+            "tray_uuid": "00000000000000000000000000000000",
+            "tray_type": "",
+            "tray_sub_brands": "",
+            "tray_color": "FFFFFFFF",
+            "tray_info_idx": "",
+            "setting_id": "",
+            "remain": 0,
+            "_ams_update_complete": True,
+            "_ams_explicit_empty": True,
+          }
+        else:
+          current.update(copy.deepcopy(incoming_tray))
+          current["_ams_update_complete"] = all(
+            field in incoming_tray for field in _AMS_STATUS_FIELDS
+          )
+          current["_ams_explicit_empty"] = False
         merged_trays[tray_id] = current
 
       # Keep the printer's order where possible, while retaining trays omitted
@@ -1736,12 +1782,18 @@ def on_message(client, userdata, msg):
 
     # Save ams spool data
     if "print" in data and "ams" in data["print"] and "ams" in data["print"]["ams"]:
-      LAST_AMS_CONFIG["ams"] = _merge_ams_status(data["print"]["ams"]["ams"])
+      LAST_AMS_CONFIG["ams"] = _merge_ams_status(
+        data["print"]["ams"]["ams"],
+        data["print"]["ams"].get("tray_exist_bits"),
+      )
       for ams in LAST_AMS_CONFIG["ams"]:
         for tray in ams.get("tray", []):
           if (
             tray.get("_ams_update_complete", False)
-            and not str(tray.get("tray_uuid") or "").strip()
+            and (
+              not str(tray.get("tray_uuid") or "").strip()
+              or str(tray.get("tray_uuid") or "").strip() == "00000000000000000000000000000000"
+            )
             and not any(str(tray.get(field) or "").strip() for field in ("tray_type", "tray_sub_brands"))
           ):
             LAST_CONFIRMED_AMS_FILAMENT_SETTINGS.pop(_ams_tray_key(ams.get("id"), tray.get("id")), None)
@@ -1768,7 +1820,11 @@ def on_message(client, userdata, msg):
           # A reported all-zero UUID still means a physical spool is present
           # (typically a non-RFID/third-party spool). Only an actually missing
           # UUID is evidence that the tray is physically empty.
-          uuid_empty = not raw_uuid.strip()
+          zero_uuid = "00000000000000000000000000000000"
+          # Bambu uses the all-zero UID for a non-RFID tray and also when an
+          # RFID spool has just been removed.  It only represents a loaded
+          # third-party spool when material fields are still populated.
+          uuid_empty = not raw_uuid.strip() or raw_uuid.strip() == zero_uuid
           raw_type = str(tray.get("tray_type") or "")
           raw_brand = str(tray.get("tray_sub_brands") or "")
           raw_color = str(tray.get("tray_color") or "")
@@ -1819,10 +1875,20 @@ def on_message(client, userdata, msg):
               log(f"AMS {('Clear' if operation == 'clear' else 'Fill')} abgebrochen für {pending_label}: Fachstatus nicht eindeutig")
               clear_ams_tray_assignment(ams["id"], tray.get("id"))
               continue
+            # P1/P1S can report a manually filled third-party tray with a
+            # zero UUID and empty material/profile fields.  The tray color is
+            # still retained in that response and is the physical-presence
+            # signal; only the default/empty color may be treated as empty.
+            tray_color_value = str(tray.get("tray_color") or "").strip().upper()
+            tray_profile_value = str(tray.get("tray_info_idx") or "").strip()
+            tray_setting_value = str(tray.get("setting_id") or "").strip()
             tray_is_empty = (
-                not tray_uuid_value.strip()
+                (not tray_uuid_value.strip() or tray_uuid_value.strip() == zero_uuid)
                 and not str(tray.get("tray_type") or "").strip()
                 and not str(tray.get("tray_sub_brands") or "").strip()
+                and not tray_profile_value
+                and not tray_setting_value
+                and tray_color_value in {"", "FFFFFFFF"}
             )
             tray["ams_empty"] = tray_is_empty
             if tray_is_empty:
@@ -1841,7 +1907,6 @@ def on_message(client, userdata, msg):
 
             found = False
             tray_uuid = str(tray.get("tray_uuid") or "")
-            zero_uuid = "00000000000000000000000000000000"
 
             if not tray_uuid or tray_uuid == zero_uuid:
               # Third-party/non-RFID spool: Bambu cannot identify the physical spool.
@@ -1872,7 +1937,28 @@ def on_message(client, userdata, msg):
                   continue
 
                 found = True
-                setActiveTray(spool['id'], spool["extra"], ams['id'], tray["id"])
+                tray["nfc_identified"] = True
+                try:
+                  setActiveTray(
+                    spool['id'], spool["extra"], ams['id'], tray["id"],
+                    source="nfc", nfc_uid=tray_uuid,
+                  )
+                except ValueError as assignment_error:
+                  # Keep an existing NFC binding authoritative when the
+                  # printer reports a different tag before physical removal.
+                  # The conflict is visible in the AMS state/log, but must not
+                  # replace the locally protected spool assignment.
+                  tray["nfc_assignment_blocked"] = True
+                  tray["issue"] = True
+                  existing_nfc_spool = get_nfc_bound_spool_for_tray(ams['id'], tray['id'])
+                  if existing_nfc_spool:
+                    spool = existing_nfc_spool
+                    log(
+                      f"[AMS] NFC-Zuordnung geschützt: Fach {num2letter(ams['id'])}{int(tray['id']) + 1}; "
+                      f"Spule #{spool.get('id')} bleibt aktiv ({assignment_error})"
+                    )
+                  else:
+                    raise
                 filament = spool.get("filament") or {}
                 vendor = (filament.get("vendor") or {}).get("name") or ""
                 material = filament.get("material") or ""
