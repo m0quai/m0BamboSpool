@@ -76,7 +76,7 @@ def create_database() -> None:
             length_used REAL,
             estimated_length REAL,
             calculated_length REAL,
-            spoolman_length_used REAL,
+            consumed_length REAL,
         FOREIGN KEY (print_id) REFERENCES prints (id) ON DELETE CASCADE
         )
     ''')
@@ -152,19 +152,19 @@ def create_database() -> None:
         "REAL",
     )
     _ensure_column(cursor, "filament_usage_events", "status", "TEXT NOT NULL DEFAULT 'confirmed'")
-    # Events written by older versions already caused the corresponding Spoolman
+    # Events written by older versions already recorded the corresponding usage
     # charge, so they must never become retry candidates after migration.
     cursor.execute("UPDATE filament_usage_events SET status = 'confirmed' WHERE status IS NULL OR status NOT IN ('pending', 'sent', 'confirmed')")
     _ensure_column(cursor, "spool_usage", "calculated_length", "REAL")
-    _ensure_column(cursor, "spool_usage", "spoolman_length_used", "REAL")
+    _ensure_column(cursor, "spool_usage", "consumed_length", "REAL")
     cursor.execute("UPDATE spool_usage SET calculated_length = length_used WHERE calculated_length IS NULL AND length_used IS NOT NULL")
-    # Legacy completed/failed jobs already had their usage sent to Spoolman.
+    # Legacy completed/failed jobs already had their usage recorded.
     # Backfill the confirmed total while leaving the currently running job open.
     cursor.execute(
         """UPDATE spool_usage
            SET calculated_length = COALESCE(calculated_length, length_used, 0),
-               spoolman_length_used = COALESCE(spoolman_length_used, length_used, 0)
-           WHERE spoolman_length_used IS NULL
+               consumed_length = COALESCE(consumed_length, length_used, 0)
+           WHERE consumed_length IS NULL
              AND print_id IN (
                SELECT f.print_id
                FROM spool_usage f
@@ -224,15 +224,15 @@ def create_database() -> None:
             estimated_length REAL,
             physical_ams_slot INTEGER,
             calculated_length REAL,
-            spoolman_length_used REAL
+            consumed_length REAL
         )""")
         cursor.execute("""INSERT INTO spool_usage_new
             (id, print_id, spool_id, grams_used, ams_slot, estimated_grams,
              length_used, estimated_length, physical_ams_slot, calculated_length,
-             spoolman_length_used)
+             consumed_length)
             SELECT id, print_id, spool_id, grams_used, ams_slot, estimated_grams,
                    length_used, estimated_length, physical_ams_slot, calculated_length,
-                   spoolman_length_used
+                   consumed_length
             FROM spool_usage""")
         cursor.execute("DROP TABLE spool_usage")
         cursor.execute("ALTER TABLE spool_usage_new RENAME TO spool_usage")
@@ -540,7 +540,7 @@ def get_filament_usage_for_reconciliation(print_id: int) -> list[dict]:
     rows = conn.execute(
         """SELECT id, ams_slot, spool_id, grams_used, estimated_grams,
                          length_used, estimated_length, calculated_length,
-                         spoolman_length_used
+                         consumed_length
              FROM spool_usage
              WHERE print_id = ?
              ORDER BY ams_slot""",
@@ -667,7 +667,7 @@ def mark_print_reconciled(
         conn.execute(
             """UPDATE spool_usage
                SET grams_used = ?, length_used = ?, calculated_length = ?,
-                   spoolman_length_used = ?
+                   consumed_length = ?
                WHERE id = ?""",
             (
                 update["grams_used"],
@@ -874,7 +874,7 @@ def record_filament_usage_segment(
                SET grams_used = COALESCE(grams_used, 0) + ?,
                    length_used = COALESCE(length_used, 0) + ?,
                    calculated_length = COALESCE(calculated_length, 0) + ?,
-                   spoolman_length_used = COALESCE(spoolman_length_used, 0) + ?
+                   consumed_length = COALESCE(consumed_length, 0) + ?
                WHERE id = ?""",
             (float(grams_used), float(length_used), float(length_used), float(length_used), row[0]),
         )
@@ -883,7 +883,7 @@ def record_filament_usage_segment(
             """INSERT INTO spool_usage
                (print_id, spool_id, grams_used, ams_slot,
                 estimated_grams, length_used, estimated_length, physical_ams_slot,
-                calculated_length, spoolman_length_used)
+                calculated_length, consumed_length)
                VALUES (?, ?, ?, ?, NULL, ?, NULL, ?, ?, ?)""",
             (int(print_id), int(spool_id), float(grams_used), int(filament_id),
              float(length_used), physical_ams_slot,
@@ -928,7 +928,7 @@ def claim_filament_usage_event(print_id: int | None, layer: int, filament_index:
 
 
 def finalize_filament_usage_events(print_id: int) -> None:
-    # Usage segments are persisted when each Spoolman transfer succeeds. Remove
+    # Usage segments are persisted when consumption succeeds. Remove
     # only confirmed events after finalization; pending events remain recoverable.
     conn = connect_database(db_config["db_path"])
     conn.execute("PRAGMA foreign_keys = ON")
@@ -1015,7 +1015,7 @@ def get_prints_with_filament(limit: int | None = None, offset: int | None = None
                 'length_used', f.length_used,
                 'estimated_length', f.estimated_length,
                 'calculated_length', f.calculated_length,
-                'spoolman_length_used', f.spoolman_length_used,
+                'consumed_length', f.consumed_length,
                 'ams_slot', f.ams_slot,
                 'physical_ams_slot', f.physical_ams_slot
             )) FROM v_spool_usage f WHERE f.print_id = p.id
@@ -1139,7 +1139,7 @@ def get_spool_print_usage(spool_id: int) -> list[dict]:
     rows = conn.execute(
         """SELECT p.id AS print_id, p.print_date, p.file_name,
                   f.grams_used, f.length_used, f.calculated_length,
-                  f.spoolman_length_used,
+                  f.consumed_length,
                   COALESCE(t.status, 'COMPLETED') AS status,
                   t.actual_end_time,
                   CASE

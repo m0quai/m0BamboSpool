@@ -32,6 +32,7 @@ from inventory_service import (
 )
 from inventory_repository import record_consumption
 import inventory_database
+import nfc_pending_repository
 from tools_3mf import getMetaDataFrom3mf, delete3mfFromFTP
 import time
 import threading
@@ -1205,9 +1206,9 @@ def is_any_ams_operation_pending():
   )
 
 def _find_active_spool_for_tray(ams_id, tray_id):
-  # Find the current Spoolman assignment after an AMS write.
+  # Find the current local assignment after an AMS write.
   #
-  #   Spoolman persists the active-tray tag before the printer answers, but the
+  #   Local persistence can complete before the printer answers, but the
   #   MQTT response can arrive before the subsequent API read sees that write.
   #   Retry a few times instead of dropping the profile update permanently.
   lookup_tray_id = EXTERNAL_SPOOL_ID if str(ams_id) == str(EXTERNAL_SPOOL_AMS_ID) and str(tray_id) == "255" else tray_id
@@ -1260,7 +1261,7 @@ def _send_pa_profile_selection(client, ams_id, tray_id, cali_idx, filament_id=""
   return True
 
 def _extra_text(value):
-  # Return a Spoolman extra value without JSON quote wrappers.
+  # Return a local metadata value without JSON quote wrappers.
   try:
     parsed = json.loads(value) if isinstance(value, str) else value
     return str(parsed).strip() if parsed is not None else ""
@@ -1543,7 +1544,7 @@ def _merge_ams_status(incoming_ams, tray_exist_bits=None):
 def _sync_local_active_trays_from_ams(ams_data, spool_list) -> None:
   # The AMS page is the source for tray assignments.  Snapshot its resolved
   # assignments into the local catalog so print tracking never has to infer a
-  # spool from color, RFID, or the SpoolMan mirror.
+  # spool from color, RFID, or any non-authoritative metadata.
   spool_by_tray = {}
   for spool in spool_list or []:
     active_tray = (spool.get("extra") or {}).get("active_tray")
@@ -1571,7 +1572,7 @@ def _sync_local_active_trays_from_ams(ams_data, spool_list) -> None:
       f"{result['assigned']} zugeordnet, {result['cleared']} entfernt"
     )
 
-# Inspired by https://github.com/Donkie/Spoolman/issues/217#issuecomment-2303022970
+# AMS status handling follows the printer's documented report structure.
 def on_message(client, userdata, msg):
   global LAST_AMS_CONFIG, LAST_AMS_CONFIG_GENERATION, LAST_LOGGED_AMS_STATE, FORCE_AMS_STATUS_LOG, PRINTER_STATE, PRINTER_STATE_LAST, PENDING_PRINT_METADATA, PRINTER_MODEL, PENDING_EXTERNAL_OPERATION, PENDING_PA_PROFILE_COMMANDS
   
@@ -1602,7 +1603,7 @@ def on_message(client, userdata, msg):
       if pending_pa and print_data.get("result") == "success" and returned_matches_request and pending_pa.get("persist", True):
         # The printer's successful response is authoritative.  Persist the
         # accepted index so the next assignment does not resend a rejected or
-        # stale value from Spoolman.
+        # stale value from the local catalog.
         try:
           _persist_confirmed_pa_profile(
             print_data.get("ams_id"),
@@ -1615,7 +1616,7 @@ def on_message(client, userdata, msg):
       elif pending_pa and print_data.get("result") == "success" and not returned_matches_request:
         # A late status packet can arrive after a rejected command.  It is not
         # an acknowledgement for the currently pending request and must not
-        # overwrite Spoolman's PA index.
+        # overwrite the local filament's PA index.
         log(
           f"PA PROFIL IN ignoriert: erwartet={requested_idx}; "
           f"empfangen={returned_idx}"
@@ -1910,7 +1911,7 @@ def on_message(client, userdata, msg):
 
             if not tray_uuid or tray_uuid == zero_uuid:
               # Third-party/non-RFID spool: Bambu cannot identify the physical spool.
-              # m0BamboSpool can, because Fill/assignment stores its tray in Spoolman's
+              # m0BamboSpool can, because Fill/assignment stores its tray in the local
               # active_tray extra field. Prefer that authoritative assignment.
               active_tray = json.dumps(f"{PRINTER_ID}_{ams['id']}_{tray['id']}")
               for spool in spool_list:
@@ -1959,6 +1960,10 @@ def on_message(client, userdata, msg):
                     )
                   else:
                     raise
+                try:
+                  nfc_pending_repository.remove_pending_tag(tray_uuid)
+                except Exception as pending_error:
+                  log(f"[NFC] Ausstehender AMS-Tag konnte nach der Zuordnung nicht entfernt werden: {pending_error!r}")
                 filament = spool.get("filament") or {}
                 vendor = (filament.get("vendor") or {}).get("name") or ""
                 material = filament.get("material") or ""
@@ -1974,6 +1979,26 @@ def on_message(client, userdata, msg):
             elif not found:
               if log_ams:
                 log("      - Keine Spule")
+              try:
+                inventory_database.register_nfc_tag(tray_uuid)
+                pending = nfc_pending_repository.get_pending_tag(tray_uuid)
+                pending_changed = False
+                if (
+                  pending is None
+                  or int(pending.get("ams_id", -1)) != int(ams["id"])
+                  or int(pending.get("tray_index", -1)) != int(tray["id"])
+                ):
+                  nfc_pending_repository.remember_pending_tag(
+                    tray_uuid, int(tray["id"]), int(ams["id"])
+                  )
+                  pending_changed = True
+                if pending_changed:
+                  log(
+                    f"[NFC] Unbekannte AMS-UID als ausstehender Tag registriert: "
+                    f"{tray_uuid} (AMS {ams['id']}, Fach {int(tray['id']) + 1})"
+                  )
+              except Exception as pending_error:
+                log(f"[NFC] Unbekannte AMS-UID konnte nicht als ausstehender Tag gespeichert werden: {pending_error!r}")
               tray["unmapped_bambu_tag"] = tray_uuid
               tray["issue"] = True
 

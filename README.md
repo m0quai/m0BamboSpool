@@ -1,9 +1,8 @@
 # m0BamboSpool
 
 `m0BamboSpool` ist ein persönliches Dashboard für Bambu-Lab-Drucker, AMS-Fächer
-und Filamentverbrauch. Das Projekt basiert auf OpenSpoolMan und SpoolMan, wird
-aber als eigener, auf den täglichen Druckbetrieb zugeschnittener Fork
-weiterentwickelt.
+und Filamentverbrauch. Das Projekt wird als eigenständige, auf den täglichen
+Druckbetrieb zugeschnittene Anwendung weiterentwickelt.
 
 ## Zweck
 
@@ -25,12 +24,12 @@ Netzwerkverbindung während eines Drucks vorübergehend nicht verfügbar war.
   Metadaten
 - Wiederaufnahme und Recovery von Druckaufträgen nach Verbindungsunterbrechungen
 - Idempotente Filament-Verbrauchsbuchungen mit Ereignisstatus, damit Buchungen
-  nicht doppelt an SpoolMan übertragen werden
-- Zentrale Datenschnittstelle über `inventory_repository.py` statt verteilter
-  direkter SpoolMan-Zugriffe
+  nicht doppelt erfasst werden
+- Zentrale Datenschnittstelle über `inventory_repository.py` für alle lokalen
+  Inventarzugriffe
 - Lokale Verwaltungs- und Datenbanktabellen für Hersteller, Filamente und Spulen
   als Grundlage für eine eigene Verwaltung
-- About-Seite mit Verweisen auf m0BamboSpool, SpoolMan und dieses Projekt
+- About-Seite mit Projektinformationen und Referenzen
 
 ## Eigene NFC-Hardware
 
@@ -51,11 +50,9 @@ Die technische Dokumentation der Hardware liegt unter [`docs/amshelper`](docs/am
 
 ## Eigene Verwaltung
 
-SpoolMan bleibt aktuell die bestehende Verwaltungsbasis. Die lokale
-Repository-/Datenzugriffsschicht kapselt den Zugriff und reduziert die Daten auf
-die Felder, die m0BamboSpool tatsächlich benötigt. Dadurch kann die Verwaltung
-später schrittweise auf die eigene lokale Datenbank umgestellt werden, ohne die
-Benutzeroberfläche oder die AMS-/Verbrauchslogik neu zu bauen.
+Die lokale SQLite-Datenbank ist die alleinige Verwaltungsbasis. Die lokale
+Repository-/Datenzugriffsschicht kapselt alle Zugriffe und enthält nur die
+Felder, die m0BamboSpool tatsächlich benötigt.
 
 Die vorbereiteten lokalen Verwaltungsfunktionen umfassen:
 
@@ -78,8 +75,6 @@ docker compose up -d --build
 ```
 
 Projektspezifische Konfigurationsschlüssel verwenden `M0BAMBOSPOOL_`.
-Bestehende Schlüssel mit dem früheren Präfix werden weiterhin akzeptiert;
-explizit gesetzte neue Schlüssel haben Vorrang.
 
 Danach ist die Oberfläche unter [http://localhost:8000](http://localhost:8000)
 erreichbar. Der Container heißt `m0BamboSpool`.
@@ -90,10 +85,8 @@ Die persistenten Daten liegen in:
 - `logs/` – Laufzeit- und Diagnoseprotokolle
 - `static/prints/` – Vorschaubilder und druckbezogene Dateien
 
-## Verwandte Projekte
+## Projekt
 
-- [Originales OpenSpoolMan](https://github.com/drndos/openspoolman)
-- [SpoolMan](https://github.com/Donkie/Spoolman)
 - [m0BamboSpool](https://github.com/m0quai/m0BamboSpool)
 
 ## Entwicklungsregeln

@@ -36,6 +36,9 @@ LAYER_TRACKING_STATUS_RUNNING = "RUNNING"
 LAYER_TRACKING_STATUS_COMPLETED = "COMPLETED"
 LAYER_TRACKING_STATUS_ABORTED = "ABORTED"
 LAYER_TRACKING_STATUS_FAILED = "FAILED"
+# Stage 0 means that the printer is executing the model. Positive stage
+# values describe preparation actions such as heating or nozzle cleaning.
+PRINT_EXECUTION_STAGE = 0
 ABORT_INDICATOR_STATES = {
     "STOP",
     "ABORT",
@@ -365,6 +368,7 @@ class FilamentUsageTracker:
     self._pending_observed_layer = None
     self._mc_remaining_time_minutes = None
     self._last_logged_gcode_state = None
+    self._printing_started = False
   def set_print_metadata(self, metadata: dict | None) -> None:
     metadata = metadata or {}
     incoming_id = metadata.get("print_id")
@@ -425,6 +429,8 @@ class FilamentUsageTracker:
 
     previous_state = self.gcode_state
     self.gcode_state = print_obj.get("gcode_state", self.gcode_state)
+    if self._is_actual_print_execution(print_obj):
+      self._printing_started = True
     if "mc_remaining_time" in print_obj:
       try:
         self._mc_remaining_time_minutes = float(print_obj["mc_remaining_time"])
@@ -451,9 +457,12 @@ class FilamentUsageTracker:
                 f"[filament-tracker] Verbrauch zwischengespeichert: "
                 f"Print {self.print_id}, beobachtete Schicht {self._pending_observed_layer}"
               )
-          if layer != last_layer:
+          if self._printing_started and layer != last_layer:
             self._handle_layer_change(layer)
             self.current_layer = layer
+          elif not self._printing_started and self.active_model is not None:
+            previous_pending_layer = self._pending_observed_layer
+            self._pending_observed_layer = max(previous_pending_layer or 0, layer)
 
     if self.gcode_state == "FINISH" and previous_state != "FINISH" and self.active_model is not None:
       self._handle_print_end()
@@ -529,6 +538,11 @@ class FilamentUsageTracker:
     self.spent_layers = set()
     self.cumulative_grams_used = {}
     self.cumulative_length_used = {}
+    if resume_layer is not None:
+      try:
+        self._printing_started = int(resume_layer) > 0
+      except (TypeError, ValueError):
+        self._printing_started = False
     if resume_layer is not None:
       self.current_layer = resume_layer
       self.spent_layers.update(range(resume_layer + 1))
@@ -643,6 +657,15 @@ class FilamentUsageTracker:
     except (TypeError, ValueError):
       current_layer = 0
     buffered_layer = max(self._pending_observed_layer or 0, current_layer)
+    # A valid 3MF only proves that the model can be tracked. It does not prove
+    # that the printer has started extrusion; stage 14, for example, is still
+    # nozzle cleaning. Keep layer 0 buffered until stage 0 arrives.
+    if buffered_layer <= 0 and not self._printing_started:
+      log(
+        f"[filament-tracker] Verbrauch bleibt gepuffert: "
+        f"Print {self.print_id}, Druckvorbereitung noch aktiv"
+      )
+      return
     if self.print_id is not None:
       tracking = get_layer_tracking_for_prints([self.print_id]).get(self.print_id, {})
       try:
@@ -716,6 +739,10 @@ class FilamentUsageTracker:
 
   def _handle_layer_change(self, layer: int) -> None:
     if self.active_model is None:
+      return
+    if not self._printing_started:
+      previous_pending_layer = self._pending_observed_layer
+      self._pending_observed_layer = max(previous_pending_layer or 0, layer)
       return
     if layer in self.spent_layers:
       return
@@ -897,7 +924,7 @@ class FilamentUsageTracker:
     try:
       record_consumption(spool_id, length_mm=usage_rounded)
     except Exception as exc:
-      log(f"[filament-tracker] Spoolman transfer failed; event remains sent: print_id={self.print_id}, layer={event_layer}, filament={filament}, error={exc!r}")
+      log(f"[filament-tracker] Consumption recording failed; event remains sent: print_id={self.print_id}, layer={event_layer}, filament={filament}, error={exc!r}")
       return False
 
     if self.print_id:
@@ -922,6 +949,8 @@ class FilamentUsageTracker:
     return True
 
   def _flush_all_pending_usage(self) -> None:
+    if not self._printing_started:
+      return
     if not self._pending_usage_mm:
       return
     for filament in list(self._pending_usage_mm.keys()):
@@ -938,6 +967,7 @@ class FilamentUsageTracker:
     self._pending_usage_mm = {}
     self._observed_ams_tray = None
     self._mc_remaining_time_minutes = None
+    self._printing_started = False
     self.cumulative_length_used = {}
     self.cumulative_grams_used = {}
 
@@ -1116,7 +1146,7 @@ class FilamentUsageTracker:
   def _lookup_spool_for_tray(self, tray_uid: str):
     # Print accounting exclusively uses the tray assignments stored in the
     # local catalog.  MQTT status keeps this catalog current; color and the
-    # SpoolMan mirror must never decide a print's spool assignment.
+    # Color or printer metadata must never decide a print's spool assignment.
     candidates = [
       spool for spool in inventory_database.list_spools(include_archived=True)
       if str(spool.get("active_tray") or "") == str(tray_uid)
@@ -1155,6 +1185,24 @@ class FilamentUsageTracker:
     except (TypeError, ValueError):
       return None
     return tray if 0 <= tray < 16 else None
+
+  @staticmethod
+  def _is_actual_print_execution(print_obj: dict) -> bool:
+    # gcode_state=RUNNING is also used during preparation. Only stage 0 is
+    # the printer's actual model-execution phase; layer progress is a fallback
+    # for firmware packets that omit stg_cur.
+    if str(print_obj.get("gcode_state") or "").upper() != "RUNNING":
+      return False
+    try:
+      stage = int(print_obj.get("stg_cur"))
+    except (TypeError, ValueError):
+      stage = None
+    if stage is not None:
+      return stage == PRINT_EXECUTION_STAGE
+    try:
+      return int(print_obj.get("layer_num") or 0) > 0
+    except (TypeError, ValueError):
+      return False
 
   def _apply_current_ams_tray(self, print_obj: dict) -> None:
     # Keep the logical filament mapped to the physical tray the printer is

@@ -130,14 +130,17 @@ def assign_pending_tag(uid):
     if spool is None:
         return redirect(url_for("ams_nfc.pending_tags", error="Spule wurde nicht gefunden."))
 
-    extras = spool.get("extra") or {}
-    spool_repo.update_spool_extra(spool_id, extras, tag=json.dumps(normalized_uid))
-    inventory_db.ensure_local_spool_from_inventory(spool)
-    inventory_db.update_spool_fields(spool_id, {"tag": normalized_uid})
-    spool.setdefault("extra", {})["tag"] = json.dumps(normalized_uid)
     try:
+        extras = spool.get("extra") or {}
+        spool_repo.update_spool_extra(spool_id, extras, tag=json.dumps(normalized_uid))
+        inventory_db.ensure_local_spool_from_inventory(spool)
+        inventory_db.update_spool_fields(spool_id, {"tag": normalized_uid})
+        spool.setdefault("extra", {})["tag"] = json.dumps(normalized_uid)
         _assign_spool_to_tray(spool, int(pending["ams_id"]), int(pending["tray_index"]))
     except ValueError as exc:
+        return redirect(url_for("ams_nfc.pending_tags", error=str(exc)))
+    except Exception as exc:
+        traceback.print_exc()
         return redirect(url_for("ams_nfc.pending_tags", error=str(exc)))
     _remove_pending(normalized_uid)
     return redirect(url_for("ams_nfc.pending_tags", success="NFC-Tag wurde der Spule zugeordnet."))

@@ -6,7 +6,7 @@ Stand: 29.09.2026. Historische Fakten und offene Aufgaben; verbindliche Arbeitsr
 
 - Entwicklung: 01a039da-68e5-7f20-8921-012fc9080cb4, ursprünglich 25.08.–25.09.2026.
 - Prüfe Repository vor Änderungen: 01a0395d-855c-79c0-ac44-3178d44907a8, ursprünglich 25.08.2026; als archivierter Chat übernommen.
-- Beide gehören zum aktuellen OSM-Projekt unter C:\Development\Docker\m0BamboSpool. Alte Nachrichten enthalten weiterhin ihre damaligen Pfade C:\Docker\OpenSpoolMan und den damaligen Benutzerordner.
+- Beide gehören zum aktuellen Projekt unter C:\Development\Docker\m0BamboSpool. Alte Nachrichten können weiterhin frühere Pfade und Benutzerordner enthalten.
 
 ## Bereits vorhandene Änderungen
 
@@ -21,7 +21,7 @@ Der Abgleich vor der Übernahme bestätigte im aktuellen Code: MQTT-Logger akzep
 
 ## Bereits erfolgte Datenreparatur auf diesem PC
 
-In diesem Chat wurde data/osm.db repariert. Die fehlerhaften Abschlüsse 24–26 wurden mangels zuverlässigem Nachweis auf UNKNOWN gesetzt; 29 blieb der abgebrochene erste Zylinder-Versuch; 30 wurde als eigener abgeschlossener zweiter Versuch rekonstruiert. Bestehende Buchungen wurden nicht erneut nach Spoolman übertragen. Sicherung und Audit: data/repair-backups/20260929-print-history. Diese Reparatur nicht aus historischen Chatbefehlen wiederholen.
+In diesem Chat wurde data/osm.db repariert. Die fehlerhaften Abschlüsse 24–26 wurden mangels zuverlässigem Nachweis auf UNKNOWN gesetzt; 29 blieb der abgebrochene erste Zylinder-Versuch; 30 wurde als eigener abgeschlossener zweiter Versuch rekonstruiert. Bestehende Buchungen wurden nicht erneut an einen externen Dienst übertragen. Sicherung und Audit: data/repair-backups/20260929-print-history. Diese Reparatur nicht aus historischen Chatbefehlen wiederholen.
 
 ## Noch offene Benutzeranforderungen
 

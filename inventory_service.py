@@ -219,7 +219,7 @@ def _log_filament_mismatch(tray_data: dict, spool: dict, color_distance=None, re
   except Exception:
     pass
 
-def augmentTrayDataWithSpoolMan(spool_list, tray_data, ams_id, tray_id):
+def augment_tray_data(spool_list, tray_data, ams_id, tray_id):
   tray_data["matched"] = False
   tray_data["mismatch"] = False
   tray_data["issue"] = False
@@ -300,7 +300,7 @@ def augmentTrayDataWithSpoolMan(spool_list, tray_data, ams_id, tray_id):
 
       # P1S LAN/Developer Mode can acknowledge ams_filament_setting successfully
       # and retain tray_info_idx while reporting an empty tray_type afterwards.
-      # In that case use the explicitly assigned Spoolman material as the display
+      # In that case use the explicitly assigned local material as the display
       # and comparison type. This does not write anything back to the printer.
       if not tray_type_clean and tray_info_idx_clean:
         tray_data["tray_type"] = tray_data["spool_material"]
@@ -338,7 +338,7 @@ def augmentTrayDataWithSpoolMan(spool_list, tray_data, ams_id, tray_id):
       tray_sub_brands_raw = (tray_data.get("tray_sub_brands") or "").replace('"', '').strip()
       tray_sub_full_cmp = _clean_basic(tray_sub_brands_raw.lower())
       # Bambu uses "Generic" to mean that no specific subtype/brand is
-      # selected. It must not mismatch a concrete Spoolman variant such as
+      # selected. It must not mismatch a concrete local variant such as
       # TPU 95A or PLA+.
       tray_sub_is_generic = tray_sub_full_cmp in {"generic", "unknown"}
       if tray_sub_is_generic:
@@ -372,7 +372,7 @@ def augmentTrayDataWithSpoolMan(spool_list, tray_data, ams_id, tray_id):
       tray_data["spool_sub_brand"] = spool_sub_display.replace("Basic", "").strip()
 
       # If an AMS tray is loaded but no material has been selected yet, surface the spool
-      # from Spoolman and show a gentle warning instead of running mismatch checks.
+      # from the local catalog and show a gentle warning instead of running mismatch checks.
       if tray_type_unselected:
         tray_data["ams_material_missing"] = True
         tray_data["ams_material_missing_message"] = "A spool is assigned, but no material is selected in the AMS."
@@ -395,7 +395,7 @@ def augmentTrayDataWithSpoolMan(spool_list, tray_data, ams_id, tray_id):
 
       # Bambu can report third-party PLA+ profiles as generic "PLA" in AMS/MQTT.
       # Treat PLA <-> PLA+ as compatible for mismatch detection only. The
-      # Spoolman material remains unchanged as PLA+.
+      # The local material remains unchanged as PLA+.
       pla_family_compatible = (
         not tray_sub_full_cmp
         and {tray_material_norm_cmp, spool_material_full_norm_cmp} == {"pla", "pla+"}
@@ -505,7 +505,7 @@ def spendFilaments(printdata):
     ams_usage.append({"trayUid": trayUid(ams_id, tray_id), "id": filamentId, "usedGrams":float(filament["used_g"])})
 
   for spool in fetchSpools():
-    #TODO: What if there is a mismatch between AMS and SpoolMan?
+    # TODO: What if there is a mismatch between AMS and the local catalog?
 
     if spool.get("extra") and spool.get("extra").get("active_tray"):
       #filament = ams_usage.get()
@@ -573,7 +573,7 @@ def setActiveTray(spool_id, spool_extra, ams_id, tray_id, source="manual", nfc_u
     # on every repeated AMS status packet.
     return
 
-# Fetch spools from spoolman
+  # Fetch spools from the local catalog.
 def fetchSpools(cached=False):
   global SPOOLS
   if not cached or not SPOOLS:

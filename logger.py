@@ -62,7 +62,7 @@ def _as_float(value):
         return None
 
 
-def _find_spoolman_spool(spool_id):
+def _find_local_spool(spool_id):
     try:
         # Imported lazily to avoid a logger <-> mqtt_bambulab import cycle.
         import mqtt_bambulab
@@ -75,7 +75,7 @@ def _find_spoolman_spool(spool_id):
     return None
 
 
-def _spoolman_remaining_text(spool) -> str:
+def _remaining_text(spool) -> str:
     if not isinstance(spool, dict):
         return ""
 
@@ -84,7 +84,7 @@ def _spoolman_remaining_text(spool) -> str:
     filament = spool.get("filament") or {}
     full_weight = _as_float(filament.get("weight"))
 
-    # Spoolman's filament.weight is the nominal net filament weight. Older or
+    # The filament weight is the nominal net filament weight. Older or
     # incomplete records may omit it; remaining + used still gives a useful
     # original net amount in that case.
     if (full_weight is None or full_weight <= 0) and remaining is not None and used is not None:
@@ -107,10 +107,10 @@ def _uid_suffix(uid) -> str:
 
 
 def _format_ams_console_message(text):
-    # Collapse verbose Bambu tray diagnostics into one Spoolman-centric line.
+    # Collapse verbose Bambu tray diagnostics into one local-catalog line.
     #
-    #     Raw Bambu tray color/remain values are intentionally hidden. Spoolman is
-    #     authoritative for the assigned spool and remaining amount. A real RFID UID
+    #     Raw Bambu tray color/remain values are intentionally hidden. The local
+    #     catalog is authoritative for the assigned spool and remaining amount. A real RFID UID
     #     is retained only as a final debug suffix; the all-zero non-RFID UID is not
     #     displayed.
     global _pending_ams_tray, _pending_ams_uid
@@ -147,7 +147,7 @@ def _format_ams_console_message(text):
 
     # Raw tray header. app_custom may already have removed (-01%) and a zero
     # UUID, so accept both the original and cleaned forms. Suppress this line;
-    # the following Spoolman result is emitted as the single authoritative row.
+    # the following local-catalog result is emitted as the single authoritative row.
     tray_match = re.match(r"^\s*- \[([A-Z]\d+)\](.*)$", text)
     if tray_match:
         remainder = tray_match.group(2) or ""
@@ -156,21 +156,21 @@ def _format_ams_console_message(text):
         _pending_ams_uid = uid_match.group(1).strip() if uid_match else None
         return None
 
-    spool_match = re.match(r"^\s*- (?:Spoolman )?Spool #(\d+):\s*(.*)$", text)
+    spool_match = re.match(r"^\s*- (?:Local )?Spool #(\d+):\s*(.*)$", text)
     if spool_match and _pending_ams_tray:
         spool_id = spool_match.group(1)
         description = spool_match.group(2).strip() or "zugeordnet"
-        spool = _find_spoolman_spool(spool_id)
+        spool = _find_local_spool(spool_id)
         output = (
             f"    - [{_pending_ams_tray}] #{spool_id}: {description}"
-            f"{_spoolman_remaining_text(spool)}{_uid_suffix(_pending_ams_uid)}"
+            f"{_remaining_text(spool)}{_uid_suffix(_pending_ams_uid)}"
         )
         _pending_ams_tray = None
         _pending_ams_uid = None
         return output
 
     if _pending_ams_tray and (
-        re.match(r"^\s*- Keine (?:Spoolman-)?Spule diesem Tray zugeordnet\.$", text)
+        re.match(r"^\s*- Keine Spule diesem Tray zugeordnet\.$", text)
         or re.match(r"^\s*- Keine Spule$", text)
         or re.match(r"^\s*- Fach leer$", text)
         or re.match(r"^\s*- ---$", text)

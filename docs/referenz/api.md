@@ -8,7 +8,7 @@ Alle Endpoints liegen unter `/api/v1` und verwenden ein einheitliches Erfolg-/Fe
 
 - `GET /api/v1/printers` – bekannte Druckerinstanz(en).
 - `GET /api/v1/printers/{printer_id}/ams` – AMS-/Tray-Status.
-- `GET /api/v1/spools` – Spulen aus Spoolman.
+- `GET /api/v1/spools` – lokale Spulen.
 - `POST /api/v1/printers/{printer_id}/ams/{tray_index}/assign` – Spule einem Tray zuweisen; optional `ams_id`.
 - `POST /api/v1/printers/{printer_id}/ams/{tray_index}/unassign` – Zuweisung entfernen; optional `spool_id`.
 

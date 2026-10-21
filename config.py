@@ -5,15 +5,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Load environment variables from config.env when present so live runs have access
-# to printer and Spoolman credentials without manual exports.
+# to printer credentials without manual exports.
 load_dotenv(Path(__file__).resolve().parent / "config.env")
-
-# Accept existing installations while using the new project prefix internally.
-for _legacy_name, _legacy_value in tuple(os.environ.items()):
-    if _legacy_name.startswith("OPENSPOOLMAN_"):
-        os.environ.setdefault(
-            "M0BAMBOSPOOL_" + _legacy_name[len("OPENSPOOLMAN_"):], _legacy_value
-        )
 
 # Central m0BamboSpool database configuration.
 DATABASE_TYPE = (os.getenv("M0BAMBOSPOOL_DATABASE_TYPE") or "sqlite").strip().lower()
@@ -67,12 +60,6 @@ if PRINTER_CONNECTION_MODE not in ("lan", "online"):
 PRINTER_CODE = PRINTER_ACCESS_LAN if PRINTER_CONNECTION_MODE == "lan" else PRINTER_ACCESS_ONLINE
 PRINTER_IP = os.getenv("PRINTER_IP")  # Required printer IP address for the connection
 PRINTER_NAME = os.getenv("PRINTER_NAME")  # Printer name - Check wireless on printer
-SPOOLMAN_BASE_URL = os.getenv("SPOOLMAN_BASE_URL")
-SPOOLMAN_API_URL = f"{SPOOLMAN_BASE_URL}/api/v1"
-# The local m0BamboSpool catalog is authoritative.  Remote SpoolMan mode is
-# still available only when explicitly enabled in config.env for migration or
-# compatibility work.
-USE_SPOOLMAN = (os.getenv("USE_SPOOLMAN", "no") or "no").strip().lower() in {"yes", "true", "1", "on"}
 AUTO_SPEND = True
 TRACK_LAYER_USAGE = True
 LOG_AMS_MODE = (os.getenv("LOG_AMS_MODE") or "changes").strip().lower()

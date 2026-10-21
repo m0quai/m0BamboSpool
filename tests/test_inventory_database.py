@@ -114,6 +114,19 @@ class InventoryDatabaseTests(unittest.TestCase):
         self.assertEqual(spool["filament"]["spool_weight"], 0.0)
         self.assertIn("spool_weight", spool["filament_defaults"])
 
+    def test_archived_spool_can_only_be_unarchived(self):
+        filament_id = inventory_database.save_entity("filaments", {
+            "name": "Archived", "weight": 1000, "spool_weight": 130, "price": 11,
+        })
+        spool_id = inventory_database.save_spool({"filament_id": filament_id})
+
+        inventory_database.update_spool_fields(spool_id, {"archived": True})
+        with self.assertRaisesRegex(ValueError, "archiviert und gesperrt"):
+            inventory_database.update_spool_fields(spool_id, {"price": 12})
+
+        inventory_database.update_spool_fields(spool_id, {"archived": False})
+        self.assertFalse(inventory_database.get_spool(spool_id)["archived"])
+
 
 if __name__ == "__main__":
     unittest.main()

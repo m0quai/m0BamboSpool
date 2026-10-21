@@ -184,10 +184,6 @@ def initialize() -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS inventory_migrations (
-                name TEXT PRIMARY KEY,
-                completed_at TEXT NOT NULL
-            );
             CREATE TABLE IF NOT EXISTS spool_consumption_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 spool_id INTEGER NOT NULL REFERENCES spools(id) ON UPDATE CASCADE ON DELETE RESTRICT,
@@ -197,6 +193,8 @@ def initialize() -> None:
                 created_at TEXT NOT NULL
             );
         """)
+        # Remove the obsolete one-time import marker from older installations.
+        conn.execute("DROP TABLE IF EXISTS inventory_migrations")
         # Older databases declared the hex value UNIQUE.  Hex values describe
         # a color only; multiple named colors may intentionally share one.
         color_indexes = conn.execute("PRAGMA index_list(colors)").fetchall()
@@ -369,6 +367,31 @@ def initialize() -> None:
         ):
             if column not in columns:
                 conn.execute(f"ALTER TABLE filaments ADD COLUMN {column} {definition}")
+        # Archived spools keep a snapshot of inherited filament defaults so
+        # later master-data changes cannot alter their historical values.
+        for archived_spool in conn.execute(
+            """SELECT s.id, s.initial_weight, s.spool_weight, s.price,
+                      f.weight AS filament_weight,
+                      f.spool_weight AS filament_spool_weight,
+                      f.price AS filament_price
+                 FROM spools s
+                 JOIN filaments f ON f.id = s.filament_id
+                WHERE s.archived = 1"""
+        ).fetchall():
+            snapshot = {}
+            for field, default_field in (
+                ("initial_weight", "filament_weight"),
+                ("spool_weight", "filament_spool_weight"),
+                ("price", "filament_price"),
+            ):
+                if archived_spool[field] in (None, 0, 0.0) and archived_spool[default_field] is not None:
+                    snapshot[field] = archived_spool[default_field]
+            if snapshot:
+                snapshot["updated_at"] = _now()
+                conn.execute(
+                    f"UPDATE spools SET {','.join(f'{field} = ?' for field in snapshot)} WHERE id = ?",
+                    list(snapshot.values()) + [archived_spool["id"]],
+                )
         conn.executescript("""
             DROP VIEW IF EXISTS v_filaments;
             CREATE VIEW v_filaments AS
@@ -415,79 +438,6 @@ def _row_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
 
 
-def import_spoolman(vendors: list[dict[str, Any]], filaments: list[dict[str, Any]], spools: list[dict[str, Any]]) -> int:
-    """Import the remote catalog once, retaining source IDs where available."""
-    initialize()
-    now = _now()
-    imported = 0
-    with _connect() as conn:
-        if conn.execute("SELECT 1 FROM inventory_migrations WHERE name = 'spoolman-import'").fetchone():
-            return 0
-        local_count = sum(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in ("vendors", "filaments", "spools"))
-        if local_count:
-            conn.execute("INSERT INTO inventory_migrations(name, completed_at) VALUES ('spoolman-import', ?)", (now,))
-            return 0
-        for vendor in vendors:
-            vendor_id = vendor.get("id")
-            vendor_name = vendor.get("name")
-            if vendor_id and vendor_name:
-                conn.execute("INSERT OR IGNORE INTO vendors(id, name) VALUES (?, ?)", (vendor_id, vendor_name))
-        vendor_ids = {row["name"]: row["id"] for row in conn.execute("SELECT id, name FROM vendors")}
-        for filament in filaments:
-            filament_id = filament.get("id")
-            if not filament_id:
-                continue
-            vendor = filament.get("vendor") or {}
-            vendor_id = vendor.get("id") or vendor_ids.get(vendor.get("name"))
-            if vendor.get("id") and vendor.get("name") and not conn.execute("SELECT 1 FROM vendors WHERE id = ?", (vendor.get("id"),)).fetchone():
-                conn.execute("INSERT OR IGNORE INTO vendors(id, name) VALUES (?, ?)", (vendor["id"], vendor["name"]))
-                vendor_id = vendor["id"]
-            material_name = filament.get("material")
-            material_id = _import_named(conn, "materials", None, material_name) if material_name else None
-            nozzle_min, nozzle_max = _temperature_range(_extra_value(filament.get("extra"), "nozzle_temperature"))
-            conn.execute(
-                """INSERT OR IGNORE INTO filaments
-                   (id, vendor_id, material_id, name, color_id, diameter, weight, spool_weight, price,
-                    nozzle_temp_min, nozzle_temp_max, cali_idx, bambu_filament_id, bambu_setting_id, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (filament_id, vendor_id, material_id, filament.get("name") or f"Filament {filament_id}",
-                 _color_id(conn, filament.get("color_id") or filament.get("color_hex")), _db_value(filament.get("diameter")) or 1.75,
-                 _db_value(filament.get("weight")), _db_value(filament.get("spool_weight")), _db_value(filament.get("price")),
-                 nozzle_min, nozzle_max, _db_value(_extra_value(filament.get("extra"), "cali_idx")),
-                 _db_value(_extra_value(filament.get("extra"), "filament_id")), _db_value(_extra_value(filament.get("extra"), "setting_id")), now, now),
-            )
-        for spool in spools:
-            filament = spool.get("filament") or {}
-            filament_id = filament.get("id")
-            if not filament_id:
-                continue
-            extras = spool.get("extra") or {}
-            tag = _extra_value(extras, "tag")
-            nfc_tag_id = _ensure_nfc_catalog_value(conn, tag)
-            conn.execute(
-                """INSERT OR IGNORE INTO spools
-                   (id, filament_id, price, archived, initial_weight, spool_weight, weight_correction, nfc_tag_id, active_tray, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)""",
-                (spool.get("id"), filament_id,
-                 spool.get("price") if spool.get("price") is not None else filament.get("price"),
-                 int(bool(spool.get("archived"))),
-                 spool.get("initial_weight") if spool.get("initial_weight") is not None else filament.get("weight"),
-                 spool.get("spool_weight") if spool.get("spool_weight") is not None else filament.get("spool_weight"),
-                 nfc_tag_id, _extra_value(extras, "active_tray"), now, now),
-            )
-            imported += 1
-        conn.execute("INSERT INTO inventory_migrations(name, completed_at) VALUES ('spoolman-import', ?)", (now,))
-    return imported
-
-
-def needs_spoolman_import() -> bool:
-    initialize()
-    with _connect() as conn:
-        return conn.execute(
-            "SELECT 1 FROM inventory_migrations WHERE name = 'spoolman-import'"
-        ).fetchone() is None
-
-
 def _extra_value(extras: dict[str, Any] | None, key: str) -> Any:
     import json
     value = (extras or {}).get(key)
@@ -500,7 +450,7 @@ def _extra_value(extras: dict[str, Any] | None, key: str) -> Any:
 
 
 def _db_value(value: Any) -> Any:
-    # SQLite accepts scalar values only; preserve structured Spoolman extras as JSON.
+    # SQLite accepts scalar values only; preserve structured values as JSON.
     if isinstance(value, (list, dict, tuple)):
         import json
         return json.dumps(value, ensure_ascii=False)
@@ -667,21 +617,6 @@ def _sync_nfc_catalog_from_spools(conn: sqlite3.Connection) -> None:
             tag_row = conn.execute("SELECT tag_value FROM nfc_tags WHERE id = ?", (int(row["nfc_tag_id"]),)).fetchone()
             if tag_row:
                 _sync_nfc_tag_row(conn, tag_row["tag_value"])
-
-
-def _import_named(conn: sqlite3.Connection, table: str, entity_id: Any, name: Any) -> int | None:
-    if not name:
-        return None
-    row = conn.execute(f"SELECT id FROM {table} WHERE name = ? COLLATE NOCASE", (str(name),)).fetchone()
-    if row:
-        return int(row["id"])
-    if entity_id is not None:
-        conn.execute(f"INSERT OR IGNORE INTO {table}(id, name) VALUES (?, ?)", (entity_id, str(name)))
-        found = conn.execute(f"SELECT id FROM {table} WHERE name = ? COLLATE NOCASE", (str(name),)).fetchone()
-    else:
-        cur = conn.execute(f"INSERT INTO {table}(name) VALUES (?)", (str(name),))
-        return int(cur.lastrowid)
-    return int(found["id"]) if found else None
 
 
 def list_entities(entity: str) -> list[dict[str, Any]]:
@@ -1043,10 +978,22 @@ def update_spool_fields(spool_id: int, values: dict[str, Any]) -> dict[str, Any]
                 updates[key] = None
     with _connect() as conn:
         current = conn.execute(
-            "SELECT filament_id, nfc_tag_id, archived FROM spools WHERE id = ?", (spool_id,)
+            """SELECT s.filament_id, s.nfc_tag_id, s.archived,
+                      s.initial_weight, s.spool_weight, s.price,
+                      f.weight AS filament_weight,
+                      f.spool_weight AS filament_spool_weight,
+                      f.price AS filament_price
+                 FROM spools s
+                 JOIN filaments f ON f.id = s.filament_id
+                WHERE s.id = ?""",
+            (spool_id,),
         ).fetchone()
         if not current:
             raise KeyError(f"No spool with ID {spool_id}")
+        desired_archived = int(updates.get("archived", current["archived"]) or 0)
+        if bool(current["archived"]):
+            if desired_archived or set(updates) != {"archived"}:
+                raise ValueError("Die Spule ist archiviert und gesperrt.")
         if _has_active_print(conn) and {"nfc_tag_id", "tag", "active_tray"}.intersection(updates):
             raise ValueError("NFC-Tag und aktives Fach können während eines Drucks nicht geändert werden.")
         if "active_tray" in updates and _has_active_print(conn):
@@ -1056,7 +1003,18 @@ def update_spool_fields(spool_id: int, values: dict[str, Any]) -> dict[str, Any]
         if _spool_is_in_active_print(conn, spool_id) or _spool_is_in_active_ams(conn, spool_id):
             raise ValueError(_spool_lock_message(conn, spool_id))
         old_nfc_id = int(current["nfc_tag_id"]) if current["nfc_tag_id"] else None
-        desired_archived = int(updates.get("archived", current["archived"]) or 0)
+        if desired_archived and not bool(current["archived"]):
+            # Freeze inherited filament defaults when the spool is archived.
+            # Later edits to the filament master must not change its history.
+            archive_defaults = {
+                "initial_weight": current["filament_weight"],
+                "spool_weight": current["filament_spool_weight"],
+                "price": current["filament_price"],
+            }
+            for field, default_value in archive_defaults.items():
+                existing_value = updates.get(field, current[field])
+                if existing_value in (None, "", 0, 0.0) and default_value is not None:
+                    updates[field] = default_value
         desired_nfc_id = updates.get("nfc_tag_id", old_nfc_id)
         if "tag" in updates and "nfc_tag_id" not in updates:
             desired_nfc_id = None
@@ -1118,13 +1076,15 @@ def adjust_spool_stock(spool_id: int | str, mode: str, amount: Any) -> dict[str,
         raise ValueError('Das Gewicht darf nicht negativ sein')
     with _connect() as conn:
         spool = conn.execute(
-            """SELECT s.initial_weight, s.weight_correction, f.weight AS filament_weight
+            """SELECT s.initial_weight, s.weight_correction, s.archived, f.weight AS filament_weight
                  FROM spools s JOIN filaments f ON f.id = s.filament_id
                 WHERE s.id = ?""",
             (int(spool_id),),
         ).fetchone()
         if not spool:
             raise KeyError(f'No spool with ID {spool_id}')
+        if bool(spool['archived']):
+            raise ValueError('Die Spule ist archiviert und gesperrt.')
         if _spool_is_in_active_print(conn, spool_id) or _spool_is_in_active_ams(conn, spool_id):
             raise ValueError(_spool_lock_message(conn, spool_id))
         used = float(conn.execute(
@@ -1176,7 +1136,29 @@ def save_spool(values: dict[str, Any], spool_id: int | None = None) -> int:
     row["weight_correction"] = _number(row["weight_correction"] or 0)
     now = _now()
     with _connect() as conn:
-        existing = conn.execute("SELECT filament_id, nfc_tag_id, active_tray, active_tray_source, archived FROM spools WHERE id = ?", (spool_id,)).fetchone() if spool_id is not None else None
+        existing = conn.execute(
+            """SELECT s.filament_id, s.nfc_tag_id, s.active_tray, s.active_tray_source,
+                      s.archived, s.initial_weight, s.spool_weight, s.price,
+                      f.weight AS filament_weight,
+                      f.spool_weight AS filament_spool_weight,
+                      f.price AS filament_price
+                 FROM spools s
+                 JOIN filaments f ON f.id = s.filament_id
+                WHERE s.id = ?""",
+            (spool_id,),
+        ).fetchone() if spool_id is not None else None
+        if existing and bool(existing["archived"]):
+            if row["archived"] or set(values) != {"archived"}:
+                raise ValueError("Die Spule ist archiviert und gesperrt.")
+        if existing and row["archived"] and not bool(existing["archived"]):
+            # Freeze inherited filament defaults when archiving a spool.
+            for field, default_field in (
+                ("initial_weight", "filament_weight"),
+                ("spool_weight", "filament_spool_weight"),
+                ("price", "filament_price"),
+            ):
+                if row[field] in (None, "", 0, 0.0) and existing[default_field] is not None:
+                    row[field] = existing[default_field]
         if existing and _spool_is_in_active_print(conn, spool_id):
             raise ValueError("Die Spule ist im aktuell laufenden Druck gebunden und gesperrt")
         if existing and _spool_is_nfc_bound(conn, spool_id):
@@ -1362,6 +1344,11 @@ def delete_spool(spool_id: int | str) -> None:
         spool_id = int(spool_id)
         if not conn.execute("SELECT 1 FROM spools WHERE id = ?", (spool_id,)).fetchone():
             raise KeyError(f"No spool with ID {spool_id}")
+        archived = conn.execute(
+            "SELECT archived FROM spools WHERE id = ?", (spool_id,)
+        ).fetchone()
+        if archived and bool(archived["archived"]):
+            raise ValueError("Die Spule ist archiviert und gesperrt.")
         if _spool_is_in_active_print(conn, spool_id) or _spool_is_in_active_ams(conn, spool_id):
             raise ValueError(_spool_lock_message(conn, spool_id))
         if _spool_has_bookings(conn, spool_id):

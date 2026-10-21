@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from 'fragments/ams_metrics.html' import humidity_index_icon %}
 {% block content %}
 <div class="home-page">
   <div class="home-dashboard-grid" id="printer-status-page">
@@ -11,7 +12,7 @@
         <div class="home-printer-context" id="home-printer-name">{{ PRINTER_NAME or PRINTER_MODEL.get('devicename') or PRINTER_MODEL.get('model') or PRINTER_ID }}</div>
         <dl class="home-metric-list mb-0">
           <div><dt><i class="bi bi-wifi me-2" aria-hidden="true"></i>{{ _('MQTT') }}</dt><dd id="home-mqtt-status">{{ _('Verbunden') if mqtt_connected|default(false) else _('Nicht verbunden') }}</dd></div>
-          <div><dt><i class="bi bi-droplet me-2" aria-hidden="true"></i>{{ _('Humidity') }}</dt><dd id="home-humidity">{% if printer_ams_environment %}{{ printer_ams_environment[0].humidity or '–' }}{% else %}–{% endif %}</dd></div>
+          <div><dt><i class="bi bi-droplet me-2" aria-hidden="true"></i>{{ _('Humidity') }}</dt><dd id="home-humidity" class="d-flex align-items-center gap-2">{% if printer_ams_environment %}{{ humidity_index_icon(printer_ams_environment[0].humidity_level, 'home', 'humidity-droplet-home') }}<span id="home-humidity-value">{{ printer_ams_environment[0].humidity or '–' }}</span>{% else %}<span id="home-humidity-value">–</span>{% endif %}</dd></div>
           <div><dt><i class="bi bi-thermometer-half me-2" aria-hidden="true"></i>{{ _('Temperature') }}</dt><dd id="home-ams-temperature">{% if printer_ams_environment %}{{ printer_ams_environment[0].temperature or '–' }}°C{% else %}–{% endif %}</dd></div>
           <div><dt><i class="bi bi-waves me-2" aria-hidden="true"></i>{{ _('Hotend') }}</dt><dd id="home-hotend">{% if printer_temperatures.hotend is not none %}{{ printer_temperatures.hotend|round|int }}°C{% else %}–{% endif %}{% if printer_temperatures.hotend_target is not none %} / {{ printer_temperatures.hotend_target|round|int }}°C{% endif %}</dd></div>
           <div><dt><i class="bi bi-view-stacked me-2" aria-hidden="true"></i>{{ _('Bed') }}</dt><dd id="home-bed">{% if printer_temperatures.bed is not none %}{{ printer_temperatures.bed|round|int }}°C{% else %}–{% endif %}{% if printer_temperatures.bed_target is not none %} / {{ printer_temperatures.bed_target|round|int }}°C{% endif %}</dd></div>
@@ -82,6 +83,7 @@
   const mqttStatus = document.getElementById('home-mqtt-status');
   const printerStatus = document.getElementById('home-printer-status');
   const humidity = document.getElementById('home-humidity');
+  const humidityValue = document.getElementById('home-humidity-value');
   const amsTemperature = document.getElementById('home-ams-temperature');
   const hotend = document.getElementById('home-hotend');
   const bed = document.getElementById('home-bed');
@@ -126,6 +128,17 @@
     return labels[value] || value || activityLabels.unknown;
   }
 
+  function renderHumidityIcon(level) {
+    const normalized = Number(level);
+    if (!Number.isInteger(normalized) || normalized < 1 || normalized > 5) return '';
+    // Bambu's index is ordered from dry (5/A) to humid (1/E).
+    const letters = ['E', 'D', 'C', 'B', 'A'];
+    const fill = (6 - normalized) * 20;
+    const top = 100 - fill;
+    const clipId = 'home-humidity-clip';
+    return `<span class="humidity-droplet-wrapper humidity-droplet-home" title="${letters[normalized - 1]}" aria-label="${letters[normalized - 1]}"><svg class="humidity-droplet" viewBox="-0.5 -0.5 17 17" aria-hidden="true" focusable="false"><defs><clipPath id="${clipId}"><path d="M8 16a6 6 0 0 0 6-6c0-1.655-1.122-2.904-2.432-4.362C10.254 4.176 8.75 2.503 8 0c0 0-6 5.686-6 10a6 6 0 0 0 6 6M6.646 4.646l.708.708c-.29.29-1.128 1.311-1.907 2.87l-.894-.448c.82-1.641-1.717-2.753-2.093-3.13" /></clipPath></defs><rect width="100%" height="100%" class="droplet-base" clip-path="url(#${clipId})" /><rect width="100%" height="${fill}%" y="${top}%" class="droplet-fill" clip-path="url(#${clipId})" /><path class="droplet-outline" d="M8 16a6 6 0 0 0 6-6c0-1.655-1.122-2.904-2.432-4.362C10.254 4.176 8.75 2.503 8 0c0 0-6 5.686-6 10a6 6 0 0 0 6 6" /></svg><span class="humidity-level-number">${letters[normalized - 1]}</span></span>`;
+  }
+
   function renderActivities(item, printerStatus, preparationStatus) {
     if (!activityList) return;
     const preparationEntries = preparationStatus
@@ -150,7 +163,13 @@
     if (mqttStatus) mqttStatus.textContent = data.mqtt_status || '';
     if (printerStatus) printerStatus.textContent = data.printer_status || '';
     const metrics = data.ams_environment || [];
-    if (humidity) humidity.textContent = metrics.length ? (metrics[0].humidity || '–') : '–';
+    if (humidityValue) humidityValue.textContent = metrics.length ? (metrics[0].humidity || '–') : '–';
+    if (humidity) {
+      const metric = metrics[0] || {};
+      const icon = humidity.querySelector('.humidity-droplet-wrapper');
+      if (icon) icon.outerHTML = renderHumidityIcon(metric.humidity_level);
+      else if (metric.humidity_level) humidity.insertAdjacentHTML('afterbegin', renderHumidityIcon(metric.humidity_level));
+    }
     if (amsTemperature) amsTemperature.textContent = metrics.length ? `${metrics[0].temperature || '–'}°C` : '–';
     const temperatures = data.temperatures || {};
     if (hotend) hotend.textContent = temperatures.hotend === null || temperatures.hotend === undefined ? '–' : `${Math.round(Number(temperatures.hotend))}°C${temperatures.hotend_target === null || temperatures.hotend_target === undefined ? '' : ` / ${Math.round(Number(temperatures.hotend_target))}°C`}`;

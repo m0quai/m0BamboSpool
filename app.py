@@ -20,10 +20,11 @@ from frontend_utils import color_is_dark
 from messages import AMS_FILAMENT_SETTING
 import mqtt_bambulab
 import print_history as print_history_service
-import spoolman_client
-import spoolman_service
 import inventory_database
-from spoolman_service import augmentTrayDataWithSpoolMan, trayUid, normalize_color_hex
+import inventory_repository as spool_data
+import inventory_service
+import nfc_pending_repository
+from inventory_service import augment_tray_data, trayUid, normalize_color_hex
 from logger import log
 
 READ_ONLY_MODE = os.getenv("M0BAMBOSPOOL_LIVE_READONLY") == "1"
@@ -81,17 +82,17 @@ def build_ams_labels(ams_data):
 
 
 def _augment_tray(spool_list, tray_data, ams_id, tray_id):
-  augmentTrayDataWithSpoolMan(spool_list, tray_data, ams_id, tray_id)
+  augment_tray_data(spool_list, tray_data, ams_id, tray_id)
   if tray_data.get("unmapped_bambu_tag"):
-    spoolman_service.clear_active_spool_for_tray(ams_id, tray_id)
-    augmentTrayDataWithSpoolMan(spool_list, tray_data, ams_id, tray_id)
+    inventory_service.clear_active_spool_for_tray(ams_id, tray_id)
+    augment_tray_data(spool_list, tray_data, ams_id, tray_id)
   empty_condition = (
       CLEAR_ASSIGNMENT_WHEN_EMPTY
       and not tray_data.get("spool_material")
       and not tray_data.get("unmapped_bambu_tag")
   )
   if empty_condition:
-    spoolman_service.clear_active_spool_for_tray(ams_id, tray_id)
+    inventory_service.clear_active_spool_for_tray(ams_id, tray_id)
     mqtt_bambulab.clear_ams_tray_assignment(ams_id, tray_id)
 
 
@@ -152,7 +153,7 @@ def issue():
 
   #TODO: Determine issue
   #New bambulab spool
-  #Tray empty, but spoolman has record
+  # Tray empty, but the local catalog has a record.
   #Extra tag mismatch?
   #COLor/type mismatch
 
@@ -173,9 +174,9 @@ def fill():
     if READ_ONLY_MODE:
       return render_template('error.html', exception="Live read-only mode: assigning spools to trays is disabled.")
 
-    spool_data = spoolman_client.getSpoolById(spool_id)
-    mqtt_bambulab.setActiveTray(spool_id, spool_data["extra"], ams_id, tray_id)
-    setActiveSpool(ams_id, tray_id, spool_data)
+    spool_record = spool_data.get_spool(spool_id)
+    mqtt_bambulab.setActiveTray(spool_id, spool_record["extra"], ams_id, tray_id)
+    setActiveSpool(ams_id, tray_id, spool_record)
     return redirect(url_for(
       'home',
       success_message=(
@@ -209,15 +210,22 @@ def assign_bambu_spool():
     if READ_ONLY_MODE:
       return render_template('error.html', exception="Live read-only mode: linking Bambu spools is disabled.")
 
-    spool_data = spoolman_client.getSpoolById(spool_id)
-    extras = spool_data.get("extra") or {}
-
-    spoolman_client.patchExtraTags(spool_id, extras, {
-      "tag": json.dumps(bambu_tag),
-    })
-
-    mqtt_bambulab.setActiveTray(spool_id, extras, ams_id, tray_id)
-    setActiveSpool(ams_id, tray_id, spool_data)
+    try:
+      inventory_database.update_spool_fields(spool_id, {"tag": bambu_tag})
+      spool_record = inventory_database.get_spool(spool_id)
+      mqtt_bambulab.setActiveTray(
+        spool_id,
+        spool_record.get("extra") or {},
+        ams_id,
+        tray_id,
+        source="nfc",
+        nfc_uid=bambu_tag,
+      )
+      setActiveSpool(ams_id, tray_id, spool_record)
+      nfc_pending_repository.remove_pending_tag(bambu_tag)
+    except Exception as exc:
+      traceback.print_exc()
+      return render_template('error.html', exception=str(exc))
 
     return redirect(url_for('home', success_message=f"Bambu-Spule {spool_id} lokal mit AMS {ams_id}, Fach {int(tray_id) + 1} verknüpft."))
 
@@ -326,7 +334,7 @@ def spool_info():
 
 @app.route("/spool/info/<int:spool_id>")
 @app.route("/spool/show/<int:spool_id>")
-def spoolman_compatible_spool_info(spool_id):
+def compatible_spool_info(spool_id):
   query_params = {"spool_id": spool_id}
   tag_id = request.args.get("tag_id")
 
@@ -338,7 +346,7 @@ def spoolman_compatible_spool_info(spool_id):
 
 @app.post("/tray_clear")
 def tray_clear():
-  # Remove only the m0BamboSpool/Spoolman assignment for a tray.
+  # Remove only the local assignment for a tray.
   #
   #   This deliberately does not send AMS_FILAMENT_SETTING to the printer, so the
   #   material/color configured in Bambu remains untouched.
@@ -352,7 +360,7 @@ def tray_clear():
     return render_template('error.html', exception="Live read-only mode: clearing tray assignments is disabled.")
 
   try:
-    spoolman_service.clear_active_spool_for_tray(ams_id, tray_id)
+    inventory_service.clear_active_spool_for_tray(ams_id, tray_id)
     return redirect(url_for(
       'home',
       success_message=f"Tray assignment cleared for AMS {ams_id}, Tray {int(tray_id) + 1}."
@@ -379,10 +387,10 @@ def tray_load():
     return render_template('error.html', exception="Live read-only mode: assigning spools to trays is disabled.")
 
   try:
-    # Update Spoolman with the selected tray
-    spool_data = spoolman_client.getSpoolById(spool_id)
-    mqtt_bambulab.setActiveTray(spool_id, spool_data["extra"], ams_id, tray_id)
-    setActiveSpool(ams_id, tray_id, spool_data)
+    # Update the local catalog with the selected tray.
+    spool_record = spool_data.get_spool(spool_id)
+    mqtt_bambulab.setActiveTray(spool_id, spool_record["extra"], ams_id, tray_id)
+    setActiveSpool(ams_id, tray_id, spool_record)
 
     return redirect(url_for('home', success_message=f"Spule {spool_id} mit NFC-Tag {tag_id} dem AMS {ams_id}, Fach {int(tray_id) + 1} zugeordnet."))
   except Exception as e:
@@ -393,7 +401,7 @@ def _resolve_bambu_profile_ids(spool_data):
   # Resolve Bambu filament/profile IDs for AMS writes.
   #
   #   Preference:
-  #   1. Valid IDs already stored in Spoolman extra fields.
+  #   1. Valid IDs already stored with the filament metadata.
   #   2. Known Bambu profile mapping derived from the printer/profile data.
   #
   #   Legacy numeric placeholders such as "12345" are deliberately ignored.
@@ -412,7 +420,7 @@ def _resolve_bambu_profile_ids(spool_data):
   setting_id = clean(extra.get("setting_id"))
 
   if filament_id and setting_id:
-    return filament_id, setting_id, "spoolman"
+    return filament_id, setting_id, "local"
 
   # Bambu profile observed for SUNLU PLA+ 2.0 in the printer/profile data.
   # Bambu accepts the base tray_type PLA; these IDs retain the concrete PLA+ profile.
@@ -481,7 +489,7 @@ def setActiveSpool(ams_id, tray_id, spool_data):
     ams_message["print"]["nozzle_temp_max"] = int(nozzle_temperature_range_obj["filament_max_temp"])
 
   # Bambu rejects PLA+ as tray_type on affected AMS/firmware versions.
-  # Keep PLA+ in Spoolman, but write Bambu's accepted base material "PLA".
+  # Keep PLA+ in the local catalog, but write Bambu's accepted base material "PLA".
   # The concrete PLA+ profile remains identified by filament_id/setting_id below.
   spool_material = str(spool_data["filament"]["material"] or "").strip()
   if spool_material.upper().replace(" ", "") == "PLA+":
@@ -490,7 +498,9 @@ def setActiveSpool(ams_id, tray_id, spool_data):
     ams_message["print"]["tray_type"] = spool_material
 
   filament_brand_code = {}
-  filament_brand_code["brand_code"] = spool_data["filament"]["extra"].get("filament_id", "").strip('"')
+  filament_brand_code["brand_code"] = str(
+    spool_data["filament"].get("extra", {}).get("filament_id") or ""
+  ).strip().strip('"')
   filament_brand_code["sub_brand_code"] = ""
 
   if filament_brand_code["brand_code"] == "":
@@ -499,7 +509,7 @@ def setActiveSpool(ams_id, tray_id, spool_data):
                                                       spool_data["filament"]["extra"].get("type", ""))
     
   # Bambu expects the real filament/profile identifiers when available.
-  # Spoolman custom fields may contain them with JSON-style quotes, hence strip().
+  # Local custom fields may contain them with JSON-style quotes, hence strip().
   filament_id, setting_id, profile_source = _resolve_bambu_profile_ids(spool_data)
 
   material_key = str(spool_data["filament"].get("material") or "").strip().upper().replace(" ", "")
@@ -609,9 +619,7 @@ def write_tag():
 
     myuuid = str(uuid.uuid4())
 
-    spoolman_client.patchExtraTags(spool_id, {}, {
-      "tag": json.dumps(myuuid),
-    })
+    inventory_database.update_spool_fields(spool_id, {"tag": myuuid})
     return render_template('write_tag.html', myuuid=myuuid)
   except Exception as e:
     traceback.print_exc()
@@ -623,7 +631,7 @@ def health():
 
 @app.route("/print_history")
 def print_history():
-  spoolman_settings = spoolman_service.getSettings()
+  inventory_settings = inventory_service.getSettings()
 
   try:
     def _to_float(value):
@@ -659,9 +667,9 @@ def print_history():
     if spool_id_value is None:
       return
     if length_value is not None:
-      spoolman_client.consumeSpool(spool_id_value, use_length=length_value)
+      spool_data.record_consumption(spool_id_value, length_mm=length_value)
     elif grams_value is not None:
-      spoolman_client.consumeSpool(spool_id_value, use_weight=grams_value)
+      spool_data.record_consumption(spool_id_value, weight_grams=grams_value)
 
   if all([ams_slot, print_id, spool_id]):
     filament = print_history_service.get_filament_for_slot(print_id, ams_slot)
@@ -689,8 +697,7 @@ def print_history():
   prints, total_prints = print_history_service.get_prints_with_filament(limit=per_page, offset=offset, include_deleted=show_deleted)
   layer_tracking_map = print_history_service.get_layer_tracking_for_prints([print["id"] for print in prints])
 
-  # Historical print assignments are resolved from our local catalog.  They
-  # must not change when SpoolMan's current data or archive state changes.
+  # Historical print assignments are resolved from our local catalog.
   spool_list = inventory_database.list_spools(include_archived=True)
 
   for print in prints:
@@ -770,7 +777,7 @@ def print_history():
   return render_template(
     'print_history.html',
     prints=prints,
-    currencysymbol=spoolman_settings["currency_symbol"],
+    currencysymbol=inventory_settings["currency_symbol"],
     page=page,
     total_pages=total_pages,
     per_page=per_page,

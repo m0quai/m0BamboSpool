@@ -25,10 +25,9 @@ Diese Datei ist die zentrale und verbindliche Sammlung dauerhafter Projektentsch
 - Navigation: `templates/base.html`.
 - Zertifikats-/Signing-Funktionalität: `bambu_certificate.py`.
 - Eigene Funktionalität bleibt modular und updatefreundlich; keine aufgabenfremden Refactorings.
-- Inventardaten werden über `inventory_repository.py` als zentrale Datenzugriffsschicht
-  bezogen. Fachlogik und UI greifen nicht direkt auf die Spoolman-HTTP-API zu.
-- Nicht benötigte Spoolman-Felder werden an dieser Grenze reduziert; interne Modelle
-  enthalten nur die für m0BamboSpool benötigten Daten.
+- Inventardaten werden über `inventory_repository.py` als zentrale lokale
+  Datenzugriffsschicht bezogen.
+- Interne Modelle enthalten nur die für m0BamboSpool benötigten Daten.
 - Dauerhafte UI-Texte liegen zentral in `translations.py`; sichtbare Texte und
   Buttons dürfen nicht seitenweise fest verdrahtet werden.
 
@@ -54,7 +53,7 @@ Diese Datei ist die zentrale und verbindliche Sammlung dauerhafter Projektentsch
 - `pushall` und `ams_filament_setting` funktionieren im LAN-Pfad ohne RSA-SHA256/X.509-Signierung.
 - Signing bleibt für den Online-/Cloud-Kontext relevant.
 - Sparse AMS-Materialdaten werden serverseitig mit dem zuletzt bestätigten Cache ergänzt.
-- `Clear` löscht zuerst am Drucker, danach die m0BamboSpool-/Spoolman-Zuordnung und invalidiert den Cache sofort.
+- `Clear` löscht zuerst am Drucker, danach die lokale m0BamboSpool-Zuordnung und invalidiert den Cache sofort.
 
 ## AMSHelper-Softwarearchitektur
 
@@ -74,7 +73,7 @@ Diese Datei ist die zentrale und verbindliche Sammlung dauerhafter Projektentsch
 - MQTT-Empfang und Tray-Aktionen bleiben logisch getrennt; Ereignisse werden bevorzugt.
 - `m0BamboSpoolClient` kapselt HTTP-Kommunikation.
 - AMSHelper meldet UID + AMS-Slot und zusätzlich „Tray leer“.
-- UID→Spool-Auflösung erfolgt ausschließlich serverseitig in m0BamboSpool/Spoolman.
+- UID→Spool-Auflösung erfolgt ausschließlich serverseitig in m0BamboSpool.
 - C#-`if`-Anweisungen werden immer mit `{ }` geschrieben.
 
 ### Debug-/Trace-Ausgabe
@@ -123,8 +122,7 @@ Dieser I²C-Aufbau ist der aktuelle Einzelreader-Teststand, **nicht** die Zielar
 - Grüne Erfolgsmeldungen schließen nach 10 Sekunden automatisch; manuelles Schließen bleibt möglich.
 - History und Inventory verwenden tabellarische Darstellung mit Filterung und Sortierung;
   Filterzustände bleiben bei Aktualisierungen erhalten.
-- Die Spoolman-Navigation wird in einem wiederverwendeten Fenster geöffnet, sofern
-  bereits eines vorhanden ist.
+- Die Navigation bleibt innerhalb der lokalen m0BamboSpool-Verwaltung.
 
 ## Entwicklung und Sicherheit
 

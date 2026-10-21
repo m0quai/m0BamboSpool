@@ -14,7 +14,7 @@ Erledigte Punkte werden entfernt und nicht als erledigt weitergeführt.
 
 ## m0BamboSpool / AMS-Kommunikation
 
-- Unterschiede zwischen AMS-Status und Spoolman-Zuordnung abschließend behandeln und
+- Unterschiede zwischen AMS-Status und lokaler Zuordnung abschließend behandeln und
   mit realen Druck-/Wechselvorgängen verifizieren.
 - Verhalten bei einem durch Bambu zurückgesetzten External-Spool-Zustand abschließend
   korrigieren; dazu gehören Wiederherstellung, Zuordnung und Logging.
@@ -26,7 +26,7 @@ Erledigte Punkte werden entfernt und nicht als erledigt weitergeführt.
 - Print-History gegen alle gewünschten Zustände, Filter, Sortierungen, Anker-Sprünge und
   UI-Aktionen vollständig testen.
 - Automatische Aktualisierung ausschließlich während laufender Druckjobs verifizieren.
-- Inventar-Links zu Spool, Hersteller und Filament mit den jeweiligen Spoolman-IDs testen.
+- Inventar-Links zu Spool, Hersteller und Filament mit den jeweiligen lokalen IDs testen.
 - Mehrsprachigkeit auf allen Seiten und bei allen sichtbaren Buttons vollständig prüfen.
 
 ## Eigene Verwaltung / Spulenbestand

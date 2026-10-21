@@ -40,7 +40,6 @@ namespace AMSHelper.Config
         {
             public const string Host = "192.168.52.73";
             public const int Port = 8000;
-            public const int SpoolmanPort = 7912;
             public const int RequestTimeoutMs = 10000;
             public static string BaseUrl => Host.Length == 0 ? "" : "http://" + Host + ":" + Port;
         }

@@ -150,6 +150,7 @@ document.addEventListener('DOMContentLoaded', () => {
     stockCorrectionFailed: {{ _('Bestandskorrektur fehlgeschlagen.')|tojson }},
     boundDelete: {{ _('Gebundene Spulen können nicht gelöscht werden.')|tojson }},
     boundChange: {{ _('Gebundene Spulen können nicht verändert werden.')|tojson }},
+    archivedLocked: {{ _('Die Spule ist archiviert und gesperrt.')|tojson }},
     assignAms: {{ _('In AMS')|tojson }},
     assigningAms: {{ _('Wird dem AMS zugeordnet …')|tojson }},
     assignAmsFailed: {{ _('Die Spule konnte dem AMS nicht zugeordnet werden.')|tojson }},
@@ -184,6 +185,43 @@ document.addEventListener('DOMContentLoaded', () => {
   const currentWeightFill = document.getElementById('inventory-current-weight-fill');
   const spoolPrints = document.getElementById('inventory-spool-prints');
   const spoolPrintsList = document.getElementById('inventory-spool-prints-list');
+  let inventoryAmsFingerprint = null;
+  let inventoryAmsPollInFlight = false;
+  const inventoryHasFocusedEditorField = () => {
+    const active = document.activeElement;
+    return Boolean(active && editor.contains(active) && !active.readOnly && !active.disabled);
+  };
+  const pollInventoryAmsState = async () => {
+    if (inventoryAmsPollInFlight || document.visibilityState === 'hidden') return;
+    inventoryAmsPollInFlight = true;
+    try {
+      const response = await fetch(`/inventory/state?_=${Date.now()}`, {
+        cache: 'no-store',
+        headers: { 'Accept': 'application/json' },
+      });
+      if (!response.ok) return;
+      const state = await response.json();
+      const fingerprint = String(state.ams_fingerprint || '');
+      if (!fingerprint) return;
+      if (inventoryAmsFingerprint === null) {
+        inventoryAmsFingerprint = fingerprint;
+        return;
+      }
+      if (fingerprint === inventoryAmsFingerprint || inventoryHasFocusedEditorField()) return;
+      inventoryAmsFingerprint = fingerprint;
+      try {
+        sessionStorage.setItem(
+          'm0bambospool-inventory-refresh-selection',
+          JSON.stringify(selectedEditor || null),
+        );
+      } catch (_) {}
+      window.location.reload();
+    } catch (_) {
+      // A short MQTT or network interruption must not disturb the editor.
+    } finally {
+      inventoryAmsPollInFlight = false;
+    }
+  };
   const stockModeButtons = [...document.querySelectorAll('[data-stock-mode]')];
   let stockMode = 'delta';
   const setStockMode = mode => {
@@ -221,6 +259,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const vendorOf = entry => filamentOf(entry).vendor?.name || inventoryText.unknown;
   const materialOf = entry => filamentOf(entry).material || inventoryText.unknown;
   const filamentNameOf = entry => filamentOf(entry).name || inventoryText.unnamed;
+  const isArchived = entry => localSpools.get(String(entry.spool?.id))?.archived ?? Boolean(entry.spool?.archived);
   const numberLocale = document.documentElement.lang.startsWith('de') ? 'de-DE' : 'en-US';
   const formatDecimal = value => Number(value).toLocaleString(numberLocale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const formatWeight = grams => { const value = Number(grams || 0); if (value < 1000) return `${formatDecimal(value)} g`; return `${formatDecimal(value / 1000)} kg`; };
@@ -279,7 +318,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function groupEntries() {
     const term = search.value.trim().toLocaleLowerCase();
-    const isArchived = entry => localSpools.get(String(entry.spool?.id))?.archived ?? Boolean(entry.spool?.archived);
     const visibleInventory = showArchived.checked ? inventory : inventory.filter(entry => !isArchived(entry));
     const remoteFilamentIds = new Set(visibleInventory.map(entry => String(filamentOf(entry).id)));
     const localOnlyEntries = [...localFilaments.values()]
@@ -356,6 +394,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const filamentDefaultValue = filamentDefaultField ? record.filament?.[filamentDefaultField] : null;
     const hasFilamentDefault = filamentDefaultValue !== null && filamentDefaultValue !== undefined;
     const defaultFromFilament = Boolean(record.filament_defaults?.[name]);
+    const archived = Boolean(record.archived);
     const wrap = make('div', name === 'name' || name === 'nfc_tag_id' || name === 'active_tray' ? 'col-12' : 'col-12 col-md-6');
     wrap.dataset.fieldWrap = name;
     const labelNode = make('label', 'form-label small mb-1', label);
@@ -429,9 +468,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     input.name = name;
     input.dataset.fieldName = name;
-    input.disabled = Boolean(locked);
+    const canUnarchive = archived && name === 'archived';
+    input.disabled = Boolean(locked) || (archived && !canUnarchive);
     input.dataset.originalValue = type === 'checkbox' ? String(input.checked) : input.value;
-    if (locked) {
+    if (archived && !canUnarchive) {
+      input.title = inventoryText.archivedLocked;
+    } else if (locked) {
       input.title = name === 'active_tray'
         ? inventoryText.activeTrayLocked
         : name === 'nfc_tag_id'
@@ -468,7 +510,7 @@ document.addEventListener('DOMContentLoaded', () => {
         editorState.textContent = error.message || inventoryText.saveFailed;
         if (type === 'checkbox') input.checked = input.dataset.originalValue === 'true';
         else input.value = input.dataset.originalValue;
-      } finally { input.disabled = false; }
+      } finally { input.disabled = Boolean(locked) || (archived && !canUnarchive); }
     });
     if (colorPreview) {
       const colorField = make('div', 'inventory-color-field');
@@ -491,6 +533,8 @@ document.addEventListener('DOMContentLoaded', () => {
     updateSelectionMarker();
     editor.hidden = false;
     const spoolLocked = kind === 'spool' && Boolean(record.active_print_locked || record.active_ams_locked || record.nfc_ams_locked);
+    const spoolArchived = kind === 'spool' && Boolean(record.archived);
+    const spoolDeleteLocked = spoolArchived || spoolLocked || (kind === 'spool' && Boolean(record.filament_locked));
     const fillMode = Boolean(inventoryFillContext);
     createContextButton.hidden = fillMode || !['vendor', 'filament'].includes(kind);
     createContextButton.innerHTML = '<i class="bi bi-plus-circle" aria-hidden="true"></i>';
@@ -511,12 +555,12 @@ document.addEventListener('DOMContentLoaded', () => {
     openFilamentButton.hidden = fillMode || kind !== 'spool';
     duplicateSpoolButton.disabled = false;
     duplicateSpoolButton.title = {{ _('Spule kopieren')|tojson }};
-    deleteSpoolButton.disabled = spoolLocked;
-    deleteSpoolButton.title = spoolLocked ? inventoryText.boundDelete : {{ _('Spule löschen')|tojson }};
-    adjustStockButton.disabled = spoolLocked;
-    adjustStockButton.title = spoolLocked ? inventoryText.boundChange : {{ _('Bestand verändern')|tojson }};
-    assignAmsButton.disabled = spoolLocked;
-    assignAmsButton.title = spoolLocked ? inventoryText.boundLocked : inventoryText.assignAms;
+    deleteSpoolButton.disabled = spoolDeleteLocked;
+    deleteSpoolButton.title = spoolArchived ? inventoryText.archivedLocked : spoolDeleteLocked ? inventoryText.boundDelete : {{ _('Spule löschen')|tojson }};
+    adjustStockButton.disabled = spoolLocked || spoolArchived;
+    adjustStockButton.title = spoolArchived ? inventoryText.archivedLocked : spoolLocked ? inventoryText.boundChange : {{ _('Bestand verändern')|tojson }};
+    assignAmsButton.disabled = spoolLocked || spoolArchived;
+    assignAmsButton.title = spoolArchived ? inventoryText.archivedLocked : spoolLocked ? inventoryText.boundLocked : inventoryText.assignAms;
     currentWeight.hidden = kind !== 'spool';
     spoolPrints.hidden = kind !== 'spool';
     spoolPrintsList.replaceChildren();
@@ -564,9 +608,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // The correction value is calculated and must remain disabled. The
     // adjustment dialog itself follows the selected spool's lock state and
     // must be re-enabled when switching back from a locked spool.
-    stockModeButtons.forEach(button => { button.disabled = spoolLocked; });
-    stockValue.disabled = spoolLocked;
-    stockApply.disabled = spoolLocked;
+    stockModeButtons.forEach(button => { button.disabled = spoolLocked || spoolArchived; });
+    stockValue.disabled = spoolLocked || spoolArchived;
+    stockApply.disabled = spoolLocked || spoolArchived;
     createSpoolButton.onclick = () => createSpoolForFilament(record);
     duplicateFilamentButton.onclick = () => duplicateFilament(record);
     createContextButton.onclick = () => createLocalEntity(kind);
@@ -581,7 +625,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     };
     assignAmsButton.onclick = async () => {
-      if (!inventoryFillContext || spoolLocked) return;
+      if (!inventoryFillContext || spoolLocked || spoolArchived) return;
       assignAmsButton.disabled = true;
       editorState.textContent = inventoryText.assigningAms;
       try {
@@ -621,7 +665,7 @@ document.addEventListener('DOMContentLoaded', () => {
       } finally { stockApply.disabled = false; }
     };
     editorTitle.textContent = kind === 'vendor' ? record.name : kind === 'spool' ? `#${record.id} \u00b7 ${record.filament?.name || inventoryText.spool}` : `${record.vendor_name || inventoryText.unknown} \u00b7 ${record.name}`;
-    editorState.textContent = '';
+    editorState.textContent = spoolArchived ? inventoryText.archivedLocked : '';
     editorFields.replaceChildren();
     const save = async (name, value) => {
       const response = await fetch(`/inventory/${endpoint}/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ [name]: value }) });
@@ -639,6 +683,9 @@ document.addEventListener('DOMContentLoaded', () => {
           Object.assign(entry.spool, liveValues);
         }
         render();
+        if (name === 'archived' && !result[resultKey].archived) {
+          selectEditor('spool', id);
+        }
       }
       if (kind === 'filament' && Array.isArray(result.spools)) {
         result.spools.forEach(spool => {
@@ -789,7 +836,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function deleteSpool(spool) {
-    if (spool.active_print_locked || spool.active_ams_locked || spool.nfc_ams_locked || !window.confirm(inventoryText.deleteConfirm.replace('%s', String(spool.id)))) return;
+    if (spool.archived || spool.active_print_locked || spool.active_ams_locked || spool.nfc_ams_locked || spool.filament_locked || !window.confirm(inventoryText.deleteConfirm.replace('%s', String(spool.id)))) return;
     deleteSpoolButton.disabled = true;
     editorState.textContent = inventoryText.deleting;
     try {
@@ -877,6 +924,16 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!button.title) button.title = inventoryText.nfcTag;
     } else {
       // Reserve the NFC column independently from the lock column.
+      spoolNumber.append(make('span', 'inventory-spool-icon-placeholder'));
+    }
+    if (isArchived(entry)) {
+      const archiveIcon = make('i', 'bi bi-archive-fill inventory-spool-archived');
+      archiveIcon.setAttribute('aria-label', inventoryText.archived);
+      archiveIcon.title = inventoryText.archived;
+      spoolNumber.append(archiveIcon);
+      if (!button.title) button.title = inventoryText.archived;
+    } else {
+      // Reserve the archive column so archived markers never shift other rows.
       spoolNumber.append(make('span', 'inventory-spool-icon-placeholder'));
     }
     left.append(spoolNumber);
@@ -980,6 +1037,11 @@ document.addEventListener('DOMContentLoaded', () => {
   search.addEventListener('input', render);
   render();
   const requestedSpoolId = new URLSearchParams(window.location.search).get('spool_id');
+  let refreshSelection = null;
+  try {
+    refreshSelection = JSON.parse(sessionStorage.getItem('m0bambospool-inventory-refresh-selection') || 'null');
+    sessionStorage.removeItem('m0bambospool-inventory-refresh-selection');
+  } catch (_) {}
   if (requestedSpoolId && localSpools.has(String(requestedSpoolId))) {
     if (localSpools.get(String(requestedSpoolId)).archived && !showArchived.checked) {
       showArchived.checked = true;
@@ -988,7 +1050,22 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     selectEditor('spool', requestedSpoolId);
     editor.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } else if (refreshSelection && ['spool', 'filament', 'vendor'].includes(refreshSelection.kind)) {
+    const selectionMap = refreshSelection.kind === 'spool'
+      ? localSpools
+      : refreshSelection.kind === 'filament' ? localFilaments : localVendors;
+    if (selectionMap.has(String(refreshSelection.id))) {
+      if (refreshSelection.kind === 'spool' && selectionMap.get(String(refreshSelection.id)).archived && !showArchived.checked) {
+        showArchived.checked = true;
+        savedState.showArchived = true;
+        render();
+      }
+      selectEditor(refreshSelection.kind, refreshSelection.id);
+      editor.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   }
+  pollInventoryAmsState();
+  window.setInterval(pollInventoryAmsState, 5000);
 });
 </script>
 {% endblock %}

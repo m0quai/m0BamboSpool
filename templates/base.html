@@ -172,6 +172,17 @@
 });
   </script>
 <div class="container page-content">
+  {% if pending_nfc|default(false) %}
+  <div class="alert alert-warning d-flex align-items-center justify-content-between gap-3 mb-3" role="alert">
+    <div class="d-flex align-items-center gap-2">
+      <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+      <strong>{{ _('Diese Spule muss zugeordnet werden') }}</strong>
+    </div>
+    <a class="btn btn-sm btn-warning text-nowrap" href="{{ url_for('ams_nfc.pending_tags') }}">
+      {{ _('NFC-Zuordnung öffnen') }}
+    </a>
+  </div>
+  {% endif %}
   {% if success_message %}
   <div id="success-alert" class="alert alert-success alert-dismissible fade show" role="alert">
     <strong>{{ _('Success!') }}</strong> {{ success_message }}
