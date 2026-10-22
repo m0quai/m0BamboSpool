@@ -1525,7 +1525,7 @@ main.container {
 .inventory-filter-row { display: flex; width: 100%; max-width: calc(4 * 10rem + 3 * .75rem); margin: 0 0 .75rem; }
 .inventory-filter-row .inventory-search { flex: 1 1 auto; }
 .inventory-control { display: grid; gap: .2rem; font-size: .75rem; color: var(--bs-secondary-color); min-width: 10rem; }
-.inventory-search { flex: 1 1 15rem; }
+.inventory-search { flex: 1 1 15rem; width: 100%; max-width: calc(4 * 10rem + 3 * .75rem); }
 .inventory-archived-toggle { display: inline-flex; align-items: center; gap: .4rem; align-self: flex-end; margin-bottom: .45rem; white-space: nowrap; color: var(--bs-secondary-color); font-size: .85rem; }
 .inventory-layout { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 2fr); gap: 1rem; align-items: start; min-height: 0; }
 .inventory-groups { display: grid; gap: .55rem; min-height: 0; height: calc(100vh - 11rem); max-height: calc(100vh - 11rem); overflow-y: auto; align-content: start; padding-right: .35rem; scrollbar-gutter: stable; }

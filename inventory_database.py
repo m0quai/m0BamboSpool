@@ -1269,11 +1269,29 @@ def list_spools(include_archived: bool = False) -> list[dict[str, Any]]:
         has_usage_table = bool(conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'spool_usage'"
         ).fetchone())
+        has_consumption_events = bool(conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'spool_consumption_events'"
+        ).fetchone())
         usage_select = "COALESCE(u.used_weight, 0)" if has_usage_table else "0"
-        last_used_select = """(SELECT MAX(p.print_date)
-                                  FROM spool_usage lu
-                                  JOIN prints p ON p.id = lu.print_id
-                                  WHERE lu.spool_id = s.id)""" if has_usage_table else "NULL"
+        last_used_sources = []
+        if has_usage_table:
+            # The print timestamp is the start of a job, not the last time
+            # this spool was actually used. Keep it as a fallback for older
+            # records without per-consumption events.
+            last_used_sources.append(
+                "SELECT replace(substr(p.print_date, 1, 19), 'T', ' ') AS used_at "
+                "FROM spool_usage lu JOIN prints p ON p.id = lu.print_id "
+                "WHERE lu.spool_id = s.id"
+            )
+        if has_consumption_events:
+            last_used_sources.append(
+                "SELECT replace(substr(ce.occurred_at, 1, 19), 'T', ' ') AS used_at "
+                "FROM spool_consumption_events ce WHERE ce.spool_id = s.id"
+            )
+        last_used_select = (
+            f"(SELECT MAX(used_at) FROM ({' UNION ALL '.join(last_used_sources)}))"
+            if last_used_sources else "NULL"
+        )
         usage_join = """LEFT JOIN (SELECT spool_id, SUM(grams_used) AS used_weight
                                    FROM spool_usage WHERE spool_id IS NOT NULL GROUP BY spool_id) u
                               ON u.spool_id = s.id""" if has_usage_table else ""
