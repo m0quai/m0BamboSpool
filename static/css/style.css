@@ -1521,7 +1521,7 @@ main.container {
 
 .humidity-history-chart {
     display: block;
-    width: 100%;
+    width: 760px;
     min-width: 34rem;
     height: auto;
 }
@@ -1539,16 +1539,90 @@ main.container {
 
 .humidity-history-chart .chart-line {
     fill: none;
-    stroke: var(--m0-brand);
     stroke-width: 3;
     stroke-linecap: round;
     stroke-linejoin: round;
 }
 
-.humidity-history-chart .chart-point {
-    fill: var(--m0-brand);
-    stroke: var(--bs-body-bg);
+.humidity-history-chart .chart-line-humidity {
+    stroke: var(--m0-brand);
+}
+
+.humidity-history-chart .chart-line-temperature {
+    stroke: #e67e22;
+}
+
+.humidity-history-chart .chart-temperature-axis {
+    stroke: #e67e22;
+    stroke-width: 1;
+}
+
+.humidity-history-chart .chart-temperature-axis-label {
+    fill: #c25d0a;
+    font-size: 11px;
+}
+
+.humidity-history-chart .chart-selection-line,
+.humidity-history-chart .chart-hover-line {
+    pointer-events: none;
+}
+
+.humidity-history-chart .chart-selection-line {
+    stroke: var(--m0-brand);
     stroke-width: 2;
+    stroke-dasharray: 5 3;
+}
+
+.humidity-history-chart .chart-hover-line {
+    stroke: var(--m0-muted);
+    stroke-width: 1;
+    stroke-dasharray: 3 3;
+}
+
+.humidity-history-chart .chart-selection-time-label,
+.humidity-history-chart .chart-hover-time-label {
+    pointer-events: none;
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+}
+
+.humidity-history-chart .chart-selection-time-label {
+    fill: var(--m0-brand);
+    font-weight: 600;
+}
+
+.humidity-history-chart .chart-hover-time-label {
+    fill: var(--m0-muted);
+}
+
+.humidity-history-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .9rem;
+    margin: .4rem 0 .55rem;
+    color: var(--m0-muted);
+    font-size: .82rem;
+}
+
+.humidity-history-legend > span {
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
+}
+
+.humidity-history-legend-line {
+    display: inline-block;
+    width: 1.5rem;
+    height: .2rem;
+    border-radius: 999px;
+}
+
+.humidity-history-legend-line.humidity {
+    background: var(--m0-brand);
+}
+
+.humidity-history-legend-line.temperature {
+    background: #e67e22;
 }
 
 .humidity-history-entries {
@@ -1561,15 +1635,67 @@ main.container {
 
 .humidity-history-entry {
     display: flex;
+    align-items: center;
     justify-content: space-between;
     gap: 1rem;
+    width: 100%;
     padding: .3rem .45rem;
+    color: inherit;
+    text-align: left;
+    background: transparent;
+    border: 0;
     border-bottom: 1px solid var(--m0-line);
     font-size: .85rem;
+    cursor: pointer;
 }
 
-.humidity-history-entry strong {
+.humidity-history-entry:hover,
+.humidity-history-entry:focus-visible,
+.humidity-history-entry.is-selected {
+    background: color-mix(in srgb, var(--bs-primary) 12%, var(--bs-body-bg));
+}
+
+.humidity-history-entry-date {
+    min-width: 12rem;
+}
+
+.humidity-history-entry-values {
+    display: grid;
+    grid-template-columns: minmax(5rem, 7rem) minmax(5rem, 7rem);
+    align-items: center;
+    gap: .75rem;
+    min-width: 14rem;
+    text-align: right;
+}
+
+.humidity-history-entry-humidity,
+.humidity-history-entry-temperature {
     font-variant-numeric: tabular-nums;
+}
+
+.humidity-history-entry-humidity {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: .25rem;
+}
+
+.humidity-history-entry-humidity .humidity-droplet-wrapper {
+    width: 22px;
+    height: 22px;
+}
+
+.humidity-history-entry-humidity .humidity-droplet {
+    width: 20px;
+    height: 20px;
+}
+
+.humidity-history-entry-humidity .humidity-level-number {
+    font-size: .62rem;
+}
+
+.humidity-history-entry-temperature {
+    color: #c25d0a;
 }
 
 .missing-color,
@@ -1773,17 +1899,20 @@ main.container {
 .reference-management-list-title { display: inline-flex; align-items: center; gap: .45rem; }
 .reference-icon-button { display: inline-flex; align-items: center; justify-content: center; min-width: 2.15rem; min-height: 2.15rem; padding: .25rem .45rem; }
 .reference-management-list { display: grid; gap: 0; }
-.reference-management-item { display: flex; justify-content: space-between; align-items: center; gap: .75rem; width: 100%; padding: .75rem .85rem; border: 0; border-bottom: 1px solid var(--bs-border-color); background: transparent; text-align: left; }
+.reference-management-item { display: grid; grid-template-columns: 1.5rem minmax(0, 1fr) auto; align-items: center; gap: .75rem; width: 100%; padding: .75rem .85rem; border: 0; border-bottom: 1px solid var(--bs-border-color); background: transparent; text-align: left; }
 .reference-management-item:last-child { border-bottom: 0; }
 .reference-management-item:hover, .reference-management-item:focus-visible { background: var(--bs-tertiary-bg); outline: 0; }
 .reference-management-item.is-selected { background: color-mix(in srgb, var(--bs-primary) 12%, var(--bs-body-bg)); box-shadow: inset 3px 0 0 var(--bs-primary); }
 .reference-management-item-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reference-management-item-lock-slot { display: inline-flex; align-items: center; justify-content: center; width: 1.5rem; min-width: 1.5rem; }
 .reference-management[data-nfc-management] .reference-management-item-name { overflow-wrap: anywhere; white-space: normal; }
 .reference-management-empty { padding: 1rem; color: var(--bs-secondary-color); }
 .reference-management-editor { position: sticky; top: 1rem; padding: 1rem; }
 .reference-management-editor-heading { display: flex; justify-content: space-between; align-items: start; gap: .75rem; margin-bottom: 1rem; }
 .reference-management-form { padding-top: .25rem; }
 .reference-management-editor-actions { display: flex; align-items: center; justify-content: flex-end; gap: .4rem; min-height: 2.15rem; }
+.reference-management-lock { display: inline-flex; align-items: center; gap: .3rem; }
+.reference-management-item-lock { flex: 0 0 auto; color: var(--bs-warning-text-emphasis, #8a6d1d); }
 .reference-color-preview { display: flex; align-items: center; justify-content: center; min-height: 2.1rem; margin: .25rem 0 1rem; border: 1px solid var(--bs-border-color); border-radius: .35rem; font-family: var(--bs-font-monospace); font-size: .85rem; font-weight: 600; }
 @media (max-width: 900px) { .reference-management-layout { grid-template-columns: 1fr; } .reference-management-editor { position: static; } }
 @media (max-width: 520px) { .reference-management-heading { align-items: start; flex-direction: column; } }

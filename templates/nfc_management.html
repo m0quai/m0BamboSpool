@@ -18,6 +18,7 @@
       <div id="nfc-list" class="reference-management-list" role="listbox" aria-label="{{ _('NFC-Tags') }}">
         {% for tag in management_rows %}
         <button class="reference-management-item" type="button" data-nfc-id="{{ tag.id }}" role="option">
+          <span class="reference-management-item-lock-slot" aria-hidden="true">{% if tag.in_use %}<i class="bi bi-lock-fill reference-management-item-lock" title="{{ _('Löschen gesperrt') }}"></i>{% endif %}</span>
           <span class="reference-management-item-name">#{{ tag.id }} · {{ tag.comment or tag.tag_value }}</span>
           <small class="text-muted">
             {{ tag.tag_value }}
@@ -36,6 +37,7 @@
         <div><h2 id="nfc-title" class="h5 mb-0"></h2></div>
         <div class="reference-management-editor-actions">
           <span id="nfc-state" class="small text-muted"></span>
+          <span id="nfc-lock" class="reference-management-lock small text-warning" hidden><i class="bi bi-lock-fill" aria-hidden="true"></i><span id="nfc-lock-text"></span></span>
           <button id="nfc-copy" class="btn btn-sm btn-outline-primary reference-icon-button" type="button" title="{{ _('NFC-Tag kopieren') }}" aria-label="{{ _('NFC-Tag kopieren') }}"><i class="bi bi-copy" aria-hidden="true"></i></button>
           <button id="nfc-delete" class="btn btn-sm btn-outline-danger reference-icon-button" type="button" title="{{ _('NFC-Tag löschen') }}" aria-label="{{ _('NFC-Tag löschen') }}"><i class="bi bi-trash3" aria-hidden="true"></i></button>
         </div>
@@ -59,6 +61,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const value = document.getElementById('nfc-value');
   const comment = document.getElementById('nfc-comment');
   const deleteButton = document.getElementById('nfc-delete');
+  const lock = document.getElementById('nfc-lock');
+  const lockText = document.getElementById('nfc-lock-text');
+  const lockMessage = {{ _('Löschen gesperrt: Der NFC-Tag wird aktuell von einer Spule verwendet.')|tojson }};
   let selected = null;
   const texts = {
     save: {{ _('Speichern')|tojson }},
@@ -78,15 +83,22 @@ document.addEventListener('DOMContentLoaded', () => {
       details.append(document.createTextNode(' · '));
       const link = document.createElement('a'); link.className = 'nfc-spool-link'; link.href = '/inventory?spool_id=' + encodeURIComponent(record.spool_number); link.title = {{ _('Spule im Inventar öffnen')|tojson }}; link.onclick = event => event.stopPropagation(); link.append({{ _('Spule')|tojson }} + ' #' + record.spool_number + ' ', Object.assign(document.createElement('i'), {className: 'bi bi-box-arrow-up-right'})); details.append(link);
     }
+    const lockSlot = item.querySelector('.reference-management-item-lock-slot');
+    const lockIcon = lockSlot?.querySelector('.reference-management-item-lock');
+    if (record.in_use && !lockIcon && lockSlot) { const icon = document.createElement('i'); icon.className = 'bi bi-lock-fill reference-management-item-lock'; icon.title = {{ _('Löschen gesperrt')|tojson }}; lockSlot.append(icon); }
+    if (!record.in_use && lockIcon) lockIcon.remove();
   };
   const select = record => {
+    const locked = Boolean(record.in_use || record.spool_number);
     selected = String(record.id); editor.hidden = false; title.textContent = '#'+record.id; state.textContent = '';
     value.value = record.tag_value || ''; comment.value = record.comment || '';
-    value.disabled = Boolean(record.spool_number);
-    value.title = record.spool_number ? {{ _('Der Tag-Wert kann bei einer zugeordneten Spule nicht geändert werden.')|tojson }} : '';
-    (record.spool_number ? comment : value).focus();
-    deleteButton.disabled = Boolean(record.spool_number);
-    deleteButton.title = record.spool_number ? {{ _('Der NFC-Tag ist noch einer Spule zugeordnet.')|tojson }} : {{ _('NFC-Tag löschen')|tojson }};
+    value.disabled = locked;
+    value.title = locked ? {{ _('Der Tag-Wert kann bei einer zugeordneten Spule nicht geändert werden.')|tojson }} : '';
+    comment.disabled = false;
+    (locked ? comment : value).focus();
+    deleteButton.disabled = locked;
+    deleteButton.title = locked ? lockMessage : {{ _('NFC-Tag löschen')|tojson }};
+    lock.hidden = !locked; lockText.textContent = locked ? lockMessage : '';
     list.querySelectorAll('[data-nfc-id]').forEach(item => item.classList.toggle('is-selected', item.dataset.nfcId === selected));
   };
   list.addEventListener('click', event => { const item = event.target.closest('[data-nfc-id]'); if (item) select(records.get(item.dataset.nfcId)); });
@@ -103,7 +115,13 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.getElementById('nfc-copy').addEventListener('click', async () => { if (!selected) return; try { const source=records.get(selected); const response=await fetch('/inventory/manage/nfc-tags',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tag_value:source.tag_value+'-COPY',comment:source.comment || ''})}); const result=await response.json(); if(!response.ok) throw new Error(result.error || texts.error); window.location.reload(); } catch(error) { showError(error.message); } });
   document.getElementById('nfc-delete').addEventListener('click', async () => { if (!selected || !window.confirm(texts.confirm)) return; try { const response=await fetch('/inventory/manage/nfc-tags/'+selected,{method:'DELETE'}); const result=await response.json(); if(!response.ok) throw new Error(result.error || texts.deleteError); window.location.reload(); } catch(error) { showError(error.message); } });
-  const requested = new URLSearchParams(window.location.search).get('edit'); if (requested && records.has(requested)) select(records.get(requested));
+  const requested = new URLSearchParams(window.location.search).get('edit');
+  if (requested && records.has(requested)) {
+    select(records.get(requested));
+  } else {
+    const firstRecord = records.values().next().value;
+    if (firstRecord) select(firstRecord);
+  }
 });
 </script>
 {% endblock %}

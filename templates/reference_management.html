@@ -18,6 +18,7 @@
       <div id="reference-list" class="reference-management-list" role="listbox" aria-label="{{ _(management_title) }}">
         {% for row in management_rows %}
         <button class="reference-management-item" type="button" data-reference-id="{{ row.id }}" role="option">
+          <span class="reference-management-item-lock-slot" aria-hidden="true">{% if row.in_use %}<i class="bi bi-lock-fill reference-management-item-lock" title="{{ _('Löschen gesperrt') }}"></i>{% endif %}</span>
           <span class="reference-management-item-name">{{ row.name }}</span>
           {% if management_entity == 'colors' %}
           <span class="inventory-color-code" style="background-color:#{{ row.hex_code }}; color:{{ '#fff' if color_is_dark(row.hex_code) else '#111' }};">#{{ row.hex_code }}</span>
@@ -33,6 +34,7 @@
         <div><h2 id="reference-editor-title" class="h5 mb-0"></h2></div>
         <div class="reference-management-editor-actions">
           <span id="reference-editor-state" class="small text-muted"></span>
+          <span id="reference-lock" class="reference-management-lock small text-warning" hidden><i class="bi bi-lock-fill" aria-hidden="true"></i><span id="reference-lock-text"></span></span>
           <button id="reference-copy" class="btn btn-sm btn-outline-primary reference-icon-button" type="button" hidden title="{{ _('Eintrag kopieren') }}" aria-label="{{ _('Eintrag kopieren') }}"><i class="bi bi-copy" aria-hidden="true"></i></button>
           <button id="reference-delete" class="btn btn-sm btn-outline-danger reference-icon-button" type="button" hidden title="{{ _('Löschen') }}" aria-label="{{ _('Löschen') }}"><i class="bi bi-trash3" aria-hidden="true"></i></button>
         </div>
@@ -66,6 +68,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const rgbInputs = [document.getElementById('reference-red'), document.getElementById('reference-green'), document.getElementById('reference-blue')];
   const colorPreview = document.getElementById('reference-color-preview');
   const copyButton = document.getElementById('reference-copy');
+  const deleteButton = document.getElementById('reference-delete');
+  const lock = document.getElementById('reference-lock');
+  const lockText = document.getElementById('reference-lock-text');
+  const lockMessage = entity === 'materials'
+    ? {{ _('Löschen gesperrt: Das Material wird aktuell von einem Filament verwendet.')|tojson }}
+    : {{ _('Löschen gesperrt: Die Farbe wird aktuell von einem Filament verwendet.')|tojson }};
   let selectedId = null;
   let creating = false;
   let saveTimer = null;
@@ -80,6 +88,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const appendListItem = record => {
     const item = document.createElement('button');
     item.className = 'reference-management-item'; item.type = 'button'; item.dataset.referenceId = String(record.id); item.setAttribute('role', 'option');
+    const lockSlot = document.createElement('span'); lockSlot.className = 'reference-management-item-lock-slot'; lockSlot.setAttribute('aria-hidden', 'true');
+    if (record.in_use) { const lockIcon = document.createElement('i'); lockIcon.className = 'bi bi-lock-fill reference-management-item-lock'; lockIcon.title = {{ _('Löschen gesperrt')|tojson }}; lockSlot.append(lockIcon); }
+    item.append(lockSlot);
     const itemName = document.createElement('span'); itemName.className = 'reference-management-item-name'; itemName.textContent = record.name || ''; item.append(itemName);
     if (entity === 'colors') { const badge = document.createElement('span'); badge.className = 'inventory-color-code'; const hex = normalizeHex(record.hex_code) || '000000'; badge.textContent = '#' + hex; badge.style.backgroundColor = '#' + hex; badge.style.color = '#fff'; item.append(badge); }
     item.addEventListener('click', () => { hideMessage(); setEditor(records.get(item.dataset.referenceId)); });
@@ -87,9 +98,13 @@ document.addEventListener('DOMContentLoaded', () => {
     return item;
   };
   const setEditor = record => {
+    const locked = Boolean(record.in_use);
     creating = false; selectedId = String(record.id); editor.hidden = false; title.textContent = record.name || ''; state.textContent = ''; nameInput.value = record.name || '';
     if (hexInput) { hexInput.value = record.hex_code ? '#' + record.hex_code : '#000000'; syncRgbFromHex(); }
-    document.getElementById('reference-delete').hidden = false; copyButton.hidden = false; copyButton.title = entity === 'colors' ? {{ _('Farbe kopieren')|tojson }} : {{ _('Material kopieren')|tojson }}; copyButton.setAttribute('aria-label', copyButton.title); updateSelection(); nameInput.focus();
+    deleteButton.hidden = false; deleteButton.disabled = locked;
+    deleteButton.title = locked ? lockMessage : {{ _('Löschen')|tojson }};
+    lock.hidden = !locked; lockText.textContent = locked ? lockMessage : '';
+    copyButton.hidden = false; copyButton.title = entity === 'colors' ? {{ _('Farbe kopieren')|tojson }} : {{ _('Material kopieren')|tojson }}; copyButton.setAttribute('aria-label', copyButton.title); updateSelection(); nameInput.focus();
   };
   const renderList = () => { const filter = search.value.trim().toLowerCase(); list.querySelectorAll('[data-reference-id]').forEach(item => { item.hidden = filter && !item.querySelector('.reference-management-item-name').textContent.toLowerCase().includes(filter); }); };
   list.addEventListener('click', event => { const item = event.target.closest('[data-reference-id]'); if (!item) return; hideMessage(); setEditor(records.get(item.dataset.referenceId)); });
@@ -157,7 +172,12 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   updatePreview(); renderList();
   const requestedId = new URLSearchParams(window.location.search).get('edit');
-  if (requestedId && records.has(String(requestedId))) setEditor(records.get(String(requestedId)));
+  if (requestedId && records.has(String(requestedId))) {
+    setEditor(records.get(String(requestedId)));
+  } else {
+    const firstRecord = records.values().next().value;
+    if (firstRecord) setEditor(firstRecord);
+  }
 });
 </script>
 {% endblock %}

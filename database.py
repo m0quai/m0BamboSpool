@@ -6,7 +6,7 @@ import os
 import sqlite3
 import json
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from config import DATABASE_NAME, DATABASE_PATH, DATABASE_PATH_OVERRIDE, DATABASE_TYPE
 
@@ -90,6 +90,23 @@ def connect_database(path: str | Path | None = None) -> sqlite3.Connection:
         ON humidity_history (printer_id, ams_id, observed_at)
         """
     )
+    # Keep one migration marker so the history reset is performed exactly once.
+    reset_marker = connection.execute(
+        "SELECT metadata_value FROM runtime_metadata "
+        "WHERE namespace = ? AND metadata_key = ?",
+        ("migration", "humidity_history_quarter_hour_v1"),
+    ).fetchone()
+    if reset_marker is None:
+        connection.execute("DELETE FROM humidity_history")
+        connection.execute(
+            "INSERT INTO runtime_metadata (namespace, metadata_key, metadata_value) "
+            "VALUES (?, ?, ?)",
+            ("migration", "humidity_history_quarter_hour_v1", "reset"),
+        )
+    connection.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_humidity_history_quarter_hour "
+        "ON humidity_history (printer_id, ams_id, observed_at)"
+    )
     connection.commit()
     return connection
 
@@ -99,15 +116,21 @@ def record_humidity_snapshots(
     metrics: list[dict] | tuple[dict, ...] | None,
     observed_at: str | None = None,
 ) -> int:
-    # Store one row per changed AMS humidity value and at least one hourly heartbeat.
+    # Store one latest-value row per printer, AMS and full quarter-hour.
     if not printer_id or not metrics:
         return 0
     timestamp_dt = datetime.fromisoformat(observed_at) if observed_at else datetime.now().astimezone()
     if timestamp_dt.tzinfo is None:
         timestamp_dt = timestamp_dt.astimezone()
+    timestamp_dt = timestamp_dt.replace(
+        minute=(timestamp_dt.minute // 15) * 15,
+        second=0,
+        microsecond=0,
+    )
     timestamp = timestamp_dt.isoformat(timespec="seconds")
     inserted = 0
     with connect_database() as connection:
+        connection.execute("BEGIN IMMEDIATE")
         for index, metric in enumerate(metrics):
             if not isinstance(metric, dict):
                 continue
@@ -131,27 +154,25 @@ def record_humidity_snapshots(
                 temperature = None
             if humidity_raw is None and humidity_level is None:
                 continue
-            previous = connection.execute(
-                "SELECT observed_at, humidity_raw, humidity_level FROM humidity_history "
-                "WHERE printer_id = ? AND ams_id = ? ORDER BY id DESC LIMIT 1",
-                (str(printer_id), ams_id),
+            existing = connection.execute(
+                "SELECT id FROM humidity_history "
+                "WHERE printer_id = ? AND ams_id = ? AND observed_at = ?",
+                (str(printer_id), ams_id, timestamp),
             ).fetchone()
-            if previous and previous[1] == humidity_raw and previous[2] == humidity_level:
-                try:
-                    previous_dt = datetime.fromisoformat(str(previous[0]))
-                    if previous_dt.tzinfo is None:
-                        previous_dt = previous_dt.astimezone()
-                    if timestamp_dt - previous_dt < timedelta(hours=1):
-                        continue
-                except (TypeError, ValueError):
-                    pass
-            connection.execute(
-                "INSERT INTO humidity_history "
-                "(printer_id, ams_id, observed_at, humidity_raw, humidity_level, temperature) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (str(printer_id), ams_id, timestamp, humidity_raw, humidity_level, temperature),
-            )
-            inserted += 1
+            if existing:
+                connection.execute(
+                    "UPDATE humidity_history SET humidity_raw = ?, humidity_level = ?, temperature = ? "
+                    "WHERE id = ?",
+                    (humidity_raw, humidity_level, temperature, existing[0]),
+                )
+            else:
+                connection.execute(
+                    "INSERT INTO humidity_history "
+                    "(printer_id, ams_id, observed_at, humidity_raw, humidity_level, temperature) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (str(printer_id), ams_id, timestamp, humidity_raw, humidity_level, temperature),
+                )
+                inserted += 1
         connection.commit()
     return inserted
 

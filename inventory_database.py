@@ -535,6 +535,7 @@ def list_nfc_tags(include_assignment: bool = False) -> list[dict[str, Any]]:
             )
             if not include_assignment:
                 item.pop("spool_label", None)
+            item["in_use"] = bool(item.get("spool_number"))
             # The selector uses a stable human-readable label without exposing
             # the raw tag as the value saved on a spool.
             fallback_label = f"NFC #{item['id']} – {item['tag_value']}"
@@ -604,7 +605,7 @@ def delete_nfc_tag(tag_id: int | str) -> None:
         if not row:
             raise KeyError(f"Kein NFC-Tag mit ID {tag_id}")
         if conn.execute("SELECT 1 FROM spools WHERE nfc_tag_id = ? LIMIT 1", (int(tag_id),)).fetchone():
-            raise ValueError("Der NFC-Tag ist noch einer Spule zugeordnet")
+            raise ValueError("Löschen gesperrt: Der NFC-Tag wird aktuell von einer Spule verwendet.")
         conn.execute("DELETE FROM nfc_tags WHERE id = ?", (int(tag_id),))
 
 
@@ -626,14 +627,23 @@ def list_entities(entity: str) -> list[dict[str, Any]]:
     tables = {"vendors": "vendors", "materials": "materials", "filaments": "filaments"}
     table = tables[entity]
     with _connect() as conn:
-        return [dict(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY name COLLATE NOCASE, id")]
+        if entity == "materials":
+            rows = conn.execute(
+                "SELECT m.*, EXISTS(SELECT 1 FROM filaments f WHERE f.material_id = m.id) AS in_use "
+                "FROM materials m ORDER BY m.name COLLATE NOCASE, m.id"
+            ).fetchall()
+        else:
+            rows = conn.execute(f"SELECT * FROM {table} ORDER BY name COLLATE NOCASE, id").fetchall()
+        return [dict(row) for row in rows]
 
 
 def list_colors() -> list[dict[str, Any]]:
     initialize()
     with _connect() as conn:
         rows = [dict(row) for row in conn.execute(
-            "SELECT id, name, hex_code FROM colors ORDER BY name COLLATE NOCASE, id"
+            "SELECT c.id, c.name, c.hex_code, "
+            "EXISTS(SELECT 1 FROM filaments f WHERE f.color_id = c.id) AS in_use "
+            "FROM colors c ORDER BY c.name COLLATE NOCASE, c.id"
         )]
     for row in rows:
         row["hex_code"] = _normalize_hex(row["hex_code"])
@@ -752,6 +762,13 @@ def save_entity(entity: str, values: dict[str, Any], entity_id: int | None = Non
                 row[field] = _number(row[field])
     now = _now()
     with _connect() as conn:
+        if entity == "materials":
+            duplicate = conn.execute(
+                "SELECT 1 FROM materials WHERE name = ? COLLATE NOCASE AND id <> COALESCE(?, -1) LIMIT 1",
+                (row["name"], entity_id),
+            ).fetchone()
+            if duplicate:
+                raise ValueError("Dieses Material ist bereits vorhanden.")
         if entity == "filaments":
             row["color_id"] = _color_id(conn, row.get("color_id"))
         if entity_id is None:
@@ -780,6 +797,12 @@ def save_color(values: dict[str, Any], color_id: int | None = None) -> int:
         raise ValueError("Name is required")
     hex_code = _normalize_hex(values.get("hex_code") or _rgb_hex(values))
     with _connect() as conn:
+        duplicate = conn.execute(
+            "SELECT 1 FROM colors WHERE name = ? COLLATE NOCASE AND id <> COALESCE(?, -1) LIMIT 1",
+            (name, color_id),
+        ).fetchone()
+        if duplicate:
+            raise ValueError("Diese Farbe ist bereits vorhanden.")
         if color_id is None:
             cursor = conn.execute(
                 "INSERT INTO colors(name, hex_code) VALUES (?, ?)", (name, hex_code)
@@ -1123,9 +1146,9 @@ def delete_entity(entity: str, entity_id: int) -> None:
     initialize()
     with _connect() as conn:
         if entity == "materials" and conn.execute("SELECT 1 FROM filaments WHERE material_id = ? LIMIT 1", (entity_id,)).fetchone():
-            raise ValueError("Das Material wird noch von einem Filament verwendet")
+            raise ValueError("Löschen gesperrt: Das Material wird aktuell von einem Filament verwendet.")
         if entity == "colors" and conn.execute("SELECT 1 FROM filaments WHERE color_id = ? LIMIT 1", (entity_id,)).fetchone():
-            raise ValueError("Die Farbe wird noch von einem Filament verwendet")
+            raise ValueError("Löschen gesperrt: Die Farbe wird aktuell von einem Filament verwendet.")
         conn.execute(f"DELETE FROM {entity} WHERE id = ?", (entity_id,))
 
 

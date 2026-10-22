@@ -94,6 +94,10 @@
       <button type="button" class="btn btn-sm btn-outline-secondary" data-humidity-history-close aria-label="{{ _('Close') }}"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
     <div class="humidity-history-meta" id="humidity-history-meta"></div>
+    <div class="humidity-history-legend" aria-label="{{ _('Humidity') }} / {{ _('Temperature') }}">
+      <span><i class="humidity-history-legend-line humidity" aria-hidden="true"></i>{{ _('Humidity') }}</span>
+      <span><i class="humidity-history-legend-line temperature" aria-hidden="true"></i>{{ _('Temperature') }} (°C)</span>
+    </div>
     <div class="humidity-history-chart-wrap">
       <svg id="humidity-history-chart" class="humidity-history-chart" viewBox="0 0 760 300" role="img" aria-label="{{ _('Humidity history chart') }}"></svg>
     </div>
@@ -117,6 +121,10 @@
   const humidityHistoryEmpty = document.getElementById('humidity-history-empty');
   const humidityHistoryEntries = document.getElementById('humidity-history-entries');
   const humidityHistoryAmsLabel = {{ _('AMS')|tojson }};
+  const chartNumberLocale = {{ ('de-DE' if current_language == 'de' else 'en-US')|tojson }};
+  let selectedHumidityHistoryIndex = null;
+  let humidityHistoryRefreshInFlight = false;
+  let humidityHistoryNewestKey = null;
   const amsTemperature = document.getElementById('home-ams-temperature');
   const hotend = document.getElementById('home-hotend');
   const bed = document.getElementById('home-bed');
@@ -167,15 +175,20 @@
     return labels[value] || value || activityLabels.unknown;
   }
 
-  function renderHumidityIcon(level) {
+  function humidityIndexLetter(level) {
     const normalized = Number(level);
     if (!Number.isInteger(normalized) || normalized < 1 || normalized > 5) return '';
-    // Bambu's index is ordered from dry (5/A) to humid (1/E).
-    const letters = ['E', 'D', 'C', 'B', 'A'];
+    return ['', 'E', 'D', 'C', 'B', 'A'][normalized];
+  }
+
+  function renderHumidityIcon(level, suffix = 'current') {
+    const normalized = Number(level);
+    if (!Number.isInteger(normalized) || normalized < 1 || normalized > 5) return '';
+    const letter = humidityIndexLetter(normalized);
     const fill = (6 - normalized) * 20;
     const top = 100 - fill;
-    const clipId = 'home-humidity-clip';
-    return `<span class="humidity-droplet-wrapper humidity-droplet-home" title="${letters[normalized - 1]}" aria-label="${letters[normalized - 1]}"><svg class="humidity-droplet" viewBox="-0.5 -0.5 17 17" aria-hidden="true" focusable="false"><defs><clipPath id="${clipId}"><path d="M8 16a6 6 0 0 0 6-6c0-1.655-1.122-2.904-2.432-4.362C10.254 4.176 8.75 2.503 8 0c0 0-6 5.686-6 10a6 6 0 0 0 6 6M6.646 4.646l.708.708c-.29.29-1.128 1.311-1.907 2.87l-.894-.448c.82-1.641-1.717-2.753-2.093-3.13" /></clipPath></defs><rect width="100%" height="100%" class="droplet-base" clip-path="url(#${clipId})" /><rect width="100%" height="${fill}%" y="${top}%" class="droplet-fill" clip-path="url(#${clipId})" /><path class="droplet-outline" d="M8 16a6 6 0 0 0 6-6c0-1.655-1.122-2.904-2.432-4.362C10.254 4.176 8.75 2.503 8 0c0 0-6 5.686-6 10a6 6 0 0 0 6 6" /></svg><span class="humidity-level-number">${letters[normalized - 1]}</span></span>`;
+    const clipId = `home-humidity-clip-${suffix}`;
+    return `<span class="humidity-droplet-wrapper humidity-droplet-home" title="${letter}" aria-label="${letter}"><svg class="humidity-droplet" viewBox="-0.5 -0.5 17 17" aria-hidden="true" focusable="false"><defs><clipPath id="${clipId}"><path d="M8 16a6 6 0 0 0 6-6c0-1.655-1.122-2.904-2.432-4.362C10.254 4.176 8.75 2.503 8 0c0 0-6 5.686-6 10a6 6 0 0 0 6 6M6.646 4.646l.708.708c-.29.29-1.128 1.311-1.907 2.87l-.894-.448c.82-1.641-1.717-2.753-2.093-3.13" /></clipPath></defs><rect width="100%" height="100%" class="droplet-base" clip-path="url(#${clipId})" /><rect width="100%" height="${fill}%" y="${top}%" class="droplet-fill" clip-path="url(#${clipId})" /><path class="droplet-outline" d="M8 16a6 6 0 0 0 6-6c0-1.655-1.122-2.904-2.432-4.362C10.254 4.176 8.75 2.503 8 0c0 0-6 5.686-6 10a6 6 0 0 0 6 6" /></svg><span class="humidity-level-number">${letter}</span></span>`;
   }
 
   function renderActivities(item, printerStatus, preparationStatus) {
@@ -335,6 +348,16 @@
     }).format(date);
   }
 
+  function formatUiTime(value) {
+    if (!value) return '–';
+    const date = new Date(String(value).replace(' ', 'T'));
+    if (Number.isNaN(date.getTime())) return '–';
+    const isGerman = {{ current_language|tojson }} === 'de';
+    return new Intl.DateTimeFormat(isGerman ? 'de-DE' : 'en-US', {
+      hour: '2-digit', minute: '2-digit', hour12: !isGerman
+    }).format(date);
+  }
+
   function formatTransferBytes(value) {
     if (value === null || value === undefined || value === '') return null;
     const bytes = Number(value);
@@ -366,19 +389,31 @@
 
   function renderHumidityHistory(history, amsId) {
     const rows = Array.isArray(history) ? history : [];
-    const chartRows = rows.filter(row => Number.isFinite(Number(row.humidity_raw)));
-    const letters = ['', 'E', 'D', 'C', 'B', 'A'];
+    const newestRow = rows.length ? rows[rows.length - 1] : null;
+    const newestKey = newestRow ? `${amsId}:${newestRow.id ?? newestRow.observed_at ?? ''}` : null;
+    const hasNewRecord = newestKey !== null && newestKey !== humidityHistoryNewestKey;
+    humidityHistoryNewestKey = newestKey;
+    if (hasNewRecord || !rows.length) selectedHumidityHistoryIndex = rows.length ? rows.length - 1 : null;
+    const chartRows = rows.map((row, historyIndex) => ({ ...row, historyIndex }))
+      .filter(row => Number.isFinite(Number(row.humidity_raw)) || Number.isFinite(Number(row.temperature)));
     const amsLabel = /^\d+$/.test(String(amsId)) ? String.fromCharCode(65 + Number(amsId)) : (amsId || 'A');
     if (humidityHistoryMeta) {
       humidityHistoryMeta.textContent = `${humidityHistoryAmsLabel} ${amsLabel}`;
     }
     if (humidityHistoryEmpty) humidityHistoryEmpty.hidden = rows.length > 0;
     if (humidityHistoryEntries) {
-      humidityHistoryEntries.innerHTML = rows.slice().reverse().map(row => {
+      humidityHistoryEntries.innerHTML = rows.slice().reverse().map((row, reverseIndex) => {
+        const historyIndex = rows.length - reverseIndex - 1;
         const raw = row.humidity_raw == null ? '–' : `${row.humidity_raw}%`;
         const level = Number(row.humidity_level);
-        const index = Number.isInteger(level) && level >= 1 && level <= 5 ? ` · ${letters[level]}` : '';
-        return `<div class="humidity-history-entry"><span>${escapeHtml(formatUiDateTime(row.observed_at))}</span><strong>${escapeHtml(raw + index)}</strong></div>`;
+        const indexIcon = humidityIndexLetter(level)
+          ? renderHumidityIcon(level, `history-${historyIndex}`)
+          : '';
+        const temperature = Number(row.temperature);
+        const temperatureText = Number.isFinite(temperature)
+          ? `<span class="humidity-history-entry-temperature">${escapeHtml(new Intl.NumberFormat(chartNumberLocale, { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(temperature))} °C</span>`
+          : '';
+        return `<div class="humidity-history-entry${selectedHumidityHistoryIndex === historyIndex ? ' is-selected' : ''}" role="button" tabindex="0" data-humidity-history-index="${historyIndex}"><span class="humidity-history-entry-date">${escapeHtml(formatUiDateTime(row.observed_at))}</span><span class="humidity-history-entry-values"><span class="humidity-history-entry-humidity">${indexIcon}<span>${escapeHtml(raw)}</span></span>${temperatureText}</span></div>`;
       }).join('');
     }
     if (!humidityHistoryChart) return;
@@ -386,30 +421,151 @@
       humidityHistoryChart.innerHTML = '';
       return;
     }
-    const width = 760;
     const height = 300;
     const left = 48;
     const right = 18;
     const top = 18;
     const bottom = 42;
+    const width = Math.max(760, left + right + Math.max(0, chartRows.length - 1) * 70);
     const chartWidth = width - left - right;
     const chartHeight = height - top - bottom;
+    humidityHistoryChart.setAttribute('viewBox', `0 0 ${width} ${height}`);
+    humidityHistoryChart.style.width = `${width}px`;
     const x = index => chartRows.length === 1 ? left + chartWidth / 2 : left + index * chartWidth / (chartRows.length - 1);
-    const y = value => top + chartHeight - Math.max(0, Math.min(100, value)) / 100 * chartHeight;
-    const grid = [0, 25, 50, 75, 100].map(value => `<line class="chart-grid-line" x1="${left}" x2="${width - right}" y1="${y(value)}" y2="${y(value)}" /><text class="chart-axis-label" x="${left - 8}" y="${y(value) + 4}" text-anchor="end">${value}%</text>`).join('');
-    const points = chartRows.map((row, index) => `${x(index)},${y(Number(row.humidity_raw))}`).join(' ');
-    const pointNodes = chartRows.map((row, index) => `<circle class="chart-point" cx="${x(index)}" cy="${y(Number(row.humidity_raw))}" r="4"><title>${escapeHtml(formatUiDateTime(row.observed_at))}: ${escapeHtml(row.humidity_raw)}%</title></circle>`).join('');
+    const humidityY = value => top + chartHeight - Math.max(0, Math.min(100, value)) / 100 * chartHeight;
+    const temperatureValues = chartRows.map(row => Number(row.temperature)).filter(value => Number.isFinite(value));
+    let temperatureMin = temperatureValues.length ? Math.floor(Math.min(...temperatureValues)) : 0;
+    let temperatureMax = temperatureValues.length ? Math.ceil(Math.max(...temperatureValues)) : 1;
+    if (temperatureMin === temperatureMax) {
+      temperatureMin -= 1;
+      temperatureMax += 1;
+    }
+    const temperatureY = value => top + chartHeight - (value - temperatureMin) / (temperatureMax - temperatureMin) * chartHeight;
+    const grid = [0, 25, 50, 75, 100].map(value => `<line class="chart-grid-line" x1="${left}" x2="${width - right}" y1="${humidityY(value)}" y2="${humidityY(value)}" /><text class="chart-axis-label" x="${left - 8}" y="${humidityY(value) + 4}" text-anchor="end">${value}%</text>`).join('');
+    const temperatureTicks = [temperatureMax, (temperatureMin + temperatureMax) / 2, temperatureMin];
+    const temperatureAxis = temperatureValues.length
+      ? temperatureTicks.map(value => `<text class="chart-temperature-axis-label" x="${width - right + 8}" y="${temperatureY(value) + 4}">${escapeHtml(new Intl.NumberFormat(chartNumberLocale, { maximumFractionDigits: 1 }).format(value))}°C</text>`).join('')
+      : '';
+    const lineSegments = (key, y, className) => {
+      const segments = [];
+      let current = [];
+      const flush = () => {
+        if (current.length) segments.push(current);
+        current = [];
+      };
+      chartRows.forEach((row, index) => {
+        const value = Number(row[key]);
+        if (!Number.isFinite(value)) {
+          flush();
+          return;
+        }
+        current.push(`${x(index)},${y(value)}`);
+      });
+      flush();
+      return segments.map(segment => {
+        if (segment.length === 1) {
+          const [pointX, pointY] = segment[0].split(',');
+          const shortLine = `${Number(pointX) - 5},${pointY} ${pointX},${pointY} ${Number(pointX) + 5},${pointY}`;
+          return `<polyline class="chart-line ${className}" points="${shortLine}" />`;
+        }
+        return `<polyline class="chart-line ${className}" points="${segment.join(' ')}" />`;
+      }).join('');
+    };
+    const lines = `${lineSegments('humidity_raw', humidityY, 'chart-line-humidity')}${lineSegments('temperature', temperatureY, 'chart-line-temperature')}`;
     const timeLabels = [0, Math.floor((chartRows.length - 1) / 2), chartRows.length - 1]
       .filter((index, position, values) => values.indexOf(index) === position)
       .map(index => `<text class="chart-time-label" x="${x(index)}" y="${height - 14}" text-anchor="middle">${escapeHtml(formatUiDateTime(chartRows[index].observed_at))}</text>`).join('');
-    humidityHistoryChart.innerHTML = `${grid}<polyline class="chart-line" points="${points}" />${pointNodes}${timeLabels}`;
+    const temperatureAxisLine = temperatureValues.length
+      ? `<line class="chart-temperature-axis" x1="${width - right}" x2="${width - right}" y1="${top}" y2="${height - bottom}" />`
+      : '';
+    const markerLines = '<line class="chart-selection-line" y1="' + top + '" y2="' + (height - bottom) + '" /><text class="chart-selection-time-label" y="' + (height - 4) + '" text-anchor="middle" /><line class="chart-hover-line" y1="' + top + '" y2="' + (height - bottom) + '" /><text class="chart-hover-time-label" y="' + (height - 4) + '" text-anchor="middle" />';
+    humidityHistoryChart.innerHTML = `${grid}${temperatureAxis}${temperatureAxisLine}${lines}${markerLines}${timeLabels}`;
+
+    const selectionLine = humidityHistoryChart.querySelector('.chart-selection-line');
+    const selectionTimeLabel = humidityHistoryChart.querySelector('.chart-selection-time-label');
+    const hoverLine = humidityHistoryChart.querySelector('.chart-hover-line');
+    const hoverTimeLabel = humidityHistoryChart.querySelector('.chart-hover-time-label');
+    const chartWrap = humidityHistoryChart.parentElement;
+    const chartIndexForHistoryIndex = historyIndex => chartRows.findIndex(row => row.historyIndex === historyIndex);
+    const setMarker = (line, position, visible) => {
+      if (!line) return;
+      line.setAttribute('x1', String(position));
+      line.setAttribute('x2', String(position));
+      line.style.visibility = visible ? 'visible' : 'hidden';
+    };
+    const setMarkerLabel = (label, position, value, visible) => {
+      if (!label) return;
+      label.setAttribute('x', String(Math.max(left, Math.min(width - right, position))));
+      label.textContent = value || '';
+      label.style.visibility = visible ? 'visible' : 'hidden';
+    };
+    const scrollChartToPosition = position => {
+      if (!chartWrap) return;
+      chartWrap.scrollLeft = Math.max(0, position - chartWrap.clientWidth / 2);
+    };
+    const scrollEntryIntoView = historyIndex => {
+      const entry = humidityHistoryEntries?.querySelector(`[data-humidity-history-index="${historyIndex}"]`);
+      entry?.scrollIntoView({ block: 'nearest' });
+    };
+    setMarker(hoverLine, 0, false);
+    const nearestChartIndex = position => chartRows.reduce((nearest, row, index) => (
+      Math.abs(x(index) - position) < Math.abs(x(nearest) - position) ? index : nearest
+    ), 0);
+    const selectHistoryIndex = historyIndex => {
+      selectedHumidityHistoryIndex = historyIndex;
+      const chartIndex = chartIndexForHistoryIndex(historyIndex);
+      if (chartIndex >= 0) {
+        const row = chartRows[chartIndex];
+        const position = x(chartIndex);
+        setMarker(selectionLine, position, true);
+        setMarkerLabel(selectionTimeLabel, position, formatUiTime(row.observed_at), true);
+        scrollChartToPosition(position);
+        scrollEntryIntoView(historyIndex);
+      }
+      humidityHistoryEntries?.querySelectorAll('[data-humidity-history-index]').forEach(entry => {
+        entry.classList.toggle('is-selected', Number(entry.dataset.humidityHistoryIndex) === historyIndex);
+      });
+    };
+    if (selectedHumidityHistoryIndex !== null && chartIndexForHistoryIndex(selectedHumidityHistoryIndex) >= 0) {
+      selectHistoryIndex(selectedHumidityHistoryIndex);
+    } else {
+      selectedHumidityHistoryIndex = null;
+      setMarker(selectionLine, 0, false);
+      setMarkerLabel(selectionTimeLabel, 0, '', false);
+    }
+    humidityHistoryChart.onmousemove = event => {
+      const bounds = humidityHistoryChart.getBoundingClientRect();
+      const position = Math.max(0, Math.min(width, (event.clientX - bounds.left) * width / bounds.width));
+      setMarker(hoverLine, position, true);
+      const chartIndex = nearestChartIndex(position);
+      setMarkerLabel(hoverTimeLabel, position, chartRows[chartIndex] ? formatUiTime(chartRows[chartIndex].observed_at) : '', true);
+    };
+    humidityHistoryChart.onmouseleave = () => {
+      setMarker(hoverLine, 0, false);
+      setMarkerLabel(hoverTimeLabel, 0, '', false);
+    };
+    humidityHistoryChart.onclick = event => {
+      const bounds = humidityHistoryChart.getBoundingClientRect();
+      const position = Math.max(0, Math.min(width, (event.clientX - bounds.left) * width / bounds.width));
+      const chartIndex = nearestChartIndex(position);
+      if (chartRows[chartIndex]) selectHistoryIndex(chartRows[chartIndex].historyIndex);
+    };
+    humidityHistoryEntries?.querySelectorAll('[data-humidity-history-index]').forEach(entry => {
+      const select = () => selectHistoryIndex(Number(entry.dataset.humidityHistoryIndex));
+      entry.addEventListener('click', select);
+      entry.addEventListener('keydown', event => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          select();
+        }
+      });
+    });
   }
 
-  async function openHumidityHistory() {
-    if (!humidityHistoryDialog || !humidity) return;
-    const amsId = humidity.dataset.amsId || '';
-    humidityHistoryDialog.hidden = false;
-    if (humidityHistoryMeta) humidityHistoryMeta.textContent = {{ _('Loading …')|tojson }};
+  async function loadHumidityHistory(amsId, showLoading = false) {
+    if (!amsId || humidityHistoryRefreshInFlight) return;
+    humidityHistoryRefreshInFlight = true;
+    if (showLoading && humidityHistoryMeta) humidityHistoryMeta.textContent = {{ _('Loading …')|tojson }};
     try {
       const response = await fetch(`${humidityHistoryEndpoint}?ams_id=${encodeURIComponent(amsId)}&_=${Date.now()}`, { cache: 'no-store' });
       if (!response.ok) throw new Error('humidity history request failed');
@@ -418,7 +574,16 @@
     } catch (_) {
       renderHumidityHistory([], amsId);
       if (humidityHistoryMeta) humidityHistoryMeta.textContent = {{ _('Humidity history could not be loaded.')|tojson }};
+    } finally {
+      humidityHistoryRefreshInFlight = false;
     }
+  }
+
+  async function openHumidityHistory() {
+    if (!humidityHistoryDialog || !humidity) return;
+    const amsId = humidity.dataset.amsId || '';
+    humidityHistoryDialog.hidden = false;
+    await loadHumidityHistory(amsId, true);
   }
 
   humidity?.addEventListener('click', openHumidityHistory);
@@ -454,6 +619,11 @@
 
   refresh();
   window.setInterval(refresh, 2000);
+  window.setInterval(() => {
+    if (humidityHistoryDialog && !humidityHistoryDialog.hidden && humidity) {
+      loadHumidityHistory(humidity.dataset.amsId || '');
+    }
+  }, 5000);
 })();
 </script>
 {% endblock %}

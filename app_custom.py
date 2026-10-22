@@ -1617,7 +1617,11 @@ def inventory_save_entity(entity, entity_id=None):
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:
         if "UNIQUE constraint failed" in str(exc):
-            return jsonify({"error": "Dieses Material ist bereits vorhanden."}), 409
+            duplicate_message = {
+                "materials": "Dieses Material ist bereits vorhanden.",
+                "colors": "Diese Farbe ist bereits vorhanden.",
+            }.get(entity, "Dieser Eintrag ist bereits vorhanden.")
+            return jsonify({"error": duplicate_message}), 409
         if "FOREIGN KEY constraint failed" in str(exc):
             return jsonify({"error": "Der Eintrag wird noch verwendet und kann nicht gelöscht werden."}), 409
         _log(f"Local inventory save failed ({entity}): {exc!r}")
@@ -1650,6 +1654,8 @@ def inventory_save_nfc_tag(tag_id=None):
             value = inventory_db.normalize_nfc_tag(payload.get("tag_value"))
             if not value:
                 raise ValueError("Der Tag-Wert darf nicht leer sein")
+            if any(item.get("tag_value") == value for item in inventory_db.list_nfc_tags()):
+                raise ValueError("Dieser NFC-Tag-Wert ist bereits bekannt")
             inventory_db.register_nfc_tag(value)
             tag_id = next(item["id"] for item in inventory_db.list_nfc_tags() if item["tag_value"] == value)
             if "comment" in payload:
