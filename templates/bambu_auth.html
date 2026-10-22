@@ -161,7 +161,7 @@
     <p class="text-muted">{{ _('Materialien, NFC-Tags und Farben werden auf eigenen Verwaltungsseiten bearbeitet.') }}</p>
     <div class="d-flex gap-2 flex-wrap">
       <a class="btn btn-outline-primary" href="{{ url_for('inventory_management', entity='materials') }}">{{ _('Materialien') }} ({{ local_materials|length }})</a>
-      <a class="btn btn-outline-primary" href="{{ url_for('inventory_management', entity='nfc-tags') }}">{{ _('NFC-Tags') }}</a>
+      <a class="btn btn-outline-primary" href="{{ url_for('inventory_management', entity='nfc-tags') }}">{{ _('NFC-Tags') }} ({{ local_nfc_tags|length }})</a>
       <a class="btn btn-outline-primary" href="{{ url_for('inventory_management', entity='colors') }}">{{ _('Farben') }} ({{ local_colors|length }})</a>
     </div>
   </div></div>

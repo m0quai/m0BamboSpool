@@ -33,12 +33,16 @@
         <option value="only">{{ _('nur Archivierte') }}</option>
       </select>
     </label>
-    <label class="inventory-control inventory-search">{{ _('Filtern') }}
-      <input id="inventory-search" class="form-control form-control-sm" type="search" placeholder="{{ _('Filament, Hersteller oder Material') }}">
-    </label>
   </div>
   <div class="inventory-layout">
-    <div id="inventory-groups" class="inventory-groups" aria-live="polite"></div>
+    <div class="inventory-selection-column">
+      <div class="inventory-filter-row">
+        <label class="inventory-control inventory-search">{{ _('Filtern') }}
+          <input id="inventory-search" class="form-control form-control-sm" type="search" placeholder="{{ _('Filament, Hersteller oder Material') }}">
+        </label>
+      </div>
+      <div id="inventory-groups" class="inventory-groups" aria-live="polite"></div>
+    </div>
     <aside id="inventory-inline-editor" class="inventory-inline-editor" hidden aria-live="polite">
       <div class="inventory-editor-heading">
         <div><h2 id="inventory-editor-title" class="h5 mb-0"></h2></div>
