@@ -2,7 +2,12 @@
 
 {% block content %}
 <div class="card livecam-card mx-auto">
-  <div class="card-header">{{ _('Livebild') }}</div>
+  <div class="card-header d-flex align-items-center justify-content-between">
+    <span>{{ _('Livebild') }}</span>
+    <button id="livecam-fullscreen" type="button" class="btn btn-sm btn-outline-secondary livecam-fullscreen-button" aria-label="{{ _('Vollbild') }}" title="{{ _('Vollbild') }}">
+      <i class="bi bi-fullscreen" aria-hidden="true"></i>
+    </button>
+  </div>
   <div class="card-body text-center">
     <div class="livecam-frame border rounded bg-body-secondary d-flex align-items-center justify-content-center">
       <img id="livecam-image" src="" alt="{{ _('Livebild') }}" class="img-fluid d-none" style="max-height: 70vh;" data-stream-url="{{ url_for('livecam_stream') }}">
@@ -18,11 +23,19 @@
   const image = document.getElementById('livecam-image');
   const placeholder = document.getElementById('livecam-placeholder');
   const button = document.getElementById('livecam-toggle');
-  if (!image || !placeholder || !button) return;
+  const frame = document.querySelector('.livecam-frame');
+  const fullscreenButton = document.getElementById('livecam-fullscreen');
+  if (!image || !placeholder || !button || !frame || !fullscreenButton) return;
+  const activePrintRunning = {{ active_print_running|default(false)|tojson }};
   let running = false;
+  const setButtonBusy = busy => {
+    button.disabled = busy;
+    button.setAttribute('aria-busy', busy ? 'true' : 'false');
+  };
   button.addEventListener('click', () => {
     running = !running;
     if (running) {
+      setButtonBusy(true);
       const streamUrl = image.dataset.streamUrl;
       image.src = streamUrl;
       // Das Standbild bleibt sichtbar, bis der Browser den ersten gültigen
@@ -31,16 +44,19 @@
       placeholder.classList.remove('d-none');
       button.innerHTML = '<i class="bi bi-stop-fill me-1"></i> {{ _('Stop') }}';
     } else {
+      setButtonBusy(true);
       image.removeAttribute('src');
       image.classList.add('d-none');
       placeholder.classList.remove('d-none');
       button.innerHTML = '<i class="bi bi-play-fill me-1"></i> {{ _('Start') }}';
+      window.requestAnimationFrame(() => setButtonBusy(false));
     }
   });
   image.addEventListener('load', () => {
     if (!running) return;
     image.classList.remove('d-none');
     placeholder.classList.add('d-none');
+    setButtonBusy(false);
   });
   image.addEventListener('error', () => {
     running = false;
@@ -48,7 +64,26 @@
     image.classList.add('d-none');
     placeholder.classList.remove('d-none');
     button.innerHTML = '<i class="bi bi-play-fill me-1"></i> {{ _('Start') }}';
+    setButtonBusy(false);
   });
+
+  const updateFullscreenButton = () => {
+    const active = document.fullscreenElement === frame;
+    fullscreenButton.innerHTML = `<i class="bi ${active ? 'bi-fullscreen-exit' : 'bi-fullscreen'}" aria-hidden="true"></i>`;
+    fullscreenButton.title = active ? {{ _('Vollbild beenden')|tojson }} : {{ _('Vollbild')|tojson }};
+    fullscreenButton.setAttribute('aria-label', fullscreenButton.title);
+  };
+  fullscreenButton.addEventListener('click', async () => {
+    try {
+      if (document.fullscreenElement === frame) await document.exitFullscreen();
+      else if (frame.requestFullscreen) await frame.requestFullscreen();
+    } catch (error) {
+      console.warn('Fullscreen konnte nicht aktiviert werden', error);
+    }
+  });
+  document.addEventListener('fullscreenchange', updateFullscreenButton);
+  updateFullscreenButton();
+  if (activePrintRunning) button.click();
 })();
 </script>
 {% endblock %}

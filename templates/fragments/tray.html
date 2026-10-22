@@ -19,7 +19,7 @@
         {% endif %}
       </div>
       {% if tray_data.get('nfc_identified') %}
-        <i class="bi bi-lock-fill text-warning" title="{{ _('Per NFC identifiziert und gesperrt') }}" aria-label="{{ _('Per NFC identifiziert und gesperrt') }}"></i>
+        <i class="bi bi-nfc text-primary" title="{{ _('Per NFC identifiziert und gesperrt') }}" aria-label="{{ _('Per NFC identifiziert und gesperrt') }}"></i>
       {% endif %}
     </div>
     {% if tray_data.tray_color and tray_data.spool_id and not physically_empty %}

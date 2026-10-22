@@ -17,6 +17,7 @@
         <option value="spool-id">{{ _('Spulennummer') }}</option>
         <option value="assignment">{{ _('Zuordnungsstatus') }}</option>
         <option value="remaining">{{ _('Restgewicht') }}</option>
+        <option value="ams">{{ _('Nur die in AMS') }}</option>
       </select>
     </label>
     <label class="inventory-control">{{ _('Richtung') }}
@@ -25,10 +26,16 @@
         <option value="ascending">{{ _('Aufsteigend') }}</option>
       </select>
     </label>
+    <label class="inventory-control">{{ _('Archivierte anzeigen') }}
+      <select id="inventory-show-archived" class="form-select form-select-sm">
+        <option value="without">{{ _('ohne Archivierte') }}</option>
+        <option value="with">{{ _('mit Archivierte') }}</option>
+        <option value="only">{{ _('nur Archivierte') }}</option>
+      </select>
+    </label>
     <label class="inventory-control inventory-search">{{ _('Filtern') }}
       <input id="inventory-search" class="form-control form-control-sm" type="search" placeholder="{{ _('Filament, Hersteller oder Material') }}">
     </label>
-    <label class="inventory-archived-toggle"><input id="inventory-show-archived" type="checkbox"><span>{{ _('Archivierte anzeigen') }}</span></label>
   </div>
   <div class="inventory-layout">
     <div id="inventory-groups" class="inventory-groups" aria-live="polite"></div>
@@ -250,9 +257,12 @@ document.addEventListener('DOMContentLoaded', () => {
     savedState.groupLayoutVersion = 2;
   }
   groupSelect.value = ['filament', 'vendor', 'material', 'none'].includes(savedState.group) ? savedState.group : 'filament';
-  sortSelect.value = ['last-used', 'name', 'spool-id', 'assignment', 'remaining'].includes(savedState.sort) ? savedState.sort : 'last-used';
+  sortSelect.value = ['last-used', 'name', 'spool-id', 'assignment', 'remaining', 'ams'].includes(savedState.sort) ? savedState.sort : 'last-used';
   sortDirection.value = ['ascending', 'descending'].includes(savedState.direction) ? savedState.direction : 'descending';
-  showArchived.checked = Boolean(savedState.showArchived);
+  const savedArchiveFilter = ['without', 'with', 'only'].includes(savedState.archiveFilter)
+    ? savedState.archiveFilter
+    : (savedState.showArchived ? 'with' : 'without');
+  showArchived.value = savedArchiveFilter;
 
   const text = value => String(value ?? '');
   const filamentOf = entry => entry.spool?.filament || {};
@@ -292,7 +302,8 @@ document.addEventListener('DOMContentLoaded', () => {
     savedState.group = groupSelect.value;
     savedState.sort = sortSelect.value;
     savedState.direction = sortDirection.value;
-    savedState.showArchived = showArchived.checked;
+    savedState.archiveFilter = showArchived.value;
+    savedState.showArchived = showArchived.value !== 'without';
     storeView();
   };
   const localColor = value => text(value || '000000').replace(/^#/, '').toUpperCase();
@@ -318,16 +329,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function groupEntries() {
     const term = search.value.trim().toLocaleLowerCase();
-    const visibleInventory = showArchived.checked ? inventory : inventory.filter(entry => !isArchived(entry));
-    const remoteFilamentIds = new Set(visibleInventory.map(entry => String(filamentOf(entry).id)));
-    const localOnlyEntries = [...localFilaments.values()]
+    const isInAms = entry => {
+      if (entry.localOnly) return false;
+      const activeTray = String(entry.spool?.active_tray || '').replace(/^"|"$/g, '').trim();
+      return Boolean(activeTray || entry.spool?.active_ams_locked || entry.spool?.nfc_ams_locked);
+    };
+    const visibleInventory = showArchived.value === 'with'
+      ? inventory
+      : inventory.filter(entry => showArchived.value === 'only' ? isArchived(entry) : !isArchived(entry));
+    const inventoryForView = sortSelect.value === 'ams' ? visibleInventory.filter(isInAms) : visibleInventory;
+    const remoteFilamentIds = new Set(inventoryForView.map(entry => String(filamentOf(entry).id)));
+    const localOnlyEntries = sortSelect.value === 'ams' || showArchived.value === 'only' ? [] : [...localFilaments.values()]
       .filter(filament => !remoteFilamentIds.has(String(filament.id)))
       .map(filament => ({
         localOnly: true,
         spool: { id: null, remaining_weight: 0, initial_weight: 0, filament: { ...filament, vendor: { id: filament.vendor_id, name: filament.vendor_name }, material: filament.material_name } },
         last_used: null,
       }));
-    const filtered = [...visibleInventory, ...localOnlyEntries]
+    const filtered = [...inventoryForView, ...localOnlyEntries]
       .filter(entry => [filamentNameOf(entry), vendorOf(entry), materialOf(entry)].join(' ').toLocaleLowerCase().includes(term));
     const groups = new Map();
     filtered.forEach(entry => {
@@ -370,7 +389,10 @@ document.addEventListener('DOMContentLoaded', () => {
       return result || spoolId(left) - spoolId(right);
     };
     sorted.forEach(group => group.entries.sort((left, right) => {
-      if (sortSelect.value === 'name') return direction * compareByName(left, right);
+      if (sortSelect.value === 'name') {
+        if (groupSelect.value !== 'none') return direction * (spoolId(left) - spoolId(right));
+        return direction * compareByName(left, right);
+      }
       if (sortSelect.value === 'spool-id') return direction * (spoolId(left) - spoolId(right));
       if (sortSelect.value === 'assignment') return direction * (assignmentRank(left) - assignmentRank(right) || spoolId(left) - spoolId(right));
       const byLastUse = direction * (usedAt(left) - usedAt(right));
@@ -380,7 +402,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const latest = group => Math.max(...group.entries.map(entry => Date.parse((entry.last_used || '').replace(' ', 'T')) || 0));
     sorted.sort((left, right) => {
       if (sortSelect.value === 'remaining') return direction * (left.entries.reduce((sum, entry) => sum + Number(entry.spool.remaining_weight || 0), 0) - right.entries.reduce((sum, entry) => sum + Number(entry.spool.remaining_weight || 0), 0));
-      if (sortSelect.value === 'name') return direction * compareByName(left.entries[0], right.entries[0]);
+      if (sortSelect.value === 'name') {
+        return direction * (compareText(left.label, right.label)
+          || Math.min(...left.entries.map(spoolId)) - Math.min(...right.entries.map(spoolId)));
+      }
       if (sortSelect.value === 'spool-id') return direction * (Math.min(...left.entries.map(spoolId)) - Math.min(...right.entries.map(spoolId)));
       if (sortSelect.value === 'assignment') return direction * (Math.min(...left.entries.map(assignmentRank)) - Math.min(...right.entries.map(assignmentRank)) || compareText(left.label, right.label));
       return direction * (latest(left) - latest(right)) || direction * compareText(left.label, right.label);
@@ -1033,7 +1058,11 @@ document.addEventListener('DOMContentLoaded', () => {
     updateSelectionMarker();
   }
   [groupSelect, sortSelect, sortDirection].forEach(control => control.addEventListener('change', render));
-  showArchived.addEventListener('change', () => { savedState.showArchived = showArchived.checked; render(); });
+  showArchived.addEventListener('change', () => {
+    savedState.archiveFilter = showArchived.value;
+    savedState.showArchived = showArchived.value !== 'without';
+    render();
+  });
   search.addEventListener('input', render);
   render();
   const requestedSpoolId = new URLSearchParams(window.location.search).get('spool_id');
@@ -1043,8 +1072,10 @@ document.addEventListener('DOMContentLoaded', () => {
     sessionStorage.removeItem('m0bambospool-inventory-refresh-selection');
   } catch (_) {}
   if (requestedSpoolId && localSpools.has(String(requestedSpoolId))) {
-    if (localSpools.get(String(requestedSpoolId)).archived && !showArchived.checked) {
-      showArchived.checked = true;
+    const requestedIsArchived = Boolean(localSpools.get(String(requestedSpoolId)).archived);
+    if ((requestedIsArchived && showArchived.value === 'without') || (!requestedIsArchived && showArchived.value === 'only')) {
+      showArchived.value = 'with';
+      savedState.archiveFilter = 'with';
       savedState.showArchived = true;
       render();
     }
@@ -1055,8 +1086,10 @@ document.addEventListener('DOMContentLoaded', () => {
       ? localSpools
       : refreshSelection.kind === 'filament' ? localFilaments : localVendors;
     if (selectionMap.has(String(refreshSelection.id))) {
-      if (refreshSelection.kind === 'spool' && selectionMap.get(String(refreshSelection.id)).archived && !showArchived.checked) {
-        showArchived.checked = true;
+      const refreshIsArchived = refreshSelection.kind === 'spool' && Boolean(selectionMap.get(String(refreshSelection.id)).archived);
+      if (refreshSelection.kind === 'spool' && ((refreshIsArchived && showArchived.value === 'without') || (!refreshIsArchived && showArchived.value === 'only'))) {
+        showArchived.value = 'with';
+        savedState.archiveFilter = 'with';
         savedState.showArchived = true;
         render();
       }

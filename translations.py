@@ -50,6 +50,7 @@ UI_TRANSLATIONS = {
         "Filament": "Filament",
         "Farbe": "Farbe",
         "Restgewicht": "Restgewicht",
+        "Nur die in AMS": "Nur die in AMS",
         "Drucke": "Drucke",
         "Alle": "Alle",
         "Status": "Status",
@@ -129,6 +130,8 @@ UI_TRANSLATIONS = {
         "External Spool": "Externe Spule",
         "Solve issue": "Problem lösen",
         "Livebild": "Livebild",
+        "Vollbild": "Vollbild",
+        "Vollbild beenden": "Vollbild beenden",
         "NFC-Tags": "NFC-Tags",
         "Tag-Wert": "Tag-Wert",
         "Kommentar": "Kommentar",
@@ -310,6 +313,7 @@ UI_TRANSLATIONS = {
         "Filament": "Filament",
         "Farbe": "Color",
         "Restgewicht": "Remaining weight",
+        "Nur die in AMS": "Only spools in AMS",
         "Drucke": "Prints",
         "Alle": "All",
         "Status": "Status",
@@ -389,6 +393,8 @@ UI_TRANSLATIONS = {
         "External Spool": "External spool",
         "Solve issue": "Solve issue",
         "Livebild": "Live view",
+        "Vollbild": "Fullscreen",
+        "Vollbild beenden": "Exit fullscreen",
         "NFC-Tags": "NFC tags",
         "Tag-Wert": "Tag value",
         "Kommentar": "Comment",
@@ -571,6 +577,13 @@ UI_TRANSLATIONS["de"].update({
 })
 UI_TRANSLATIONS["en"].update({
     "Sortieren nach": "Sort by", "Richtung": "Direction", "Aufsteigend": "Ascending", "Absteigend": "Descending",
+})
+
+UI_TRANSLATIONS["de"].update({
+    "ohne Archivierte": "ohne Archivierte", "mit Archivierte": "mit Archivierte", "nur Archivierte": "nur Archivierte",
+})
+UI_TRANSLATIONS["en"].update({
+    "ohne Archivierte": "Without archived", "mit Archivierte": "With archived", "nur Archivierte": "Only archived",
 })
 
 # Inventory lock message: the lock reflects the spool's AMS assignment.

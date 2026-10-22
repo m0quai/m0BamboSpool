@@ -1037,7 +1037,7 @@ def reconcile_stale_print_history_statuses():
 
 @app.route("/livecam")
 def livecam():
-    return render_template("livecam.html")
+    return render_template("livecam.html", active_print_running=_active_print_is_running())
 
 
 @app.route("/inventory")
