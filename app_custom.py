@@ -117,6 +117,7 @@ from nfc_routes import bp as ams_nfc_bp
 import nfc_pending_repository
 from flask import jsonify, redirect, request, url_for, render_template, send_from_directory, Response, stream_with_context, session, g, has_request_context
 import mqtt_bambulab
+import database as app_database
 import inventory_repository as spool_data
 import inventory_database as inventory_db
 import print_history as print_history_service
@@ -811,6 +812,16 @@ def home_state():
     return jsonify(_current_printer_status_payload())
 
 
+@app.get("/home/humidity-history")
+def home_humidity_history():
+    return jsonify({
+        "history": app_database.list_humidity_history(
+            PRINTER_ID,
+            ams_id=request.args.get("ams_id"),
+        ),
+    })
+
+
 def _load_m0bambospool_version():
     from pathlib import Path
     import re
@@ -934,7 +945,12 @@ def _printer_preparation_status_code():
 
 def _ams_environment_status():
     metrics = []
-    for index, ams in enumerate((getattr(mqtt_bambulab, "LAST_AMS_CONFIG", {}) or {}).get("ams", []) or []):
+    ams_rows = (getattr(mqtt_bambulab, "LAST_AMS_CONFIG", {}) or {}).get("ams", []) or []
+    try:
+        app_database.record_humidity_snapshots(PRINTER_ID, ams_rows)
+    except Exception as humidity_error:
+        _log(f"Humidity history could not be recorded: {humidity_error!r}")
+    for index, ams in enumerate(ams_rows):
         raw_humidity = ams.get("humidity_raw")
         humidity = f"{raw_humidity}%" if raw_humidity not in (None, "", 0, "0") else None
         try:
@@ -951,8 +967,10 @@ def _ams_environment_status():
         ):
             continue
         metrics.append({
+            "id": str(ams.get("id", index)),
             "label": chr(ord("A") + index),
             "humidity": humidity,
+            "humidity_raw": raw_humidity,
             "humidity_level": humidity_level,
             "temperature": temperature if temperature not in (None, "", "0", "0.0", 0, 0.0) else None,
         })

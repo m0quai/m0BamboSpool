@@ -586,6 +586,13 @@ UI_TRANSLATIONS["en"].update({
     "ohne Archivierte": "Without archived", "mit Archivierte": "With archived", "nur Archivierte": "Only archived",
 })
 
+UI_TRANSLATIONS["de"].update({
+    "Humidity history": "Luftfeuchtigkeitsverlauf", "Humidity history chart": "Diagramm des Luftfeuchtigkeitsverlaufs", "No humidity history available.": "Keine Luftfeuchtigkeitshistorie vorhanden.", "Humidity history could not be loaded.": "Die Luftfeuchtigkeitshistorie konnte nicht geladen werden.", "Loading …": "Wird geladen …", "Close": "Schließen", "AMS": "AMS",
+})
+UI_TRANSLATIONS["en"].update({
+    "Humidity history": "Humidity history", "Humidity history chart": "Humidity history chart", "No humidity history available.": "No humidity history available.", "Humidity history could not be loaded.": "Humidity history could not be loaded.", "Loading …": "Loading …", "Close": "Close", "AMS": "AMS",
+})
+
 # Inventory lock message: the lock reflects the spool's AMS assignment.
 UI_TRANSLATIONS["de"].update({
     "Spule ist in der AMS gebunden und gesperrt.": "Spule ist in der AMS gebunden und gesperrt.",

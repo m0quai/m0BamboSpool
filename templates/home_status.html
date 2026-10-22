@@ -12,7 +12,7 @@
         <div class="home-printer-context" id="home-printer-name">{{ PRINTER_NAME or PRINTER_MODEL.get('devicename') or PRINTER_MODEL.get('model') or PRINTER_ID }}</div>
         <dl class="home-metric-list mb-0">
           <div><dt><i class="bi bi-wifi me-2" aria-hidden="true"></i>{{ _('MQTT') }}</dt><dd id="home-mqtt-status">{{ _('Verbunden') if mqtt_connected|default(false) else _('Nicht verbunden') }}</dd></div>
-          <div><dt><i class="bi bi-droplet me-2" aria-hidden="true"></i>{{ _('Humidity') }}</dt><dd id="home-humidity" class="d-flex align-items-center gap-2">{% if printer_ams_environment %}{{ humidity_index_icon(printer_ams_environment[0].humidity_level, 'home', 'humidity-droplet-home') }}<span id="home-humidity-value">{{ printer_ams_environment[0].humidity or '–' }}</span>{% else %}<span id="home-humidity-value">–</span>{% endif %}</dd></div>
+          <div><dt><i class="bi bi-droplet me-2" aria-hidden="true"></i>{{ _('Humidity') }}</dt><dd><button type="button" id="home-humidity" class="home-humidity-history-trigger d-flex align-items-center gap-2" aria-haspopup="dialog" aria-controls="humidity-history-dialog"{% if not printer_ams_environment %} disabled{% endif %} data-ams-id="{{ printer_ams_environment[0].id if printer_ams_environment else '' }}">{% if printer_ams_environment %}{{ humidity_index_icon(printer_ams_environment[0].humidity_level, 'home', 'humidity-droplet-home') }}<span id="home-humidity-value">{{ printer_ams_environment[0].humidity or '–' }}</span>{% else %}<span id="home-humidity-value">–</span>{% endif %}</button></dd></div>
           <div><dt><i class="bi bi-thermometer-half me-2" aria-hidden="true"></i>{{ _('Temperature') }}</dt><dd id="home-ams-temperature">{% if printer_ams_environment %}{{ printer_ams_environment[0].temperature or '–' }}°C{% else %}–{% endif %}</dd></div>
           <div><dt><i class="bi bi-waves me-2" aria-hidden="true"></i>{{ _('Hotend') }}</dt><dd id="home-hotend">{% if printer_temperatures.hotend is not none %}{{ printer_temperatures.hotend|round|int }}°C{% else %}–{% endif %}{% if printer_temperatures.hotend_target is not none %} / {{ printer_temperatures.hotend_target|round|int }}°C{% endif %}</dd></div>
           <div><dt><i class="bi bi-view-stacked me-2" aria-hidden="true"></i>{{ _('Bed') }}</dt><dd id="home-bed">{% if printer_temperatures.bed is not none %}{{ printer_temperatures.bed|round|int }}°C{% else %}–{% endif %}{% if printer_temperatures.bed_target is not none %} / {{ printer_temperatures.bed_target|round|int }}°C{% endif %}</dd></div>
@@ -76,6 +76,22 @@
   </div>
 </div>
 
+<div id="humidity-history-dialog" class="humidity-history-dialog" hidden role="dialog" aria-modal="true" aria-labelledby="humidity-history-title">
+  <div class="humidity-history-dialog-backdrop" data-humidity-history-close></div>
+  <section class="humidity-history-panel">
+    <div class="humidity-history-header">
+      <h2 id="humidity-history-title" class="h5 mb-0">{{ _('Humidity history') }}</h2>
+      <button type="button" class="btn btn-sm btn-outline-secondary" data-humidity-history-close aria-label="{{ _('Close') }}"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+    <div class="humidity-history-meta" id="humidity-history-meta"></div>
+    <div class="humidity-history-chart-wrap">
+      <svg id="humidity-history-chart" class="humidity-history-chart" viewBox="0 0 760 300" role="img" aria-label="{{ _('Humidity history chart') }}"></svg>
+    </div>
+    <div id="humidity-history-empty" class="small text-body-secondary" hidden>{{ _('No humidity history available.') }}</div>
+    <div id="humidity-history-entries" class="humidity-history-entries"></div>
+  </section>
+</div>
+
 <script>
 (() => {
   const endpoint = {{ url_for('home_state')|tojson }};
@@ -84,6 +100,13 @@
   const printerStatus = document.getElementById('home-printer-status');
   const humidity = document.getElementById('home-humidity');
   const humidityValue = document.getElementById('home-humidity-value');
+  const humidityHistoryEndpoint = {{ url_for('home_humidity_history')|tojson }};
+  const humidityHistoryDialog = document.getElementById('humidity-history-dialog');
+  const humidityHistoryChart = document.getElementById('humidity-history-chart');
+  const humidityHistoryMeta = document.getElementById('humidity-history-meta');
+  const humidityHistoryEmpty = document.getElementById('humidity-history-empty');
+  const humidityHistoryEntries = document.getElementById('humidity-history-entries');
+  const humidityHistoryAmsLabel = {{ _('AMS')|tojson }};
   const amsTemperature = document.getElementById('home-ams-temperature');
   const hotend = document.getElementById('home-hotend');
   const bed = document.getElementById('home-bed');
@@ -166,6 +189,8 @@
     if (humidityValue) humidityValue.textContent = metrics.length ? (metrics[0].humidity || '–') : '–';
     if (humidity) {
       const metric = metrics[0] || {};
+      humidity.dataset.amsId = metric.id || '';
+      humidity.disabled = !metrics.length;
       const icon = humidity.querySelector('.humidity-droplet-wrapper');
       if (icon) icon.outerHTML = renderHumidityIcon(metric.humidity_level);
       else if (metric.humidity_level) humidity.insertAdjacentHTML('afterbegin', renderHumidityIcon(metric.humidity_level));
@@ -271,6 +296,75 @@
     const minutes = Math.floor((seconds % 3600) / 60);
     return hours > 0 ? `${hours} h ${minutes} min` : `${minutes} min`;
   }
+
+  function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character]);
+  }
+
+  function renderHumidityHistory(history, amsId) {
+    const rows = Array.isArray(history) ? history : [];
+    const chartRows = rows.filter(row => Number.isFinite(Number(row.humidity_raw)));
+    const letters = ['', 'E', 'D', 'C', 'B', 'A'];
+    const amsLabel = /^\d+$/.test(String(amsId)) ? String.fromCharCode(65 + Number(amsId)) : (amsId || 'A');
+    if (humidityHistoryMeta) {
+      humidityHistoryMeta.textContent = `${humidityHistoryAmsLabel} ${amsLabel}`;
+    }
+    if (humidityHistoryEmpty) humidityHistoryEmpty.hidden = rows.length > 0;
+    if (humidityHistoryEntries) {
+      humidityHistoryEntries.innerHTML = rows.slice().reverse().map(row => {
+        const raw = row.humidity_raw == null ? '–' : `${row.humidity_raw}%`;
+        const level = Number(row.humidity_level);
+        const index = Number.isInteger(level) && level >= 1 && level <= 5 ? ` · ${letters[level]}` : '';
+        return `<div class="humidity-history-entry"><span>${escapeHtml(formatUiDateTime(row.observed_at))}</span><strong>${escapeHtml(raw + index)}</strong></div>`;
+      }).join('');
+    }
+    if (!humidityHistoryChart) return;
+    if (!chartRows.length) {
+      humidityHistoryChart.innerHTML = '';
+      return;
+    }
+    const width = 760;
+    const height = 300;
+    const left = 48;
+    const right = 18;
+    const top = 18;
+    const bottom = 42;
+    const chartWidth = width - left - right;
+    const chartHeight = height - top - bottom;
+    const x = index => chartRows.length === 1 ? left + chartWidth / 2 : left + index * chartWidth / (chartRows.length - 1);
+    const y = value => top + chartHeight - Math.max(0, Math.min(100, value)) / 100 * chartHeight;
+    const grid = [0, 25, 50, 75, 100].map(value => `<line class="chart-grid-line" x1="${left}" x2="${width - right}" y1="${y(value)}" y2="${y(value)}" /><text class="chart-axis-label" x="${left - 8}" y="${y(value) + 4}" text-anchor="end">${value}%</text>`).join('');
+    const points = chartRows.map((row, index) => `${x(index)},${y(Number(row.humidity_raw))}`).join(' ');
+    const pointNodes = chartRows.map((row, index) => `<circle class="chart-point" cx="${x(index)}" cy="${y(Number(row.humidity_raw))}" r="4"><title>${escapeHtml(formatUiDateTime(row.observed_at))}: ${escapeHtml(row.humidity_raw)}%</title></circle>`).join('');
+    const timeLabels = [0, Math.floor((chartRows.length - 1) / 2), chartRows.length - 1]
+      .filter((index, position, values) => values.indexOf(index) === position)
+      .map(index => `<text class="chart-time-label" x="${x(index)}" y="${height - 14}" text-anchor="middle">${escapeHtml(formatUiDateTime(chartRows[index].observed_at))}</text>`).join('');
+    humidityHistoryChart.innerHTML = `${grid}<polyline class="chart-line" points="${points}" />${pointNodes}${timeLabels}`;
+  }
+
+  async function openHumidityHistory() {
+    if (!humidityHistoryDialog || !humidity) return;
+    const amsId = humidity.dataset.amsId || '';
+    humidityHistoryDialog.hidden = false;
+    if (humidityHistoryMeta) humidityHistoryMeta.textContent = {{ _('Loading …')|tojson }};
+    try {
+      const response = await fetch(`${humidityHistoryEndpoint}?ams_id=${encodeURIComponent(amsId)}&_=${Date.now()}`, { cache: 'no-store' });
+      if (!response.ok) throw new Error('humidity history request failed');
+      const payload = await response.json();
+      renderHumidityHistory(payload.history, amsId);
+    } catch (_) {
+      renderHumidityHistory([], amsId);
+      if (humidityHistoryMeta) humidityHistoryMeta.textContent = {{ _('Humidity history could not be loaded.')|tojson }};
+    }
+  }
+
+  humidity?.addEventListener('click', openHumidityHistory);
+  humidityHistoryDialog?.querySelectorAll('[data-humidity-history-close]').forEach(control => {
+    control.addEventListener('click', () => { humidityHistoryDialog.hidden = true; });
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && humidityHistoryDialog && !humidityHistoryDialog.hidden) humidityHistoryDialog.hidden = true;
+  });
 
   async function refresh() {
     try {

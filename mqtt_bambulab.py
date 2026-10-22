@@ -32,6 +32,7 @@ from inventory_service import (
 )
 from inventory_repository import record_consumption
 import inventory_database
+import database as app_database
 import nfc_pending_repository
 from tools_3mf import getMetaDataFrom3mf, delete3mfFromFTP
 import time
@@ -1787,6 +1788,10 @@ def on_message(client, userdata, msg):
         data["print"]["ams"]["ams"],
         data["print"]["ams"].get("tray_exist_bits"),
       )
+      try:
+        app_database.record_humidity_snapshots(PRINTER_ID, LAST_AMS_CONFIG["ams"])
+      except Exception as humidity_error:
+        log(f"Humidity history could not be recorded: {humidity_error!r}")
       for ams in LAST_AMS_CONFIG["ams"]:
         for tray in ams.get("tray", []):
           if (

@@ -6,6 +6,7 @@ import os
 import sqlite3
 import json
 from pathlib import Path
+from datetime import datetime, timedelta
 
 from config import DATABASE_NAME, DATABASE_PATH, DATABASE_PATH_OVERRIDE, DATABASE_TYPE
 
@@ -70,8 +71,118 @@ def connect_database(path: str | Path | None = None) -> sqlite3.Connection:
         )
         """
     )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS humidity_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            printer_id TEXT NOT NULL,
+            ams_id TEXT NOT NULL,
+            observed_at TEXT NOT NULL,
+            humidity_raw REAL,
+            humidity_level INTEGER,
+            temperature REAL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_humidity_history_lookup
+        ON humidity_history (printer_id, ams_id, observed_at)
+        """
+    )
     connection.commit()
     return connection
+
+
+def record_humidity_snapshots(
+    printer_id: str,
+    metrics: list[dict] | tuple[dict, ...] | None,
+    observed_at: str | None = None,
+) -> int:
+    # Store one row per changed AMS humidity value and at least one hourly heartbeat.
+    if not printer_id or not metrics:
+        return 0
+    timestamp_dt = datetime.fromisoformat(observed_at) if observed_at else datetime.now().astimezone()
+    if timestamp_dt.tzinfo is None:
+        timestamp_dt = timestamp_dt.astimezone()
+    timestamp = timestamp_dt.isoformat(timespec="seconds")
+    inserted = 0
+    with connect_database() as connection:
+        for index, metric in enumerate(metrics):
+            if not isinstance(metric, dict):
+                continue
+            ams_id = str(metric.get("id", index)).strip()
+            if not ams_id:
+                ams_id = str(index)
+            raw_value = metric.get("humidity_raw")
+            try:
+                humidity_raw = float(str(raw_value).rstrip("%")) if raw_value not in (None, "") else None
+            except (TypeError, ValueError):
+                humidity_raw = None
+            try:
+                level_value = metric.get("humidity_level", metric.get("humidity"))
+                humidity_level = int(level_value) if level_value not in (None, "") else None
+            except (TypeError, ValueError):
+                humidity_level = None
+            try:
+                temperature_value = metric.get("temperature", metric.get("temp"))
+                temperature = float(temperature_value) if temperature_value not in (None, "") else None
+            except (TypeError, ValueError):
+                temperature = None
+            if humidity_raw is None and humidity_level is None:
+                continue
+            previous = connection.execute(
+                "SELECT observed_at, humidity_raw, humidity_level FROM humidity_history "
+                "WHERE printer_id = ? AND ams_id = ? ORDER BY id DESC LIMIT 1",
+                (str(printer_id), ams_id),
+            ).fetchone()
+            if previous and previous[1] == humidity_raw and previous[2] == humidity_level:
+                try:
+                    previous_dt = datetime.fromisoformat(str(previous[0]))
+                    if previous_dt.tzinfo is None:
+                        previous_dt = previous_dt.astimezone()
+                    if timestamp_dt - previous_dt < timedelta(hours=1):
+                        continue
+                except (TypeError, ValueError):
+                    pass
+            connection.execute(
+                "INSERT INTO humidity_history "
+                "(printer_id, ams_id, observed_at, humidity_raw, humidity_level, temperature) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (str(printer_id), ams_id, timestamp, humidity_raw, humidity_level, temperature),
+            )
+            inserted += 1
+        connection.commit()
+    return inserted
+
+
+def list_humidity_history(
+    printer_id: str,
+    ams_id: str | None = None,
+    limit: int = 500,
+) -> list[dict]:
+    # Return humidity history in chronological order for the chart.
+    try:
+        safe_limit = max(1, min(int(limit), 2000))
+    except (TypeError, ValueError):
+        safe_limit = 500
+    with connect_database() as connection:
+        if ams_id not in (None, ""):
+            rows = connection.execute(
+                "SELECT id, printer_id, ams_id, observed_at, humidity_raw, humidity_level, temperature "
+                "FROM humidity_history WHERE printer_id = ? AND ams_id = ? "
+                "ORDER BY observed_at DESC, id DESC LIMIT ?",
+                (str(printer_id), str(ams_id), safe_limit),
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                "SELECT id, printer_id, ams_id, observed_at, humidity_raw, humidity_level, temperature "
+                "FROM humidity_history WHERE printer_id = ? "
+                "ORDER BY observed_at DESC, id DESC LIMIT ?",
+                (str(printer_id), safe_limit),
+            ).fetchall()
+    columns = ("id", "printer_id", "ams_id", "observed_at", "humidity_raw", "humidity_level", "temperature")
+    return [dict(zip(columns, row)) for row in reversed(rows)]
 
 
 def get_runtime_metadata(
