@@ -812,6 +812,38 @@ def home_state():
     return jsonify(_current_printer_status_payload())
 
 
+@app.post("/home/unload-filament")
+def home_unload_filament():
+    last_print = print_history_service.get_latest_print_summary()
+    last_status = str(last_print.get("status") or "").upper() if last_print else ""
+    current_state = str((getattr(mqtt_bambulab, "PRINTER_STATE", {}).get("print", {}) or {}).get("gcode_state") or "").upper()
+    live_status = print_history_service.printer_state_to_history_status(
+        current_state,
+        (getattr(mqtt_bambulab, "PRINTER_STATE", {}).get("print", {}) or {}).get("print_error"),
+    )
+    if last_status != "ABORTED" and live_status != "ABORTED":
+        return jsonify({"ok": False, "error": _ui_text("Filament entladen ist nur nach einem abgebrochenen Druck möglich.")}), 409
+    if current_state in {"PREPARING", "RUNNING", "PAUSED", "SLICING"}:
+        return jsonify({"ok": False, "error": _ui_text("Filament kann während eines aktiven Drucks nicht entladen werden.")}), 409
+    if not mqtt_bambulab.isMqttClientConnected():
+        return jsonify({"ok": False, "error": _ui_text("Der Drucker ist nicht verbunden.")}), 503
+    if not mqtt_bambulab.unload_filament():
+        return jsonify({"ok": False, "error": _ui_text("Der Entladebefehl konnte nicht gesendet werden.")}), 502
+    return jsonify({"ok": True})
+
+
+@app.post("/home/park-printer")
+def home_park_printer():
+    current_state = str((getattr(mqtt_bambulab, "PRINTER_STATE", {}).get("print", {}) or {}).get("gcode_state") or "").upper()
+    if current_state in {"PREPARING", "RUNNING", "PAUSED", "SLICING"}:
+        return jsonify({"ok": False, "error": _ui_text("Das Druckbett kann während eines aktiven Drucks nicht abgesenkt werden.")}), 409
+    if not mqtt_bambulab.isMqttClientConnected():
+        return jsonify({"ok": False, "error": _ui_text("Der Drucker ist nicht verbunden.")}), 503
+    if not mqtt_bambulab.park_printer():
+        return jsonify({"ok": False, "error": _ui_text("Der Parkbefehl konnte nicht gesendet werden.")}), 502
+    return jsonify({"ok": True})
+
+
 @app.get("/home/humidity-history")
 def home_humidity_history():
     return jsonify({

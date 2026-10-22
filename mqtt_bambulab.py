@@ -2148,6 +2148,69 @@ def isMqttClientConnected():
   return MQTT_CLIENT_CONNECTED
 
 
+def unload_filament():
+  # Request the printer's own unload workflow for the currently selected tray.
+  if not MQTT_CLIENT or not MQTT_CLIENT_CONNECTED:
+    return False
+  print_data = PRINTER_STATE.get("print", {}) or {}
+  state = str(print_data.get("gcode_state") or "").upper()
+  if state in {"PREPARING", "RUNNING", "PAUSED", "SLICING"}:
+    log(f"Filament unload rejected while printer state is {state}.")
+    return False
+  ams_data = print_data.get("ams", {}) or {}
+  tray_value = ams_data.get("tray_now")
+  if tray_value in (None, ""):
+    tray_value = ams_data.get("tray_tar")
+  try:
+    tray_value = int(tray_value)
+  except (TypeError, ValueError):
+    tray_value = None
+  if tray_value is None:
+    ams_id = 0
+  elif tray_value in (254, 255):
+    ams_id = tray_value
+  else:
+    ams_id = max(0, tray_value // 4)
+  command = {
+    "print": {
+      "sequence_id": "0",
+      "command": "ams_change_filament",
+      "ams_id": ams_id,
+      "slot_id": 255,
+      "target": 255,
+      "soft_temp": 0,
+      "tar_temp": 210,
+      "curr_temp": 210,
+    }
+  }
+  sent = publish(MQTT_CLIENT, command)
+  if sent:
+    log(f"Filament unload requested for AMS {ams_id}.")
+  return sent
+
+
+def park_printer():
+  # Lower the P1S build plate and move the toolhead to a safe parked position.
+  if not MQTT_CLIENT or not MQTT_CLIENT_CONNECTED:
+    return False
+  print_data = PRINTER_STATE.get("print", {}) or {}
+  state = str(print_data.get("gcode_state") or "").upper()
+  if state in {"PREPARING", "RUNNING", "PAUSED", "SLICING"}:
+    log(f"Printer park rejected while printer state is {state}.")
+    return False
+  command = {
+    "print": {
+      "sequence_id": "0",
+      "command": "gcode_line",
+      "param": "M400\nM17 S\nM17 Z0.4\nG90\nG1 Z250 F600\nG1 Z248\nM400 P100\nM17 R\nG1 X230 Y15 F30000",
+    }
+  }
+  sent = publish(MQTT_CLIENT, command)
+  if sent:
+    log("Printer park requested: build plate lowered and toolhead moved to X230 Y15.")
+  return sent
+
+
 def reconfigure_printer(printer_id, access_code, printer_ip, wait_seconds=12):
   # Apply a selected cloud printer and reconnect MQTT immediately.
   #

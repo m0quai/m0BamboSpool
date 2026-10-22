@@ -40,6 +40,16 @@
           </dl>
         </div>
         <div class="home-last-print-status-line"><span>{{ _('Status') }}</span><strong id="home-last-print-status">{% if last_print %}{{ _({'COMPLETED':'Finished','ABORTED':'Aborted','FAILED':'Failed','RUNNING':'Running'}.get(last_print.status, last_print.status or 'Unknown')) }}{% else %}–{% endif %}</strong></div>
+        <div class="home-print-actions">
+          <div id="home-unload-filament-action" class="home-unload-filament-action"{% if not last_print or last_print.status != 'ABORTED' %} hidden{% endif %}>
+            <button type="button" id="home-unload-filament" class="btn btn-outline-primary btn-sm"{% if not mqtt_connected|default(false) %} disabled{% endif %}><i class="bi bi-arrow-down-circle me-1" aria-hidden="true"></i>{{ _('Filament entladen') }}</button>
+            <div id="home-unload-filament-feedback" class="small text-body-secondary mt-2" hidden></div>
+          </div>
+          <div id="home-park-printer-action" class="home-unload-filament-action"{% if not last_print or last_print.status in ['PREPARING', 'RUNNING', 'PAUSED'] %} hidden{% endif %}>
+            <button type="button" id="home-park-printer" class="btn btn-outline-secondary btn-sm"{% if not mqtt_connected|default(false) %} disabled{% endif %}><i class="bi bi-arrow-down-square me-1" aria-hidden="true"></i>{{ _('Druckbett absenken') }}</button>
+            <div id="home-park-printer-feedback" class="small text-body-secondary mt-2" hidden></div>
+          </div>
+        </div>
         <div id="home-3mf-status" class="small text-body-secondary mt-3 d-none"></div>
       </div>
     </section>
@@ -115,6 +125,12 @@
   const lastPrint = document.getElementById('home-last-print');
   const lastPrintLink = document.getElementById('home-last-print-link');
   const lastPrintStatus = document.getElementById('home-last-print-status');
+  const unloadFilamentAction = document.getElementById('home-unload-filament-action');
+  const unloadFilamentButton = document.getElementById('home-unload-filament');
+  const unloadFilamentFeedback = document.getElementById('home-unload-filament-feedback');
+  const parkPrinterAction = document.getElementById('home-park-printer-action');
+  const parkPrinterButton = document.getElementById('home-park-printer');
+  const parkPrinterFeedback = document.getElementById('home-park-printer-feedback');
   const lastPrintName = document.getElementById('home-last-print-name');
   const lastPrintProgress = document.getElementById('home-last-print-progress');
   const progressRing = document.getElementById('home-progress-ring');
@@ -213,6 +229,11 @@
         const statusLabels = { COMPLETED: {{ _('Finished')|tojson }}, ABORTED: {{ _('Aborted')|tojson }}, FAILED: {{ _('Failed')|tojson }}, RUNNING: {{ _('Running')|tojson }} };
         lastPrintStatus.textContent = statusLabels[item.status] || item.status || '';
       }
+      if (unloadFilamentAction) unloadFilamentAction.hidden = item.status !== 'ABORTED';
+      if (unloadFilamentButton && item.status !== 'ABORTED') unloadFilamentButton.disabled = true;
+      const printerIsActive = ['PREPARING', 'RUNNING', 'PAUSED', 'SLICING'].includes(String(data.printer_state || '').toUpperCase()) || ['PREPARING', 'RUNNING', 'PAUSED'].includes(item.status);
+      if (parkPrinterAction) parkPrinterAction.hidden = printerIsActive;
+      if (parkPrinterButton && printerIsActive) parkPrinterButton.disabled = true;
       if (lastPrintName) lastPrintName.textContent = item.file_name || '';
       const livePercent = Number(item.printer_percent);
       const liveLayers = Number(item.layers_printed);
@@ -261,6 +282,48 @@
       downloadStatus.classList.add('d-none');
     }
   }
+
+  unloadFilamentButton?.addEventListener('click', async () => {
+    if (!unloadFilamentButton) return;
+    unloadFilamentButton.disabled = true;
+    if (unloadFilamentFeedback) {
+      unloadFilamentFeedback.hidden = false;
+      unloadFilamentFeedback.textContent = {{ _('Filament wird entladen …')|tojson }};
+    }
+    try {
+      const response = await fetch({{ url_for('home_unload_filament')|tojson }}, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json' },
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.ok) throw new Error(payload.error || 'unload failed');
+      if (unloadFilamentFeedback) unloadFilamentFeedback.textContent = {{ _('Unload-Befehl an den Drucker gesendet.')|tojson }};
+    } catch (error) {
+      unloadFilamentButton.disabled = false;
+      if (unloadFilamentFeedback) unloadFilamentFeedback.textContent = error.message || {{ _('Filament konnte nicht entladen werden.')|tojson }};
+    }
+  });
+
+  parkPrinterButton?.addEventListener('click', async () => {
+    if (!parkPrinterButton) return;
+    parkPrinterButton.disabled = true;
+    if (parkPrinterFeedback) {
+      parkPrinterFeedback.hidden = false;
+      parkPrinterFeedback.textContent = {{ _('Druckbett wird abgesenkt …')|tojson }};
+    }
+    try {
+      const response = await fetch({{ url_for('home_park_printer')|tojson }}, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json' },
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.ok) throw new Error(payload.error || 'park failed');
+      if (parkPrinterFeedback) parkPrinterFeedback.textContent = {{ _('Druckbett- und Parkbefehl an den Drucker gesendet.')|tojson }};
+    } catch (error) {
+      parkPrinterButton.disabled = false;
+      if (parkPrinterFeedback) parkPrinterFeedback.textContent = error.message || {{ _('Druckbett konnte nicht abgesenkt werden.')|tojson }};
+    }
+  });
 
   function formatUiDateTime(value) {
     if (!value) return '–';

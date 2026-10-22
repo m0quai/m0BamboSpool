@@ -1076,7 +1076,8 @@ def adjust_spool_stock(spool_id: int | str, mode: str, amount: Any) -> dict[str,
         raise ValueError('Das Gewicht darf nicht negativ sein')
     with _connect() as conn:
         spool = conn.execute(
-            """SELECT s.initial_weight, s.weight_correction, s.archived, f.weight AS filament_weight
+            """SELECT s.initial_weight, s.spool_weight, s.weight_correction, s.archived,
+                      f.weight AS filament_weight, f.spool_weight AS filament_spool_weight
                  FROM spools s JOIN filaments f ON f.id = s.filament_id
                 WHERE s.id = ?""",
             (int(spool_id),),
@@ -1093,15 +1094,22 @@ def adjust_spool_stock(spool_id: int | str, mode: str, amount: Any) -> dict[str,
         ).fetchone()[0] or 0)
         initial = float(spool['initial_weight'] or 0)
         maximum = initial or float(spool['filament_weight'] or 0)
+        tare = float(spool['spool_weight'] or spool['filament_spool_weight'] or 0)
         correction = float(spool['weight_correction'] or 0)
         if mode == 'absolute':
-            if maximum > 0 and value > maximum + 0.000001:
-                raise ValueError(f'Das Gewicht darf höchstens {maximum:g} g betragen')
-            correction = value - maximum + used
+            if value < tare - 0.000001:
+                raise ValueError(f'Das Gesamtgewicht darf nicht kleiner als das Leergewicht {tare:g} g sein')
+            if maximum > 0 and value > maximum + tare + 0.000001:
+                raise ValueError(f'Das Gesamtgewicht darf höchstens {maximum + tare:g} g betragen')
+            correction = value - tare - maximum + used
         else:
-            if maximum > 0 and maximum + correction + value - used > maximum + 0.000001:
+            new_correction = correction - value
+            new_remaining = maximum + new_correction - used
+            if maximum > 0 and new_remaining > maximum + 0.000001:
                 raise ValueError(f'Das Gewicht darf höchstens {maximum:g} g betragen')
-            correction += value
+            if maximum > 0 and new_remaining < -0.000001:
+                raise ValueError('Das Gewicht darf nicht unter 0 g fallen')
+            correction = new_correction
         conn.execute(
             'UPDATE spools SET weight_correction = ?, updated_at = ? WHERE id = ?',
             (correction, _now(), int(spool_id)),
@@ -1220,25 +1228,53 @@ def save_spool(values: dict[str, Any], spool_id: int | None = None) -> int:
         adjustment_value = values.get("adjustment_weight")
         adjustment_mode = str(values.get("adjustment_mode") or "").strip().lower()
         if measured_remaining not in (None, ""):
+            measured_value = _number(measured_remaining)
+            if measured_value < 0:
+                raise ValueError("Das Gewicht darf nicht negativ sein")
             used = 0.0
             if spool_id is not None:
                 used = float(conn.execute(
                     "SELECT COALESCE(SUM(grams_used), 0) FROM spool_usage WHERE spool_id = ?",
                     (spool_id,),
                 ).fetchone()[0] or 0)
-            row["weight_correction"] = _number(measured_remaining) - float(row["initial_weight"] or 0) + used
+            maximum = float(row["initial_weight"] or (existing["initial_weight"] if existing else 0) or (existing["filament_weight"] if existing else 0) or 0)
+            tare = float(row["spool_weight"] or (existing["spool_weight"] if existing else 0) or (existing["filament_spool_weight"] if existing else 0) or 0)
+            if measured_value < tare - 0.000001:
+                raise ValueError(f"Das Gesamtgewicht darf nicht kleiner als das Leergewicht {tare:g} g sein")
+            if maximum > 0 and measured_value > maximum + tare + 0.000001:
+                raise ValueError(f"Das Gesamtgewicht darf höchstens {maximum + tare:g} g betragen")
+            row["weight_correction"] = measured_value - tare - maximum + used
         elif adjustment_value not in (None, "") and spool_id is not None:
             previous = conn.execute("SELECT weight_correction FROM spools WHERE id = ?", (spool_id,)).fetchone()
             previous_correction = float(previous["weight_correction"] or 0) if previous else 0.0
             amount = _number(adjustment_value)
             if adjustment_mode == "absolute":
+                if amount < 0:
+                    raise ValueError("Das Gewicht darf nicht negativ sein")
                 used = float(conn.execute(
                     "SELECT COALESCE(SUM(grams_used), 0) FROM spool_usage WHERE spool_id = ?",
                     (spool_id,),
                 ).fetchone()[0] or 0)
-                row["weight_correction"] = amount - float(row["initial_weight"] or 0) + used
+                maximum = float(row["initial_weight"] or (existing["initial_weight"] if existing else 0) or (existing["filament_weight"] if existing else 0) or 0)
+                tare = float(row["spool_weight"] or (existing["spool_weight"] if existing else 0) or (existing["filament_spool_weight"] if existing else 0) or 0)
+                if amount < tare - 0.000001:
+                    raise ValueError(f"Das Gesamtgewicht darf nicht kleiner als das Leergewicht {tare:g} g sein")
+                if maximum > 0 and amount > maximum + tare + 0.000001:
+                    raise ValueError(f"Das Gesamtgewicht darf höchstens {maximum + tare:g} g betragen")
+                row["weight_correction"] = amount - tare - maximum + used
             else:
-                row["weight_correction"] = previous_correction + amount
+                used = float(conn.execute(
+                    "SELECT COALESCE(SUM(grams_used), 0) FROM spool_usage WHERE spool_id = ?",
+                    (spool_id,),
+                ).fetchone()[0] or 0)
+                maximum = float(row["initial_weight"] or (existing["initial_weight"] if existing else 0) or (existing["filament_weight"] if existing else 0) or 0)
+                new_correction = previous_correction - amount
+                new_remaining = maximum + new_correction - used
+                if maximum > 0 and new_remaining > maximum + 0.000001:
+                    raise ValueError(f"Das Gewicht darf höchstens {maximum:g} g betragen")
+                if maximum > 0 and new_remaining < -0.000001:
+                    raise ValueError("Das Gewicht darf nicht unter 0 g fallen")
+                row["weight_correction"] = new_correction
         elif spool_id is not None:
             previous = conn.execute("SELECT weight_correction FROM spools WHERE id = ?", (spool_id,)).fetchone()
             if previous:

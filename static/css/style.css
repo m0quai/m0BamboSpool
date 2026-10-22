@@ -359,6 +359,27 @@ body {
     color: var(--m0-ink);
 }
 
+.home-print-actions {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: .75rem;
+    margin-top: .85rem;
+    text-align: center;
+}
+
+.home-unload-filament-action {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+}
+
+.home-unload-filament-action[hidden] {
+    display: none;
+}
+
 .home-activity-list {
     position: relative;
     display: grid;
