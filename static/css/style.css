@@ -1511,6 +1511,18 @@ main.container {
     font-size: .85rem;
 }
 
+.humidity-history-meta-title {
+    font-weight: 600;
+    color: var(--m0-ink);
+}
+
+.humidity-history-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .35rem 1rem;
+    margin-top: .2rem;
+}
+
 .humidity-history-chart-wrap {
     min-height: 14rem;
     overflow-x: auto;
@@ -1791,11 +1803,35 @@ main.container {
   position: relative;
   border: 1px solid rgba(255, 255, 255, .16) !important;
   border-radius: var(--m0-radius) !important;
+  overflow: hidden;
+  clip-path: inset(0 round var(--m0-radius));
 }
 
+.livecam-frame > img { border-radius: var(--m0-radius); }
+
 .livecam-fullscreen-button { display: inline-flex; align-items: center; justify-content: center; width: 2.25rem; height: 2.25rem; padding: 0; }
-.livecam-frame:fullscreen { width: 100vw; height: 100vh; min-height: 100vh; border: 0 !important; border-radius: 0 !important; background: #10171b; }
+.livecam-panel {
+  border-radius: var(--m0-radius) !important;
+  overflow: hidden;
+}
+.livecam-panel > .card-header {
+  border-top-left-radius: var(--m0-radius);
+  border-top-right-radius: var(--m0-radius);
+}
+.livecam-frame:fullscreen { width: 100vw; height: 100vh; min-height: 100vh; border: 0 !important; border-radius: 0 !important; clip-path: none; background: #10171b; }
 .livecam-frame:fullscreen > img { width: 100%; height: 100%; max-width: 100%; max-height: 100% !important; object-fit: contain; }
+.home-page .livecam-panel { width: 100%; max-width: none; margin-top: 1rem; }
+.home-page .livecam-panel .livecam-frame {
+  width: min(100%, 760px);
+  min-height: 200px;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  margin-inline: auto;
+  overflow: hidden;
+  clip-path: inset(0 round var(--m0-radius));
+}
+.home-page .livecam-panel .livecam-frame > img { width: 100%; height: 100%; max-width: 100%; max-height: none; object-fit: contain; border-radius: var(--m0-radius); }
+.home-page .livecam-panel #livecam-placeholder { min-height: 0; height: 100%; }
 .inventory-workspace { width: 100%; max-width: 1800px; margin-left: 0; margin-right: auto; }
 .inventory-toolbar { display: flex; flex-wrap: wrap; gap: .75rem; align-items: end; margin-bottom: 1rem; }
 .inventory-selection-column { min-width: 0; display: flex; flex-direction: column; }

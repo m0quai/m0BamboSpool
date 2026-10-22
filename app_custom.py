@@ -691,6 +691,7 @@ def home_status():
     return render_template(
         "home_status.html",
         last_print=print_history_service.get_latest_print_summary(),
+        active_print_running=_active_print_is_running(),
     )
 
 

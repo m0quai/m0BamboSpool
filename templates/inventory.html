@@ -7,6 +7,7 @@
         <option value="filament">{{ _('Filament') }}</option>
         <option value="vendor">{{ _('Hersteller') }}</option>
         <option value="material">{{ _('Material') }}</option>
+        <option value="ams">{{ _('Nur die in AMS') }}</option>
         <option value="none">{{ _('Keine Gruppierung') }}</option>
       </select>
     </label>
@@ -17,7 +18,6 @@
         <option value="spool-id">{{ _('Spulennummer') }}</option>
         <option value="assignment">{{ _('Zuordnungsstatus') }}</option>
         <option value="remaining">{{ _('Restgewicht') }}</option>
-        <option value="ams">{{ _('Nur die in AMS') }}</option>
       </select>
     </label>
     <label class="inventory-control">{{ _('Richtung') }}
@@ -122,6 +122,7 @@ document.addEventListener('DOMContentLoaded', () => {
     noFilaments: {{ _('Keine Filamente gefunden.')|tojson }},
     manufacturerGroup: {{ _('Herstellergruppe')|tojson }},
     materialGroup: {{ _('Materialgruppe')|tojson }},
+    inAmsGroup: {{ _('Nur die in AMS')|tojson }},
     spool: {{ _('Spule')|tojson }},
     spools: {{ _('Spulen')|tojson }},
     noSpool: {{ _('Keine Spule')|tojson }},
@@ -258,8 +259,8 @@ document.addEventListener('DOMContentLoaded', () => {
     savedState.openGroups = {};
     savedState.groupLayoutVersion = 2;
   }
-  groupSelect.value = ['filament', 'vendor', 'material', 'none'].includes(savedState.group) ? savedState.group : 'filament';
-  sortSelect.value = ['last-used', 'name', 'spool-id', 'assignment', 'remaining', 'ams'].includes(savedState.sort) ? savedState.sort : 'last-used';
+  groupSelect.value = ['filament', 'vendor', 'material', 'ams', 'none'].includes(savedState.group) ? savedState.group : 'filament';
+  sortSelect.value = ['last-used', 'name', 'spool-id', 'assignment', 'remaining'].includes(savedState.sort) ? savedState.sort : 'last-used';
   sortDirection.value = ['ascending', 'descending'].includes(savedState.direction) ? savedState.direction : 'descending';
   const savedArchiveFilter = ['without', 'with', 'only'].includes(savedState.archiveFilter)
     ? savedState.archiveFilter
@@ -339,9 +340,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const visibleInventory = showArchived.value === 'with'
       ? inventory
       : inventory.filter(entry => showArchived.value === 'only' ? isArchived(entry) : !isArchived(entry));
-    const inventoryForView = sortSelect.value === 'ams' ? visibleInventory.filter(isInAms) : visibleInventory;
+    const inventoryForView = groupSelect.value === 'ams' ? visibleInventory.filter(isInAms) : visibleInventory;
     const remoteFilamentIds = new Set(inventoryForView.map(entry => String(filamentOf(entry).id)));
-    const localOnlyEntries = sortSelect.value === 'ams' || showArchived.value === 'only' ? [] : [...localFilaments.values()]
+    const localOnlyEntries = groupSelect.value === 'ams' || showArchived.value === 'only' ? [] : [...localFilaments.values()]
       .filter(filament => !remoteFilamentIds.has(String(filament.id)))
       .map(filament => ({
         localOnly: true,
@@ -356,6 +357,7 @@ document.addEventListener('DOMContentLoaded', () => {
       let key; let label;
       if (groupSelect.value === 'vendor') { key = `vendor:${vendorOf(entry)}`; label = vendorOf(entry); }
       else if (groupSelect.value === 'material') { key = `material:${materialOf(entry)}`; label = materialOf(entry); }
+      else if (groupSelect.value === 'ams') { key = 'ams'; label = inventoryText.inAmsGroup; }
       else if (groupSelect.value === 'none') { key = entry.localOnly ? `filament:${filament.id}` : `spool:${entry.spool.id}`; label = filamentNameOf(entry); }
       else { key = `filament:${filament.id}`; label = filamentNameOf(entry); }
       if (!groups.has(key)) groups.set(key, { key, label, entries: [] });
@@ -1027,7 +1029,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       const copy = make('span', 'inventory-group-copy');
       const name = make('strong', '', group.label);
-      const meta = make('span', 'inventory-group-meta', groupSelect.value === 'filament' || groupSelect.value === 'none' ? materialOf(first) : (groupSelect.value === 'vendor' ? inventoryText.manufacturerGroup : inventoryText.materialGroup));
+      const meta = make('span', 'inventory-group-meta', groupSelect.value === 'filament' || groupSelect.value === 'none' ? materialOf(first) : (groupSelect.value === 'vendor' ? inventoryText.manufacturerGroup : (groupSelect.value === 'ams' ? inventoryText.inAmsGroup : inventoryText.materialGroup)));
       copy.append(name, meta);
       const totalNode = make('span', 'inventory-group-total');
       totalNode.append(make('strong', '', spoolEntries.length ? formatWeight(total) : inventoryText.noSpool), make('small', '', `${spoolEntries.length} ${spoolEntries.length === 1 ? inventoryText.spool : inventoryText.spools}`));

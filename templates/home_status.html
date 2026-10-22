@@ -75,15 +75,8 @@
       </div>
     </section>
 
-    <div class="home-refresh-row">
-      {% if mqtt_connected|default(false) %}
-      <form method="post" action="{{ url_for('refresh_ams') }}" class="d-inline" id="home-refresh-form">
-        <input type="hidden" name="next_endpoint" value="home_status">
-        <button type="submit" class="btn btn-sm btn-primary rounded-pill px-3"><i class="bi bi-arrow-clockwise me-1"></i>{{ _('Jetzt aktualisieren') }}</button>
-      </form>
-      {% endif %}
-    </div>
   </div>
+  {% include 'fragments/livecam_panel.html' %}
 </div>
 
 <div id="humidity-history-dialog" class="humidity-history-dialog" hidden role="dialog" aria-modal="true" aria-labelledby="humidity-history-title">
@@ -121,6 +114,13 @@
   const humidityHistoryEmpty = document.getElementById('humidity-history-empty');
   const humidityHistoryEntries = document.getElementById('humidity-history-entries');
   const humidityHistoryAmsLabel = {{ _('AMS')|tojson }};
+  const humidityHistoryStatLabels = {
+    humidity: {{ _('Humidity')|tojson }},
+    temperature: {{ _('Temperature')|tojson }},
+    min: {{ _('Min')|tojson }},
+    max: {{ _('Max')|tojson }},
+    average: {{ _('Durchschnitt')|tojson }}
+  };
   const chartNumberLocale = {{ ('de-DE' if current_language == 'de' else 'en-US')|tojson }};
   let selectedHumidityHistoryIndex = null;
   let humidityHistoryRefreshInFlight = false;
@@ -156,7 +156,6 @@
   const errorLabel = {{ _('3MF konnte nicht geladen werden')|tojson }};
   const remainingLabel = {{ _('Verbleibend')|tojson }};
   const estimatedLabel = {{ _('(geschätzt)')|tojson }};
-  const refreshForm = document.getElementById('home-refresh-form');
   const activityList = document.getElementById('home-activity-list');
   const activityLabels = {
     printerStatus: {{ _('Druckerstatus')|tojson }},
@@ -397,8 +396,18 @@
     const chartRows = rows.map((row, historyIndex) => ({ ...row, historyIndex }))
       .filter(row => Number.isFinite(Number(row.humidity_raw)) || Number.isFinite(Number(row.temperature)));
     const amsLabel = /^\d+$/.test(String(amsId)) ? String.fromCharCode(65 + Number(amsId)) : (amsId || 'A');
+    const formatHistoryStat = value => new Intl.NumberFormat(chartNumberLocale, { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(value);
+    const summarizeHistoryValues = (values, unit) => {
+      if (!values.length) return '';
+      const minimum = Math.min(...values);
+      const maximum = Math.max(...values);
+      const average = values.reduce((sum, value) => sum + value, 0) / values.length;
+      return `${humidityHistoryStatLabels.min} ${formatHistoryStat(minimum)}${unit} · ${humidityHistoryStatLabels.max} ${formatHistoryStat(maximum)}${unit} · ${humidityHistoryStatLabels.average} ${formatHistoryStat(average)}${unit}`;
+    };
+    const humidityStats = summarizeHistoryValues(rows.map(row => Number(row.humidity_raw)).filter(Number.isFinite), '%');
+    const temperatureStats = summarizeHistoryValues(rows.map(row => Number(row.temperature)).filter(Number.isFinite), ' °C');
     if (humidityHistoryMeta) {
-      humidityHistoryMeta.textContent = `${humidityHistoryAmsLabel} ${amsLabel}`;
+      humidityHistoryMeta.innerHTML = `<div class="humidity-history-meta-title">${escapeHtml(humidityHistoryAmsLabel)} ${escapeHtml(amsLabel)}</div><div class="humidity-history-stats"><span>${escapeHtml(humidityHistoryStatLabels.humidity)}: ${escapeHtml(humidityStats || '–')}</span><span>${escapeHtml(humidityHistoryStatLabels.temperature)}: ${escapeHtml(temperatureStats || '–')}</span></div>`;
     }
     if (humidityHistoryEmpty) humidityHistoryEmpty.hidden = rows.length > 0;
     if (humidityHistoryEntries) {
@@ -601,20 +610,6 @@
     } catch (_) {
       // Keep the last known status visible during a short network interruption.
     }
-  }
-
-  if (refreshForm) {
-    refreshForm.addEventListener('submit', async event => {
-      event.preventDefault();
-      const button = refreshForm.querySelector('button');
-      if (button) button.disabled = true;
-      try {
-        await fetch(refreshForm.action, { method: 'POST', body: new FormData(refreshForm), cache: 'no-store' });
-        await refresh();
-      } finally {
-        if (button) button.disabled = false;
-      }
-    });
   }
 
   refresh();

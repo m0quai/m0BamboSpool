@@ -781,4 +781,13 @@ UI_TRANSLATIONS["de"].update({
     "Düsentemperatur bis (°C)": "Düsentemperatur bis (°C)",
     "Düsentemperatur Min. (°C)": "Düsentemperatur Min. (°C)",
     "Düsentemperatur Max. (°C)": "Düsentemperatur Max. (°C)",
+    "Min": "Min",
+    "Max": "Max",
+    "Durchschnitt": "Durchschnitt",
+})
+
+UI_TRANSLATIONS["en"].update({
+    "Min": "Min",
+    "Max": "Max",
+    "Durchschnitt": "Average",
 })
