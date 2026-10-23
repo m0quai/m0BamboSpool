@@ -57,7 +57,8 @@ def create_database() -> None:
             file_name TEXT NOT NULL,
             print_type TEXT NOT NULL,
             image_file TEXT,
-            file_name_source TEXT NOT NULL DEFAULT 'legacy'
+            file_name_source TEXT NOT NULL DEFAULT 'legacy',
+            deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1))
         )
     ''')
 
@@ -77,9 +78,11 @@ def create_database() -> None:
             estimated_length REAL,
             calculated_length REAL,
             consumed_length REAL,
+            deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
         FOREIGN KEY (print_id) REFERENCES prints (id) ON DELETE CASCADE
         )
     ''')
+    _ensure_column(cursor, "spool_usage", "deleted", "INTEGER NOT NULL DEFAULT 0")
     # Normalize the legacy name and remove descriptive copies that are
     # derivable through spool_id -> spools -> filaments.
     usage_columns = {row[1] for row in cursor.execute("PRAGMA table_info(spool_usage)")}
@@ -90,16 +93,21 @@ def create_database() -> None:
     cursor.execute("CREATE INDEX IF NOT EXISTS ix_spool_usage_spool ON spool_usage(spool_id)")
     has_spools_table = bool(cursor.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'spools'").fetchone())
     if has_spools_table:
+        # Older databases may reach this module before the inventory migration.
+        # Add the soft-delete columns before the view references them.
+        for table in ("spools", "filaments", "materials", "colors"):
+            _ensure_column(cursor, table, "deleted", "INTEGER NOT NULL DEFAULT 0")
         cursor.execute("DROP VIEW IF EXISTS v_spool_usage")
         cursor.execute('''
             CREATE VIEW v_spool_usage AS
             SELECT u.*, f.name AS filament_name, m.name AS material_name,
                    c.hex_code AS color_hex
             FROM spool_usage u
-            LEFT JOIN spools s ON s.id = u.spool_id
-            LEFT JOIN filaments f ON f.id = s.filament_id
-            LEFT JOIN materials m ON m.id = f.material_id
-            LEFT JOIN colors c ON c.id = f.color_id
+            LEFT JOIN spools s ON s.id = u.spool_id AND s.deleted = 0
+            LEFT JOIN filaments f ON f.id = s.filament_id AND f.deleted = 0
+            LEFT JOIN materials m ON m.id = f.material_id AND m.deleted = 0
+            LEFT JOIN colors c ON c.id = f.color_id AND c.deleted = 0
+            WHERE u.deleted = 0
         ''')
 
     cursor.execute('''
@@ -112,6 +120,7 @@ def create_database() -> None:
             length_used REAL NOT NULL,
             created_at TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'confirmed' CHECK (status IN ('pending', 'sent', 'confirmed')),
+            deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
             UNIQUE (print_id, layer, filament_index),
             FOREIGN KEY (print_id) REFERENCES prints (id) ON DELETE CASCADE
         )
@@ -128,6 +137,7 @@ def create_database() -> None:
             status TEXT NOT NULL DEFAULT 'RUNNING',
             predicted_end_time TEXT,
             actual_end_time TEXT,
+            deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
             FOREIGN KEY (print_id) REFERENCES prints (id) ON DELETE CASCADE
         )
     ''')
@@ -139,6 +149,10 @@ def create_database() -> None:
         "REAL",
     )
     _ensure_column(cursor, "prints", "file_name_source", "TEXT NOT NULL DEFAULT 'legacy'")
+    _ensure_column(cursor, "prints", "deleted", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(cursor, "spool_usage", "deleted", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(cursor, "filament_usage_events", "deleted", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(cursor, "print_layer_tracking", "deleted", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(
         cursor,
         "spool_usage",
@@ -224,15 +238,16 @@ def create_database() -> None:
             estimated_length REAL,
             physical_ams_slot INTEGER,
             calculated_length REAL,
-            consumed_length REAL
+            consumed_length REAL,
+            deleted INTEGER NOT NULL DEFAULT 0
         )""")
         cursor.execute("""INSERT INTO spool_usage_new
             (id, print_id, spool_id, grams_used, ams_slot, estimated_grams,
              length_used, estimated_length, physical_ams_slot, calculated_length,
-             consumed_length)
+             consumed_length, deleted)
             SELECT id, print_id, spool_id, grams_used, ams_slot, estimated_grams,
                    length_used, estimated_length, physical_ams_slot, calculated_length,
-                   consumed_length
+                   consumed_length, deleted
             FROM spool_usage""")
         cursor.execute("DROP TABLE spool_usage")
         cursor.execute("ALTER TABLE spool_usage_new RENAME TO spool_usage")
@@ -243,10 +258,11 @@ def create_database() -> None:
             SELECT u.*, f.name AS filament_name, m.name AS material_name,
                    c.hex_code AS color_hex
             FROM spool_usage u
-            LEFT JOIN spools s ON s.id = u.spool_id
-            LEFT JOIN filaments f ON f.id = s.filament_id
-            LEFT JOIN materials m ON m.id = f.material_id
-            LEFT JOIN colors c ON c.id = f.color_id
+            LEFT JOIN spools s ON s.id = u.spool_id AND s.deleted = 0
+            LEFT JOIN filaments f ON f.id = s.filament_id AND f.deleted = 0
+            LEFT JOIN materials m ON m.id = f.material_id AND m.deleted = 0
+            LEFT JOIN colors c ON c.id = f.color_id AND c.deleted = 0
+            WHERE u.deleted = 0
         ''')
 
     event_spool_fk = {row[3] for row in cursor.execute("PRAGMA foreign_key_list(filament_usage_events)")}
@@ -260,11 +276,12 @@ def create_database() -> None:
             length_used REAL NOT NULL,
             created_at TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'confirmed' CHECK (status IN ('pending', 'sent', 'confirmed')),
+            deleted INTEGER NOT NULL DEFAULT 0,
             UNIQUE (print_id, layer, filament_index)
         )""")
         cursor.execute("""INSERT INTO filament_usage_events_new
-            (id, print_id, layer, filament_index, spool_id, length_used, created_at, status)
-            SELECT id, print_id, layer, filament_index, spool_id, length_used, created_at, status
+            (id, print_id, layer, filament_index, spool_id, length_used, created_at, status, deleted)
+            SELECT id, print_id, layer, filament_index, spool_id, length_used, created_at, status, deleted
             FROM filament_usage_events""")
         cursor.execute("DROP TABLE filament_usage_events")
         cursor.execute("ALTER TABLE filament_usage_events_new RENAME TO filament_usage_events")
@@ -435,8 +452,8 @@ def find_open_print_for_printer_source(*names: str | None) -> dict | None:
                          t.remote_3mf_path
              FROM prints p
              JOIN print_layer_tracking t ON t.print_id = p.id
-             WHERE COALESCE(p.is_deleted, 0) = 0
-               AND t.status IN ('PREPARING', 'RUNNING', 'PAUSED', 'ABORTED', 'FAILED')
+               WHERE COALESCE(p.is_deleted, 0) = 0 AND COALESCE(p.deleted, 0) = 0 AND t.deleted = 0
+                 AND t.status IN ('PREPARING', 'RUNNING', 'PAUSED', 'ABORTED', 'FAILED')
                AND COALESCE(t.reconciliation_done, 0) = 0
              ORDER BY p.id DESC"""
     ).fetchall()
@@ -463,7 +480,7 @@ def find_active_print_for_printer_source(*names: str | None) -> dict | None:
         rows = conn.execute(
             """SELECT p.id, p.file_name, t.status, t.remote_3mf_path
                FROM prints p JOIN print_layer_tracking t ON t.print_id = p.id
-               WHERE COALESCE(p.is_deleted, 0) = 0
+               WHERE COALESCE(p.is_deleted, 0) = 0 AND COALESCE(p.deleted, 0) = 0 AND t.deleted = 0
                  AND t.status IN ('PREPARING', 'RUNNING', 'PAUSED')
                ORDER BY p.id DESC"""
         ).fetchall()
@@ -491,7 +508,8 @@ def find_recent_aborted_print(file_name: str, cooldown_seconds: int = 120):
         rows = conn.execute(
             """SELECT p.id, p.file_name, t.remote_3mf_path, t.actual_end_time
                FROM prints p JOIN print_layer_tracking t ON t.print_id = p.id
-               WHERE t.status = 'ABORTED'
+               WHERE COALESCE(p.is_deleted, 0) = 0 AND COALESCE(p.deleted, 0) = 0 AND t.deleted = 0
+                 AND t.status = 'ABORTED'
                ORDER BY p.id DESC""",
         ).fetchall()
     wanted = _normalise_print_name(str(file_name).replace("\\", "/").rsplit("/", 1)[-1])
@@ -522,7 +540,7 @@ def find_previous_metadata_print_name(remote_3mf_path: str, current_print_id: in
                FROM prints p
                JOIN print_layer_tracking t ON t.print_id = p.id
                WHERE p.id != ?
-                 AND COALESCE(p.is_deleted, 0) = 0
+                 AND COALESCE(p.is_deleted, 0) = 0 AND COALESCE(p.deleted, 0) = 0 AND t.deleted = 0
                  AND t.remote_3mf_path = ?
                  AND p.file_name_source IN ('metadata', 'manual')
                  AND TRIM(COALESCE(p.file_name, '')) != ''
@@ -542,7 +560,7 @@ def get_filament_usage_for_reconciliation(print_id: int) -> list[dict]:
                          length_used, estimated_length, calculated_length,
                          consumed_length
              FROM spool_usage
-             WHERE print_id = ?
+             WHERE print_id = ? AND deleted = 0
              ORDER BY ams_slot""",
         (int(print_id),),
     ).fetchall()
@@ -638,7 +656,7 @@ def update_latest_printer_job_status(names: tuple[str | None, ...], *, percent: 
     conn = connect_database(db_config["db_path"])
     rows = conn.execute(
         """SELECT p.id, p.file_name FROM prints p
-           WHERE COALESCE(p.is_deleted, 0) = 0 ORDER BY p.id DESC"""
+           WHERE COALESCE(p.is_deleted, 0) = 0 AND COALESCE(p.deleted, 0) = 0 ORDER BY p.id DESC"""
     ).fetchall()
     for print_id, file_name in rows:
         if _normalise_print_name(file_name) in wanted:
@@ -701,7 +719,7 @@ def mark_print_reconciled(
         (int(print_id), int(print_id), completion_time, source, completion_time, int(print_id), int(print_id)),
     )
     conn.execute(
-        "DELETE FROM filament_usage_events WHERE print_id = ? AND status = 'confirmed'",
+        "UPDATE filament_usage_events SET deleted = 1 WHERE print_id = ? AND status = 'confirmed' AND deleted = 0",
         (int(print_id),),
     )
     conn.commit()
@@ -810,11 +828,11 @@ def normalize_usage_slots(print_id: int, filament_ids: list[int], mapping: list[
                     "WHERE id = ?",
                     (row_id, existing[0]),
                 )
-                conn.execute("DELETE FROM spool_usage WHERE id = ?", (row_id,))
+                conn.execute("UPDATE spool_usage SET deleted = 1 WHERE id = ?", (row_id,))
             else:
                 conn.execute("UPDATE spool_usage SET ams_slot = ? WHERE id = ?", (int(target), row_id))
         elif float(row_grams or 0) == 0:
-            conn.execute("DELETE FROM spool_usage WHERE id = ?", (row_id,))
+            conn.execute("UPDATE spool_usage SET deleted = 1 WHERE id = ?", (row_id,))
     conn.commit()
     conn.close()
 
@@ -933,7 +951,7 @@ def finalize_filament_usage_events(print_id: int) -> None:
     conn = connect_database(db_config["db_path"])
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute(
-        "DELETE FROM filament_usage_events WHERE print_id = ? AND status = 'confirmed'",
+        "UPDATE filament_usage_events SET deleted = 1 WHERE print_id = ? AND status = 'confirmed' AND deleted = 0",
         (int(print_id),),
     )
     conn.commit()
@@ -996,7 +1014,7 @@ def get_prints_with_filament(limit: int | None = None, offset: int | None = None
     conn.row_factory = sqlite3.Row  # Enable column name access
 
     count_cursor = conn.cursor()
-    where_clause = "" if include_deleted else " WHERE COALESCE(is_deleted, 0) = 0"
+    where_clause = "" if include_deleted else " WHERE COALESCE(is_deleted, 0) = 0 AND COALESCE(deleted, 0) = 0"
     count_cursor.execute("SELECT COUNT(*) FROM prints" + where_clause)
     total_count = count_cursor.fetchone()[0]
 
@@ -1051,7 +1069,7 @@ def get_print_page(print_id: int, page_size: int, include_deleted: bool = False)
 
     conn = connect_database(db_config["db_path"])
     conn.row_factory = sqlite3.Row
-    visibility = "1 = 1" if include_deleted else "COALESCE(is_deleted, 0) = 0"
+    visibility = "1 = 1" if include_deleted else "COALESCE(is_deleted, 0) = 0 AND COALESCE(deleted, 0) = 0"
     target = conn.execute(
         f"SELECT id, print_date FROM prints WHERE id = ? AND {visibility}",
         (target_id,),
@@ -1098,21 +1116,21 @@ def get_history_filter_options(include_deleted: bool = False) -> dict[str, list[
 
 def soft_delete_print(print_id: int) -> None:
     conn = connect_database(db_config["db_path"])
-    conn.execute("UPDATE prints SET is_deleted = 1 WHERE id = ?", (print_id,))
+    conn.execute("UPDATE prints SET is_deleted = 1, deleted = 1 WHERE id = ?", (print_id,))
     conn.commit()
     conn.close()
 
 
 def restore_print(print_id: int) -> None:
     conn = connect_database(db_config["db_path"])
-    conn.execute("UPDATE prints SET is_deleted = 0 WHERE id = ?", (print_id,))
+    conn.execute("UPDATE prints SET is_deleted = 0, deleted = 0 WHERE id = ?", (print_id,))
     conn.commit()
     conn.close()
 
 
 def has_deleted_prints() -> bool:
     conn = connect_database(db_config["db_path"])
-    row = conn.execute("SELECT 1 FROM prints WHERE COALESCE(is_deleted, 0) = 1 LIMIT 1").fetchone()
+    row = conn.execute("SELECT 1 FROM prints WHERE COALESCE(is_deleted, 0) = 1 OR COALESCE(deleted, 0) = 1 LIMIT 1").fetchone()
     conn.close()
     return row is not None
 
@@ -1125,7 +1143,7 @@ def get_prints_by_spool(spool_id: int):
     cursor.execute('''
         SELECT DISTINCT p.* FROM prints p
         JOIN spool_usage f ON p.id = f.print_id
-        WHERE f.spool_id = ?
+        WHERE f.spool_id = ? AND f.deleted = 0 AND p.deleted = 0
     ''', (spool_id,))
     prints = [dict(row) for row in cursor.fetchall()]
     conn.close()
@@ -1149,7 +1167,7 @@ def get_spool_print_usage(spool_id: int) -> list[dict]:
            FROM prints p
            JOIN spool_usage f ON f.print_id = p.id
            LEFT JOIN print_layer_tracking t ON t.print_id = p.id
-           WHERE f.spool_id = ?
+           WHERE f.spool_id = ? AND f.deleted = 0 AND p.deleted = 0 AND COALESCE(t.deleted, 0) = 0
            ORDER BY p.print_date DESC, p.id DESC""",
         (int(spool_id),),
     ).fetchall()
@@ -1214,7 +1232,7 @@ def update_layer_tracking(print_id: int, **fields):
   cursor.execute(f'''
       UPDATE print_layer_tracking
       SET {set_clause}
-      WHERE print_id = ?
+      WHERE print_id = ? AND deleted = 0
   ''', params)
   conn.commit()
   conn.close()
@@ -1249,7 +1267,7 @@ def get_latest_print_summary() -> dict | None:
               t.filament_grams_billed, t.filament_grams_total
        FROM prints p
        LEFT JOIN print_layer_tracking t ON t.print_id = p.id
-       WHERE COALESCE(p.is_deleted, 0) = 0
+       WHERE COALESCE(p.is_deleted, 0) = 0 AND COALESCE(p.deleted, 0) = 0 AND COALESCE(t.deleted, 0) = 0
        ORDER BY p.print_date DESC, p.id DESC
        LIMIT 1"""
   ).fetchone()
@@ -1268,7 +1286,7 @@ def get_all_filament_usage_for_print(print_id: int):
       SELECT ams_slot, SUM(COALESCE(grams_used, 0)) AS grams_used,
              SUM(COALESCE(length_used, 0)) AS length_used
       FROM spool_usage
-      WHERE print_id = ?
+      WHERE print_id = ? AND deleted = 0
       GROUP BY ams_slot
   ''', (print_id,))
 

@@ -67,6 +67,7 @@ def connect_database(path: str | Path | None = None) -> sqlite3.Connection:
             metadata_key TEXT NOT NULL,
             metadata_value TEXT NOT NULL,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
             PRIMARY KEY (namespace, metadata_key)
         )
         """
@@ -80,10 +81,15 @@ def connect_database(path: str | Path | None = None) -> sqlite3.Connection:
             observed_at TEXT NOT NULL,
             humidity_raw REAL,
             humidity_level INTEGER,
-            temperature REAL
+            temperature REAL,
+            deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1))
         )
         """
     )
+    for table in ("runtime_metadata", "humidity_history"):
+        columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+        if "deleted" not in columns:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0")
     connection.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_humidity_history_lookup
@@ -97,7 +103,7 @@ def connect_database(path: str | Path | None = None) -> sqlite3.Connection:
         ("migration", "humidity_history_quarter_hour_v1"),
     ).fetchone()
     if reset_marker is None:
-        connection.execute("DELETE FROM humidity_history")
+        connection.execute("UPDATE humidity_history SET deleted = 1")
         connection.execute(
             "INSERT INTO runtime_metadata (namespace, metadata_key, metadata_value) "
             "VALUES (?, ?, ?)",
@@ -161,7 +167,7 @@ def record_humidity_snapshots(
             ).fetchone()
             if existing:
                 connection.execute(
-                    "UPDATE humidity_history SET humidity_raw = ?, humidity_level = ?, temperature = ? "
+                    "UPDATE humidity_history SET humidity_raw = ?, humidity_level = ?, temperature = ?, deleted = 0 "
                     "WHERE id = ?",
                     (humidity_raw, humidity_level, temperature, existing[0]),
                 )
@@ -191,14 +197,14 @@ def list_humidity_history(
         if ams_id not in (None, ""):
             rows = connection.execute(
                 "SELECT id, printer_id, ams_id, observed_at, humidity_raw, humidity_level, temperature "
-                "FROM humidity_history WHERE printer_id = ? AND ams_id = ? "
+                "FROM humidity_history WHERE printer_id = ? AND ams_id = ? AND deleted = 0 "
                 "ORDER BY observed_at DESC, id DESC LIMIT ?",
                 (str(printer_id), str(ams_id), safe_limit),
             ).fetchall()
         else:
             rows = connection.execute(
                 "SELECT id, printer_id, ams_id, observed_at, humidity_raw, humidity_level, temperature "
-                "FROM humidity_history WHERE printer_id = ? "
+                "FROM humidity_history WHERE printer_id = ? AND deleted = 0 "
                 "ORDER BY observed_at DESC, id DESC LIMIT ?",
                 (str(printer_id), safe_limit),
             ).fetchall()
@@ -215,7 +221,7 @@ def get_runtime_metadata(
     with connect_database(path) as connection:
         row = connection.execute(
             "SELECT metadata_value FROM runtime_metadata "
-            "WHERE namespace = ? AND metadata_key = ?",
+            "WHERE namespace = ? AND metadata_key = ? AND deleted = 0",
             (str(namespace), str(metadata_key)),
         ).fetchone()
     if row is None:
@@ -239,7 +245,7 @@ def set_runtime_metadata(
             "INSERT INTO runtime_metadata(namespace, metadata_key, metadata_value, updated_at) "
             "VALUES (?, ?, ?, CURRENT_TIMESTAMP) "
             "ON CONFLICT(namespace, metadata_key) DO UPDATE SET "
-            "metadata_value = excluded.metadata_value, updated_at = CURRENT_TIMESTAMP",
+            "metadata_value = excluded.metadata_value, updated_at = CURRENT_TIMESTAMP, deleted = 0",
             (str(namespace), str(metadata_key), encoded),
         )
         connection.commit()
@@ -253,7 +259,8 @@ def delete_runtime_metadata(
     # Delete one runtime metadata entry when it is no longer valid.
     with connect_database(path) as connection:
         connection.execute(
-            "DELETE FROM runtime_metadata WHERE namespace = ? AND metadata_key = ?",
+            "UPDATE runtime_metadata SET deleted = 1, updated_at = CURRENT_TIMESTAMP "
+            "WHERE namespace = ? AND metadata_key = ?",
             (str(namespace), str(metadata_key)),
         )
         connection.commit()

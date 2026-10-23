@@ -1314,6 +1314,18 @@ def create_local_filament():
     return jsonify({"saved": True, "filament": created}), 201
 
 
+@app.delete("/inventory/local-filaments/<int:filament_id>")
+def delete_local_filament(filament_id):
+    try:
+        inventory_db.delete_entity("filaments", filament_id)
+    except (KeyError, TypeError, ValueError) as exc:
+        return jsonify({"error": _ui_text(str(exc))}), 409
+    except Exception as exc:
+        _log(f"Local filament delete failed ({filament_id}): {exc!r}")
+        return jsonify({"error": "Löschen fehlgeschlagen."}), 500
+    return jsonify({"saved": True, "deleted": filament_id})
+
+
 @app.post("/inventory/local-filaments/<int:filament_id>/duplicate")
 def duplicate_local_filament(filament_id):
     try:

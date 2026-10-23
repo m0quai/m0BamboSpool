@@ -32,9 +32,13 @@ def _ensure_schema() -> None:
                    uid TEXT PRIMARY KEY NOT NULL CHECK (length(trim(uid)) > 0),
                    ams_id INTEGER NOT NULL CHECK (ams_id >= 0),
                    tray_index INTEGER NOT NULL CHECK (tray_index >= 0),
-                   seen_at TEXT NOT NULL
+                   seen_at TEXT NOT NULL,
+                   deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1))
                )"""
         )
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(nfc_pending_tags)")}
+        if "deleted" not in columns:
+            connection.execute("ALTER TABLE nfc_pending_tags ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0")
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_nfc_pending_tags_seen_at "
             "ON nfc_pending_tags (seen_at)"
@@ -91,12 +95,13 @@ def migrate_legacy_json(path: Path = _LEGACY_JSON_FILE) -> int:
                        ON CONFLICT(uid) DO UPDATE SET
                            ams_id = excluded.ams_id,
                            tray_index = excluded.tray_index,
-                           seen_at = excluded.seen_at""",
+                           seen_at = excluded.seen_at,
+                           deleted = 0""",
                     (item["uid"], item["ams_id"], item["tray_index"], item["seen_at"]),
                 )
             for item in items:
                 row = connection.execute(
-                    "SELECT ams_id, tray_index, seen_at FROM nfc_pending_tags WHERE uid = ?",
+                    "SELECT ams_id, tray_index, seen_at FROM nfc_pending_tags WHERE uid = ? AND deleted = 0",
                     (item["uid"],),
                 ).fetchone()
                 if row is None or tuple(row) != (
@@ -115,7 +120,7 @@ def list_pending_tags() -> list[dict[str, Any]]:
     try:
         rows = connection.execute(
             "SELECT uid, ams_id, tray_index, seen_at "
-            "FROM nfc_pending_tags ORDER BY seen_at, uid"
+            "FROM nfc_pending_tags WHERE deleted = 0 ORDER BY seen_at, uid"
         ).fetchall()
         return [dict(row) for row in rows]
     finally:
@@ -127,7 +132,7 @@ def get_pending_tag(uid: str) -> dict[str, Any] | None:
     try:
         row = connection.execute(
             "SELECT uid, ams_id, tray_index, seen_at "
-            "FROM nfc_pending_tags WHERE uid = ?",
+            "FROM nfc_pending_tags WHERE uid = ? AND deleted = 0",
             (_normalize_uid(uid),),
         ).fetchone()
         return dict(row) if row is not None else None
@@ -149,7 +154,8 @@ def remember_pending_tag(uid: str, tray_index: int, ams_id: int) -> None:
                    ON CONFLICT(uid) DO UPDATE SET
                        ams_id = excluded.ams_id,
                        tray_index = excluded.tray_index,
-                       seen_at = excluded.seen_at""",
+                       seen_at = excluded.seen_at,
+                       deleted = 0""",
                 (normalized_uid, int(ams_id), int(tray_index), seen_at),
             )
     finally:
@@ -161,7 +167,7 @@ def remove_pending_tag(uid: str) -> bool:
     try:
         with connection:
             cursor = connection.execute(
-                "DELETE FROM nfc_pending_tags WHERE uid = ?",
+                "UPDATE nfc_pending_tags SET deleted = 1 WHERE uid = ? AND deleted = 0",
                 (_normalize_uid(uid),),
             )
         return cursor.rowcount > 0
@@ -173,7 +179,7 @@ def has_pending_tags() -> bool:
     connection = _connect()
     try:
         return connection.execute(
-            "SELECT 1 FROM nfc_pending_tags LIMIT 1"
+            "SELECT 1 FROM nfc_pending_tags WHERE deleted = 0 LIMIT 1"
         ).fetchone() is not None
     finally:
         connection.close()

@@ -50,6 +50,7 @@
           <button id="inventory-create-spool" class="btn btn-sm btn-primary inventory-icon-button" type="button" hidden></button>
           <button id="inventory-open-filament" class="btn btn-sm btn-outline-primary inventory-icon-button" type="button" hidden aria-label="{{ _('Filament öffnen') }}" title="{{ _('Filament öffnen') }}"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i></button>
           <button id="inventory-duplicate-filament" class="btn btn-sm btn-primary inventory-icon-button" type="button" hidden></button>
+          <button id="inventory-delete-filament" class="btn btn-sm btn-primary inventory-icon-button" type="button" hidden aria-label="{{ _('Filament löschen') }}" title="{{ _('Filament löschen') }}"><i class="bi bi-trash3" aria-hidden="true"></i></button>
           <button id="inventory-duplicate-spool" class="btn btn-sm btn-primary inventory-icon-button" type="button" hidden aria-label="{{ _('Spule duplizieren') }}" title="{{ _('Spule duplizieren') }}"><i class="bi bi-copy" aria-hidden="true"></i></button>
           <button id="inventory-delete-spool" class="btn btn-sm btn-primary inventory-icon-button" type="button" hidden aria-label="{{ _('Spule löschen') }}" title="{{ _('Spule löschen') }}"><i class="bi bi-trash3" aria-hidden="true"></i></button>
           <button id="inventory-adjust-stock" class="btn btn-sm btn-primary inventory-icon-button" type="button" hidden aria-label="{{ _('Bestand verändern') }}" title="{{ _('Bestand verändern') }}"><i class="bi bi-sliders" aria-hidden="true"></i></button>
@@ -131,6 +132,8 @@ document.addEventListener('DOMContentLoaded', () => {
     creating: {{ _('Legt an …')|tojson }},
     duplicating: {{ _('Dupliziert …')|tojson }},
     duplicateFailed: {{ _('Duplizieren fehlgeschlagen.')|tojson }},
+    deleteFilamentConfirm: {{ _('Filament wirklich löschen?')|tojson }},
+    deleteFilamentFailed: {{ _('Löschen fehlgeschlagen.')|tojson }},
     deleting: {{ _('Löscht …')|tojson }},
     deleteConfirm: {{ _('Spule #%s wirklich löschen?')|tojson }},
     deleteFailed: {{ _('Löschen fehlgeschlagen.')|tojson }},
@@ -180,6 +183,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const createContextButton = document.getElementById('inventory-create-context');
   const createSpoolButton = document.getElementById('inventory-create-spool');
   const duplicateFilamentButton = document.getElementById('inventory-duplicate-filament');
+  const deleteFilamentButton = document.getElementById('inventory-delete-filament');
   const duplicateSpoolButton = document.getElementById('inventory-duplicate-spool');
   const deleteSpoolButton = document.getElementById('inventory-delete-spool');
   const openFilamentButton = document.getElementById('inventory-open-filament');
@@ -577,6 +581,11 @@ document.addEventListener('DOMContentLoaded', () => {
     duplicateFilamentButton.innerHTML = '<i class="bi bi-copy" aria-hidden="true"></i>';
     duplicateFilamentButton.title = {{ _('Filament kopieren')|tojson }};
     duplicateFilamentButton.setAttribute('aria-label', duplicateFilamentButton.title);
+    deleteFilamentButton.hidden = fillMode || kind !== 'filament';
+    const filamentHasSpools = kind === 'filament' && [...localSpools.values()].some(spool => String(spool.filament_id) === String(id));
+    deleteFilamentButton.disabled = filamentHasSpools;
+    deleteFilamentButton.title = filamentHasSpools ? {{ _('Löschen gesperrt: Das Filament wird aktuell von einer Spule verwendet.')|tojson }} : {{ _('Filament löschen')|tojson }};
+    deleteFilamentButton.setAttribute('aria-label', deleteFilamentButton.title);
     duplicateSpoolButton.hidden = fillMode || kind !== 'spool';
     deleteSpoolButton.hidden = fillMode || kind !== 'spool';
     adjustStockButton.hidden = fillMode || kind !== 'spool';
@@ -642,6 +651,7 @@ document.addEventListener('DOMContentLoaded', () => {
     stockApply.disabled = spoolLocked || spoolArchived;
     createSpoolButton.onclick = () => createSpoolForFilament(record);
     duplicateFilamentButton.onclick = () => duplicateFilament(record);
+    deleteFilamentButton.onclick = () => deleteFilament(record);
     createContextButton.onclick = () => createLocalEntity(kind);
     duplicateSpoolButton.onclick = () => duplicateSpool(record);
     deleteSpoolButton.onclick = () => deleteSpool(record);
@@ -846,6 +856,25 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (error) {
       editorState.textContent = error.message || {{ _('Kopieren fehlgeschlagen.')|tojson }};
     } finally { duplicateFilamentButton.disabled = false; }
+  }
+
+  async function deleteFilament(filament) {
+    if ([...localSpools.values()].some(spool => String(spool.filament_id) === String(filament.id))) return;
+    if (!window.confirm(inventoryText.deleteFilamentConfirm)) return;
+    deleteFilamentButton.disabled = true;
+    editorState.textContent = inventoryText.deleting;
+    try {
+      const response = await fetch(`/inventory/local-filaments/${filament.id}`, { method: 'DELETE' });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || inventoryText.deleteFilamentFailed);
+      localFilaments.delete(String(filament.id));
+      selectedEditor = null;
+      editor.hidden = true;
+      render();
+    } catch (error) {
+      editorState.textContent = error.message || inventoryText.deleteFilamentFailed;
+      deleteFilamentButton.disabled = false;
+    }
   }
 
   async function duplicateSpool(spool) {

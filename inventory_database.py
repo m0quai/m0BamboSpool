@@ -133,16 +133,19 @@ def initialize() -> None:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS vendors (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL COLLATE NOCASE
+                name TEXT NOT NULL COLLATE NOCASE,
+                deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1))
             );
             CREATE TABLE IF NOT EXISTS materials (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL COLLATE NOCASE UNIQUE
+                name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1))
             );
             CREATE TABLE IF NOT EXISTS colors (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL COLLATE NOCASE UNIQUE,
-                hex_code TEXT NOT NULL COLLATE NOCASE
+                hex_code TEXT NOT NULL COLLATE NOCASE,
+                deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1))
             );
             CREATE TABLE IF NOT EXISTS filaments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -160,7 +163,8 @@ def initialize() -> None:
                 bambu_filament_id TEXT,
                 bambu_setting_id TEXT,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1))
             );
             CREATE TABLE IF NOT EXISTS spools (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -175,14 +179,16 @@ def initialize() -> None:
                 active_tray_source TEXT,
                 active_tray_nfc_uid TEXT,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1))
             );
             CREATE TABLE IF NOT EXISTS nfc_tags (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 tag_value TEXT NOT NULL COLLATE NOCASE UNIQUE,
                 comment TEXT,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1))
             );
             CREATE TABLE IF NOT EXISTS spool_consumption_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -190,9 +196,19 @@ def initialize() -> None:
                 weight_grams REAL,
                 length_mm REAL,
                 occurred_at TEXT NOT NULL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1))
             );
         """)
+        for table in ("vendors", "materials", "colors", "filaments", "spools", "nfc_tags", "spool_consumption_events"):
+            columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+            if "deleted" not in columns:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0")
+        for table in ("spool_usage", "filament_usage_events", "prints", "print_layer_tracking", "runtime_metadata", "humidity_history", "nfc_pending_tags"):
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone():
+                columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+                if "deleted" not in columns:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0")
         # Remove the obsolete one-time import marker from older installations.
         conn.execute("DROP TABLE IF EXISTS inventory_migrations")
         # Older databases declared the hex value UNIQUE.  Hex values describe
@@ -217,11 +233,12 @@ def initialize() -> None:
                 CREATE TABLE colors_new (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL COLLATE NOCASE UNIQUE,
-                    hex_code TEXT NOT NULL COLLATE NOCASE
+                    hex_code TEXT NOT NULL COLLATE NOCASE,
+                    deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1))
                 )
             """)
             conn.execute(
-                "INSERT INTO colors_new(id, name, hex_code) SELECT id, name, hex_code FROM colors"
+                "INSERT INTO colors_new(id, name, hex_code, deleted) SELECT id, name, hex_code, deleted FROM colors"
             )
             conn.execute("DROP TABLE colors")
             conn.execute("ALTER TABLE colors_new RENAME TO colors")
@@ -399,13 +416,15 @@ def initialize() -> None:
                    f.diameter, f.weight, f.spool_weight, f.price,
                    f.nozzle_temp_min, f.nozzle_temp_max, f.cali_idx,
                    f.bambu_filament_id, f.bambu_setting_id,
+                   f.deleted,
                    f.created_at, f.updated_at,
                    c.name AS color_name, c.hex_code AS color_hex,
                    v.name AS vendor_name, m.name AS material_name
             FROM filaments f
-            LEFT JOIN colors c ON c.id = f.color_id
-            LEFT JOIN vendors v ON v.id = f.vendor_id
-            LEFT JOIN materials m ON m.id = f.material_id;
+            LEFT JOIN colors c ON c.id = f.color_id AND c.deleted = 0
+            LEFT JOIN vendors v ON v.id = f.vendor_id AND v.deleted = 0
+            LEFT JOIN materials m ON m.id = f.material_id AND m.deleted = 0
+            WHERE f.deleted = 0;
         """)
         if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'spool_usage'").fetchone():
             conn.executescript("""
@@ -414,10 +433,11 @@ def initialize() -> None:
                 SELECT u.*, f.name AS filament_name, m.name AS material_name,
                        c.hex_code AS color_hex
                 FROM spool_usage u
-                LEFT JOIN spools s ON s.id = u.spool_id
-                LEFT JOIN filaments f ON f.id = s.filament_id
-                LEFT JOIN materials m ON m.id = f.material_id
-                LEFT JOIN colors c ON c.id = f.color_id;
+                LEFT JOIN spools s ON s.id = u.spool_id AND s.deleted = 0
+                LEFT JOIN filaments f ON f.id = s.filament_id AND f.deleted = 0
+                LEFT JOIN materials m ON m.id = f.material_id AND m.deleted = 0
+                LEFT JOIN colors c ON c.id = f.color_id AND c.deleted = 0
+                WHERE u.deleted = 0;
             """)
 
 
@@ -427,8 +447,10 @@ def _color_id(conn: sqlite3.Connection, value: Any) -> int | None:
     if isinstance(value, (int, float)) and int(value) == value:
         return int(value)
     normalized = str(value).strip().lstrip("#").upper()
-    row = conn.execute("SELECT id FROM colors WHERE upper(replace(hex_code, '#', '')) = ?", (normalized,)).fetchone()
+    row = conn.execute("SELECT id, deleted FROM colors WHERE upper(replace(hex_code, '#', '')) = ? ORDER BY deleted, id LIMIT 1", (normalized,)).fetchone()
     if row:
+        if row["deleted"]:
+            conn.execute("UPDATE colors SET deleted = 0 WHERE id = ?", (row["id"],))
         return int(row["id"])
     cursor = conn.execute("INSERT INTO colors(name, hex_code) VALUES (?, ?)", (f"Farbe #{normalized}", normalized))
     return int(cursor.lastrowid)
@@ -467,15 +489,15 @@ def _ensure_nfc_catalog_value(conn: sqlite3.Connection, value: Any) -> int | Non
     if not normalized:
         return None
     now = _now()
-    row = conn.execute("SELECT id FROM nfc_tags WHERE tag_value = ?", (normalized,)).fetchone()
+    row = conn.execute("SELECT id, deleted FROM nfc_tags WHERE tag_value = ?", (normalized,)).fetchone()
     if row:
-        conn.execute("UPDATE nfc_tags SET updated_at = ? WHERE id = ?", (now, row["id"]))
+        conn.execute("UPDATE nfc_tags SET deleted = 0, updated_at = ? WHERE id = ?", (now, row["id"]))
     else:
         conn.execute(
             "INSERT INTO nfc_tags(tag_value, comment, created_at, updated_at) VALUES (?, NULL, ?, ?)",
             (normalized, now, now),
         )
-        row = conn.execute("SELECT id FROM nfc_tags WHERE tag_value = ?", (normalized,)).fetchone()
+        row = conn.execute("SELECT id FROM nfc_tags WHERE tag_value = ? AND deleted = 0", (normalized,)).fetchone()
     return int(row["id"]) if row else None
 
 
@@ -488,10 +510,10 @@ def _sync_nfc_tag_row(
     if not normalized:
         return None
     now = _now()
-    row = conn.execute("SELECT id FROM nfc_tags WHERE tag_value = ?", (normalized,)).fetchone()
+    row = conn.execute("SELECT id, deleted FROM nfc_tags WHERE tag_value = ?", (normalized,)).fetchone()
     if row:
         conn.execute(
-            "UPDATE nfc_tags SET comment = COALESCE(?, comment), updated_at = ? WHERE id = ?",
+            "UPDATE nfc_tags SET deleted = 0, comment = COALESCE(?, comment), updated_at = ? WHERE id = ?",
             (comment, now, row["id"]),
         )
     else:
@@ -499,7 +521,7 @@ def _sync_nfc_tag_row(
             "INSERT INTO nfc_tags(tag_value, comment, created_at, updated_at) VALUES (?, ?, ?, ?)",
             (normalized, comment, now, now),
         )
-        row = conn.execute("SELECT id FROM nfc_tags WHERE tag_value = ?", (normalized,)).fetchone()
+        row = conn.execute("SELECT id FROM nfc_tags WHERE tag_value = ? AND deleted = 0", (normalized,)).fetchone()
     return int(row["id"]) if row else None
 
 
@@ -515,14 +537,15 @@ def list_nfc_tags(include_assignment: bool = False) -> list[dict[str, Any]]:
                           s.id AS spool_number, f.name AS filament_name,
                           nt.created_at, nt.updated_at
                    FROM nfc_tags nt
-                   LEFT JOIN spools s ON s.nfc_tag_id = nt.id
-                   LEFT JOIN filaments f ON f.id = s.filament_id
+                   LEFT JOIN spools s ON s.nfc_tag_id = nt.id AND s.deleted = 0
+                   LEFT JOIN filaments f ON f.id = s.filament_id AND f.deleted = 0
+                   WHERE nt.deleted = 0
                    ORDER BY nt.id"""
             ).fetchall()
         else:
             rows = conn.execute(
                 "SELECT id, tag_value, comment, created_at, updated_at "
-                "FROM nfc_tags ORDER BY id"
+                "FROM nfc_tags WHERE deleted = 0 ORDER BY id"
             ).fetchall()
         result = []
         for row in rows:
@@ -552,7 +575,17 @@ def register_nfc_tag(tag_value: Any) -> str:
         raise ValueError("NFC tag value must not be empty")
     initialize()
     with _connect() as conn:
-        if not conn.execute("SELECT 1 FROM nfc_tags WHERE tag_value = ?", (normalized,)).fetchone():
+        existing = conn.execute(
+            "SELECT id FROM nfc_tags WHERE tag_value = ? COLLATE NOCASE",
+            (normalized,),
+        ).fetchone()
+        if existing:
+            # Reusing a previously retired tag makes it visible again.
+            conn.execute(
+                "UPDATE nfc_tags SET deleted = 0, updated_at = ? WHERE id = ?",
+                (_now(), existing["id"]),
+            )
+        else:
             now = _now()
             conn.execute(
                 "INSERT INTO nfc_tags(tag_value, comment, created_at, updated_at) VALUES (?, NULL, ?, ?)",
@@ -574,18 +607,18 @@ def update_nfc_tag(tag_id: int | str, values: dict[str, Any]) -> dict[str, Any]:
     if not fields:
         raise ValueError("Keine editierbaren NFC-Tag-Felder übergeben")
     with _connect() as conn:
-        current = conn.execute("SELECT * FROM nfc_tags WHERE id = ?", (int(tag_id),)).fetchone()
+        current = conn.execute("SELECT * FROM nfc_tags WHERE id = ? AND deleted = 0", (int(tag_id),)).fetchone()
         if not current:
             raise KeyError(f"Kein NFC-Tag mit ID {tag_id}")
         if "tag_value" in fields:
             assigned = conn.execute(
-                "SELECT 1 FROM spools WHERE nfc_tag_id = ? LIMIT 1",
+                "SELECT 1 FROM spools WHERE nfc_tag_id = ? AND deleted = 0 LIMIT 1",
                 (int(tag_id),),
             ).fetchone()
             if assigned and fields["tag_value"] != normalize_nfc_tag(current["tag_value"]):
                 raise ValueError("Der Tag-Wert kann nicht geändert werden, solange er einer Spule zugeordnet ist.")
             owner = conn.execute(
-                "SELECT id FROM nfc_tags WHERE tag_value = ? COLLATE NOCASE AND id <> ?",
+                "SELECT id FROM nfc_tags WHERE tag_value = ? COLLATE NOCASE AND id <> ? AND deleted = 0",
                 (fields["tag_value"], int(tag_id)),
             ).fetchone()
             if owner:
@@ -601,17 +634,17 @@ def update_nfc_tag(tag_id: int | str, values: dict[str, Any]) -> dict[str, Any]:
 def delete_nfc_tag(tag_id: int | str) -> None:
     initialize()
     with _connect() as conn:
-        row = conn.execute("SELECT id FROM nfc_tags WHERE id = ?", (int(tag_id),)).fetchone()
+        row = conn.execute("SELECT id FROM nfc_tags WHERE id = ? AND deleted = 0", (int(tag_id),)).fetchone()
         if not row:
             raise KeyError(f"Kein NFC-Tag mit ID {tag_id}")
-        if conn.execute("SELECT 1 FROM spools WHERE nfc_tag_id = ? LIMIT 1", (int(tag_id),)).fetchone():
+        if conn.execute("SELECT 1 FROM spools WHERE nfc_tag_id = ? AND deleted = 0 LIMIT 1", (int(tag_id),)).fetchone():
             raise ValueError("Löschen gesperrt: Der NFC-Tag wird aktuell von einer Spule verwendet.")
-        conn.execute("DELETE FROM nfc_tags WHERE id = ?", (int(tag_id),))
+        conn.execute("UPDATE nfc_tags SET deleted = 1, updated_at = ? WHERE id = ?", (_now(), int(tag_id)))
 
 
 def _sync_nfc_catalog_from_spools(conn: sqlite3.Connection) -> None:
     rows = conn.execute(
-        "SELECT id, nfc_tag_id, archived FROM spools WHERE nfc_tag_id IS NOT NULL"
+        "SELECT id, nfc_tag_id, archived FROM spools WHERE nfc_tag_id IS NOT NULL AND deleted = 0"
     ).fetchall()
     for row in rows:
         if row["nfc_tag_id"]:
@@ -629,11 +662,11 @@ def list_entities(entity: str) -> list[dict[str, Any]]:
     with _connect() as conn:
         if entity == "materials":
             rows = conn.execute(
-                "SELECT m.*, EXISTS(SELECT 1 FROM filaments f WHERE f.material_id = m.id) AS in_use "
-                "FROM materials m ORDER BY m.name COLLATE NOCASE, m.id"
+                "SELECT m.*, EXISTS(SELECT 1 FROM filaments f WHERE f.material_id = m.id AND f.deleted = 0) AS in_use "
+                "FROM materials m WHERE m.deleted = 0 ORDER BY m.name COLLATE NOCASE, m.id"
             ).fetchall()
         else:
-            rows = conn.execute(f"SELECT * FROM {table} ORDER BY name COLLATE NOCASE, id").fetchall()
+            rows = conn.execute(f"SELECT * FROM {table} WHERE deleted = 0 ORDER BY name COLLATE NOCASE, id").fetchall()
         return [dict(row) for row in rows]
 
 
@@ -642,8 +675,8 @@ def list_colors() -> list[dict[str, Any]]:
     with _connect() as conn:
         rows = [dict(row) for row in conn.execute(
             "SELECT c.id, c.name, c.hex_code, "
-            "EXISTS(SELECT 1 FROM filaments f WHERE f.color_id = c.id) AS in_use "
-            "FROM colors c ORDER BY c.name COLLATE NOCASE, c.id"
+            "EXISTS(SELECT 1 FROM filaments f WHERE f.color_id = c.id AND f.deleted = 0) AS in_use "
+            "FROM colors c WHERE c.deleted = 0 ORDER BY c.name COLLATE NOCASE, c.id"
         )]
     for row in rows:
         row["hex_code"] = _normalize_hex(row["hex_code"])
@@ -671,23 +704,25 @@ def ensure_local_filament_from_inventory(filament: dict[str, Any] | None) -> Non
     vendor_name = str(vendor.get("name") or "Unbekannt").strip()
     material_name = str(filament.get("material") or "Unbekannt").strip()
     with _connect() as conn:
-        if conn.execute("SELECT 1 FROM filaments WHERE id = ?", (filament_id,)).fetchone():
+        existing = conn.execute("SELECT id, deleted FROM filaments WHERE id = ?", (filament_id,)).fetchone()
+        if existing:
             diameter = _db_value(filament.get("diameter"))
-            if diameter is not None:
-                conn.execute(
-                    "UPDATE filaments SET diameter = ?, updated_at = ? WHERE id = ?",
-                    (diameter, now, filament_id),
-                )
+            conn.execute(
+                "UPDATE filaments SET deleted = 0, diameter = COALESCE(?, diameter), updated_at = ? WHERE id = ?",
+                (diameter, now, filament_id),
+            )
             return
         vendor_row = conn.execute("SELECT id FROM vendors WHERE name = ? COLLATE NOCASE", (vendor_name,)).fetchone()
         if vendor_row:
             vendor_id = int(vendor_row["id"])
+            conn.execute("UPDATE vendors SET deleted = 0 WHERE id = ?", (vendor_id,))
         else:
             cursor = conn.execute("INSERT INTO vendors(name) VALUES (?)", (vendor_name,))
             vendor_id = int(cursor.lastrowid)
         material_row = conn.execute("SELECT id FROM materials WHERE name = ? COLLATE NOCASE", (material_name,)).fetchone()
         if material_row:
             material_id = int(material_row["id"])
+            conn.execute("UPDATE materials SET deleted = 0 WHERE id = ?", (material_id,))
         else:
             cursor = conn.execute("INSERT INTO materials(name) VALUES (?)", (material_name,))
             material_id = int(cursor.lastrowid)
@@ -719,7 +754,9 @@ def ensure_local_spool_from_inventory(spool: dict[str, Any] | None) -> None:
     ensure_local_filament_from_inventory(filament)
     now = _now()
     with _connect() as conn:
-        if conn.execute("SELECT 1 FROM spools WHERE id = ?", (spool_id,)).fetchone():
+        existing = conn.execute("SELECT id FROM spools WHERE id = ?", (spool_id,)).fetchone()
+        if existing:
+            conn.execute("UPDATE spools SET deleted = 0, updated_at = ? WHERE id = ?", (now, spool_id))
             return
         extras = spool.get("extra") or {}
         nfc_tag_id = _ensure_nfc_catalog_value(conn, _extra_value(extras, "tag"))
@@ -764,11 +801,19 @@ def save_entity(entity: str, values: dict[str, Any], entity_id: int | None = Non
     with _connect() as conn:
         if entity == "materials":
             duplicate = conn.execute(
-                "SELECT 1 FROM materials WHERE name = ? COLLATE NOCASE AND id <> COALESCE(?, -1) LIMIT 1",
+                "SELECT 1 FROM materials WHERE name = ? COLLATE NOCASE AND id <> COALESCE(?, -1) AND deleted = 0 LIMIT 1",
                 (row["name"], entity_id),
             ).fetchone()
             if duplicate:
                 raise ValueError("Dieses Material ist bereits vorhanden.")
+            if entity_id is None:
+                deleted_row = conn.execute(
+                    "SELECT id FROM materials WHERE name = ? COLLATE NOCASE AND deleted = 1 LIMIT 1",
+                    (row["name"],),
+                ).fetchone()
+                if deleted_row:
+                    conn.execute("UPDATE materials SET deleted = 0 WHERE id = ?", (deleted_row["id"],))
+                    return int(deleted_row["id"])
         if entity == "filaments":
             row["color_id"] = _color_id(conn, row.get("color_id"))
         if entity_id is None:
@@ -798,17 +843,24 @@ def save_color(values: dict[str, Any], color_id: int | None = None) -> int:
     hex_code = _normalize_hex(values.get("hex_code") or _rgb_hex(values))
     with _connect() as conn:
         duplicate = conn.execute(
-            "SELECT 1 FROM colors WHERE name = ? COLLATE NOCASE AND id <> COALESCE(?, -1) LIMIT 1",
+            "SELECT 1 FROM colors WHERE name = ? COLLATE NOCASE AND id <> COALESCE(?, -1) AND deleted = 0 LIMIT 1",
             (name, color_id),
         ).fetchone()
         if duplicate:
             raise ValueError("Diese Farbe ist bereits vorhanden.")
         if color_id is None:
+            deleted_row = conn.execute(
+                "SELECT id FROM colors WHERE name = ? COLLATE NOCASE AND deleted = 1 LIMIT 1",
+                (name,),
+            ).fetchone()
+            if deleted_row:
+                conn.execute("UPDATE colors SET hex_code = ?, deleted = 0 WHERE id = ?", (hex_code, deleted_row["id"]))
+                return int(deleted_row["id"])
             cursor = conn.execute(
                 "INSERT INTO colors(name, hex_code) VALUES (?, ?)", (name, hex_code)
             )
             return int(cursor.lastrowid)
-        if not conn.execute("SELECT 1 FROM colors WHERE id = ?", (color_id,)).fetchone():
+        if not conn.execute("SELECT 1 FROM colors WHERE id = ? AND deleted = 0", (color_id,)).fetchone():
             raise KeyError(f"No color with ID {color_id}")
         conn.execute("UPDATE colors SET name = ?, hex_code = ? WHERE id = ?", (name, hex_code, color_id))
         return color_id
@@ -841,7 +893,7 @@ def update_filament_fields(filament_id: int, values: dict[str, Any]) -> dict[str
         raise ValueError("Name is required")
     with _connect() as conn:
         previous = conn.execute(
-            "SELECT weight, spool_weight, price FROM filaments WHERE id = ?", (filament_id,)
+            "SELECT weight, spool_weight, price FROM filaments WHERE id = ? AND deleted = 0", (filament_id,)
         ).fetchone()
         if not previous:
             raise KeyError(f"No filament with ID {filament_id}")
@@ -849,7 +901,7 @@ def update_filament_fields(filament_id: int, values: dict[str, Any]) -> dict[str
             updates["color_id"] = _color_id(conn, updates["color_id"])
         updates["updated_at"] = _now()
         conn.execute(
-            f"UPDATE filaments SET {','.join(f'{key} = ?' for key in updates)} WHERE id = ?",
+            f"UPDATE filaments SET {','.join(f'{key} = ?' for key in updates)} WHERE id = ? AND deleted = 0",
             list(updates.values()) + [filament_id],
         )
         # Spools with inherited values are stored as NULL.  Older local
@@ -873,7 +925,7 @@ def update_filament_fields(filament_id: int, values: dict[str, Any]) -> dict[str
                 condition = f"({spool_field} IS NULL OR {spool_field} = 0 OR ABS({spool_field} - ?) < 0.000001)"
                 params = [filament_id, float(old_value)]
             conn.execute(
-                f"UPDATE spools SET {spool_field} = NULL, updated_at = ? WHERE filament_id = ? AND {condition}",
+                f"UPDATE spools SET {spool_field} = NULL, updated_at = ? WHERE filament_id = ? AND deleted = 0 AND {condition}",
                 [_now(), *params],
             )
     return next(item for item in list_filaments() if int(item["id"]) == int(filament_id))
@@ -885,7 +937,7 @@ def update_vendor_fields(vendor_id: int, values: dict[str, Any]) -> dict[str, An
     if not name:
         raise ValueError("Name is required")
     with _connect() as conn:
-        if not conn.execute("SELECT 1 FROM vendors WHERE id = ?", (vendor_id,)).fetchone():
+        if not conn.execute("SELECT 1 FROM vendors WHERE id = ? AND deleted = 0", (vendor_id,)).fetchone():
             raise KeyError(f"No vendor with ID {vendor_id}")
         conn.execute("UPDATE vendors SET name = ? WHERE id = ?", (name, vendor_id))
     return next(item for item in list_entities("vendors") if int(item["id"]) == int(vendor_id))
@@ -894,19 +946,19 @@ def update_vendor_fields(vendor_id: int, values: dict[str, Any]) -> dict[str, An
 def _spool_has_bookings(conn: sqlite3.Connection, spool_id: int) -> bool:
     """A booked spool must retain its original filament master record."""
     spool = conn.execute(
-        "SELECT weight_correction FROM spools WHERE id = ?", (spool_id,)
+        "SELECT weight_correction FROM spools WHERE id = ? AND deleted = 0", (spool_id,)
     ).fetchone()
     if spool and abs(float(spool["weight_correction"] or 0)) > 0.000001:
         return True
     if conn.execute(
-        "SELECT 1 FROM spool_consumption_events WHERE spool_id = ? LIMIT 1", (spool_id,)
+        "SELECT 1 FROM spool_consumption_events WHERE spool_id = ? AND deleted = 0 LIMIT 1", (spool_id,)
     ).fetchone():
         return True
     has_usage_table = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'spool_usage'"
     ).fetchone()
     return bool(has_usage_table and conn.execute(
-        "SELECT 1 FROM spool_usage WHERE spool_id = ? LIMIT 1", (spool_id,)
+        "SELECT 1 FROM spool_usage WHERE spool_id = ? AND deleted = 0 LIMIT 1", (spool_id,)
     ).fetchone())
 
 
@@ -922,6 +974,7 @@ def _spool_is_in_active_print(conn: sqlite3.Connection, spool_id: int) -> bool:
            FROM spool_usage u
            JOIN print_layer_tracking t ON t.print_id = u.print_id
           WHERE u.spool_id = ?
+            AND u.deleted = 0 AND t.deleted = 0
             AND t.status IN ('PREPARING', 'RUNNING', 'PAUSED')
           LIMIT 1""",
         (int(spool_id),),
@@ -933,7 +986,7 @@ def _spool_is_in_active_ams(conn: sqlite3.Connection, spool_id: int) -> bool:
     # are made only by the AMS workflow, never from the inventory editor.
     return bool(conn.execute(
         """SELECT 1 FROM spools
-          WHERE id = ? AND trim(COALESCE(active_tray, '')) <> ''
+          WHERE id = ? AND deleted = 0 AND trim(COALESCE(active_tray, '')) <> ''
           LIMIT 1""",
         (int(spool_id),),
     ).fetchone())
@@ -943,7 +996,7 @@ def _spool_is_nfc_bound(conn: sqlite3.Connection, spool_id: int) -> bool:
     """Return whether the printer assigned this spool from its NFC UID."""
     return bool(conn.execute(
         """SELECT 1 FROM spools
-           WHERE id = ?
+           WHERE id = ? AND deleted = 0
              AND trim(COALESCE(active_tray, '')) <> ''
              AND lower(COALESCE(active_tray_source, '')) = 'nfc'
            LIMIT 1""",
@@ -970,7 +1023,7 @@ def _has_active_print(conn: sqlite3.Connection) -> bool:
     if not int(required or 0):
         return False
     return bool(conn.execute(
-        "SELECT 1 FROM print_layer_tracking WHERE status IN ('PREPARING', 'RUNNING', 'PAUSED') LIMIT 1"
+        "SELECT 1 FROM print_layer_tracking WHERE deleted = 0 AND status IN ('PREPARING', 'RUNNING', 'PAUSED') LIMIT 1"
     ).fetchone())
 
 
@@ -1007,8 +1060,8 @@ def update_spool_fields(spool_id: int, values: dict[str, Any]) -> dict[str, Any]
                       f.spool_weight AS filament_spool_weight,
                       f.price AS filament_price
                  FROM spools s
-                 JOIN filaments f ON f.id = s.filament_id
-                WHERE s.id = ?""",
+                 JOIN filaments f ON f.id = s.filament_id AND f.deleted = 0
+                WHERE s.id = ? AND s.deleted = 0""",
             (spool_id,),
         ).fetchone()
         if not current:
@@ -1054,7 +1107,7 @@ def update_spool_fields(spool_id: int, values: dict[str, Any]) -> dict[str, Any]
                 raise ValueError("Ungültiger NFC-Tag")
             desired_tag = tag_row["tag_value"]
             if conn.execute(
-                "SELECT 1 FROM spools WHERE nfc_tag_id = ? AND id <> ? LIMIT 1",
+                "SELECT 1 FROM spools WHERE nfc_tag_id = ? AND id <> ? AND deleted = 0 LIMIT 1",
                 (int(desired_nfc_id), int(spool_id)),
             ).fetchone():
                 raise ValueError("Dieser NFC-Tag ist bereits einer anderen Spule zugeordnet.")
@@ -1077,7 +1130,7 @@ def update_spool_fields(spool_id: int, values: dict[str, Any]) -> dict[str, Any]
         if ("filament_id" in updates and int(updates["filament_id"]) != int(current["filament_id"])
                 and _spool_has_bookings(conn, spool_id)):
             raise ValueError("Das Filament einer gebuchten Spule kann nicht mehr geändert werden")
-        if "filament_id" in updates and not conn.execute("SELECT 1 FROM filaments WHERE id = ?", (updates["filament_id"],)).fetchone():
+        if "filament_id" in updates and not conn.execute("SELECT 1 FROM filaments WHERE id = ? AND deleted = 0", (updates["filament_id"],)).fetchone():
             raise ValueError("Unknown filament")
         updates.pop("tag", None)
         updates["updated_at"] = _now()
@@ -1101,8 +1154,8 @@ def adjust_spool_stock(spool_id: int | str, mode: str, amount: Any) -> dict[str,
         spool = conn.execute(
             """SELECT s.initial_weight, s.spool_weight, s.weight_correction, s.archived,
                       f.weight AS filament_weight, f.spool_weight AS filament_spool_weight
-                 FROM spools s JOIN filaments f ON f.id = s.filament_id
-                WHERE s.id = ?""",
+                 FROM spools s JOIN filaments f ON f.id = s.filament_id AND f.deleted = 0
+                WHERE s.id = ? AND s.deleted = 0""",
             (int(spool_id),),
         ).fetchone()
         if not spool:
@@ -1145,11 +1198,21 @@ def delete_entity(entity: str, entity_id: int) -> None:
         raise ValueError("Unknown inventory entity")
     initialize()
     with _connect() as conn:
-        if entity == "materials" and conn.execute("SELECT 1 FROM filaments WHERE material_id = ? LIMIT 1", (entity_id,)).fetchone():
+        if entity == "filaments" and conn.execute(
+            "SELECT 1 FROM spools WHERE filament_id = ? AND deleted = 0 LIMIT 1", (entity_id,)
+        ).fetchone():
+            raise ValueError("Löschen gesperrt: Das Filament wird aktuell von einer Spule verwendet.")
+        if entity == "vendors" and conn.execute(
+            "SELECT 1 FROM filaments WHERE vendor_id = ? AND deleted = 0 LIMIT 1", (entity_id,)
+        ).fetchone():
+            raise ValueError("Löschen gesperrt: Der Hersteller wird aktuell von einem Filament verwendet.")
+        if entity == "materials" and conn.execute("SELECT 1 FROM filaments WHERE material_id = ? AND deleted = 0 LIMIT 1", (entity_id,)).fetchone():
             raise ValueError("Löschen gesperrt: Das Material wird aktuell von einem Filament verwendet.")
-        if entity == "colors" and conn.execute("SELECT 1 FROM filaments WHERE color_id = ? LIMIT 1", (entity_id,)).fetchone():
+        if entity == "colors" and conn.execute("SELECT 1 FROM filaments WHERE color_id = ? AND deleted = 0 LIMIT 1", (entity_id,)).fetchone():
             raise ValueError("Löschen gesperrt: Die Farbe wird aktuell von einem Filament verwendet.")
-        conn.execute(f"DELETE FROM {entity} WHERE id = ?", (entity_id,))
+        if not conn.execute(f"SELECT 1 FROM {entity} WHERE id = ? AND deleted = 0", (entity_id,)).fetchone():
+            raise KeyError(f"No {entity} with ID {entity_id}")
+        conn.execute(f"UPDATE {entity} SET deleted = 1 WHERE id = ?", (entity_id,))
 
 
 def save_spool(values: dict[str, Any], spool_id: int | None = None) -> int:
@@ -1178,6 +1241,8 @@ def save_spool(values: dict[str, Any], spool_id: int | None = None) -> int:
                 WHERE s.id = ?""",
             (spool_id,),
         ).fetchone() if spool_id is not None else None
+        if spool_id is not None and not existing:
+            raise KeyError(f"No spool with ID {spool_id}")
         if existing and bool(existing["archived"]):
             if row["archived"] or set(values) != {"archived"}:
                 raise ValueError("Die Spule ist archiviert und gesperrt.")
@@ -1228,7 +1293,7 @@ def save_spool(values: dict[str, Any], spool_id: int | None = None) -> int:
             if not tag_row:
                 raise ValueError("Ungültiger NFC-Tag")
             if conn.execute(
-                "SELECT 1 FROM spools WHERE nfc_tag_id = ? AND id <> ? LIMIT 1",
+                "SELECT 1 FROM spools WHERE nfc_tag_id = ? AND id <> ? AND deleted = 0 LIMIT 1",
                 (int(row["nfc_tag_id"]), int(spool_id or -1)),
             ).fetchone():
                 raise ValueError("Dieser NFC-Tag ist bereits einer anderen Spule zugeordnet.")
@@ -1340,25 +1405,26 @@ def list_spools(include_archived: bool = False) -> list[dict[str, Any]]:
             last_used_sources.append(
                 "SELECT replace(substr(p.print_date, 1, 19), 'T', ' ') AS used_at "
                 "FROM spool_usage lu JOIN prints p ON p.id = lu.print_id "
-                "WHERE lu.spool_id = s.id"
+                "WHERE lu.spool_id = s.id AND lu.deleted = 0 AND p.deleted = 0"
             )
         if has_consumption_events:
             last_used_sources.append(
                 "SELECT replace(substr(ce.occurred_at, 1, 19), 'T', ' ') AS used_at "
-                "FROM spool_consumption_events ce WHERE ce.spool_id = s.id"
+                "FROM spool_consumption_events ce WHERE ce.spool_id = s.id AND ce.deleted = 0"
             )
         last_used_select = (
             f"(SELECT MAX(used_at) FROM ({' UNION ALL '.join(last_used_sources)}))"
             if last_used_sources else "NULL"
         )
         usage_join = """LEFT JOIN (SELECT spool_id, SUM(grams_used) AS used_weight
-                                   FROM spool_usage WHERE spool_id IS NOT NULL GROUP BY spool_id) u
+                                   FROM spool_usage WHERE spool_id IS NOT NULL AND deleted = 0 GROUP BY spool_id) u
                               ON u.spool_id = s.id""" if has_usage_table else ""
-        usage_booking = "OR EXISTS (SELECT 1 FROM spool_usage fu WHERE fu.spool_id = s.id)" if has_usage_table else ""
+        usage_booking = "OR EXISTS (SELECT 1 FROM spool_usage fu WHERE fu.spool_id = s.id AND fu.deleted = 0)" if has_usage_table else ""
         active_print_select = """CASE WHEN EXISTS (
                          SELECT 1 FROM spool_usage au
                          JOIN print_layer_tracking at ON at.print_id = au.print_id
                          WHERE au.spool_id = s.id
+                           AND au.deleted = 0 AND at.deleted = 0
                            AND at.status IN ('PREPARING', 'RUNNING', 'PAUSED')
                        ) THEN 1 ELSE 0 END""" if has_usage_table else "0"
         active_ams_select = "CASE WHEN trim(COALESCE(s.active_tray, '')) <> '' THEN 1 ELSE 0 END"
@@ -1373,19 +1439,20 @@ def list_spools(include_archived: bool = False) -> list[dict[str, Any]]:
                     {usage_select} AS used_weight,
                     {last_used_select} AS last_used,
                     CASE WHEN ABS(COALESCE(s.weight_correction, 0)) > 0.000001
-                              OR EXISTS (SELECT 1 FROM spool_consumption_events ce WHERE ce.spool_id = s.id)
+                              OR EXISTS (SELECT 1 FROM spool_consumption_events ce WHERE ce.spool_id = s.id AND ce.deleted = 0)
                               {usage_booking}
                          THEN 1 ELSE 0 END AS filament_locked
                     ,{active_print_select} AS active_print_locked
                     ,{active_ams_select} AS active_ams_locked
-             FROM spools s JOIN filaments f ON f.id = s.filament_id
-             LEFT JOIN vendors v ON v.id = f.vendor_id
-             LEFT JOIN materials m ON m.id = f.material_id
-             LEFT JOIN colors c ON c.id = f.color_id
-             LEFT JOIN nfc_tags nt ON nt.id = s.nfc_tag_id
+             FROM spools s JOIN filaments f ON f.id = s.filament_id AND f.deleted = 0
+             LEFT JOIN vendors v ON v.id = f.vendor_id AND v.deleted = 0
+             LEFT JOIN materials m ON m.id = f.material_id AND m.deleted = 0
+             LEFT JOIN colors c ON c.id = f.color_id AND c.deleted = 0
+             LEFT JOIN nfc_tags nt ON nt.id = s.nfc_tag_id AND nt.deleted = 0
              {usage_join}"""
+        sql += " WHERE s.deleted = 0"
         if not include_archived:
-            sql += " WHERE s.archived = 0"
+            sql += " AND s.archived = 0"
         sql += " ORDER BY s.id"
         return [_as_spool(row) for row in conn.execute(sql)]
 
@@ -1419,10 +1486,10 @@ def delete_spool(spool_id: int | str) -> None:
     initialize()
     with _connect() as conn:
         spool_id = int(spool_id)
-        if not conn.execute("SELECT 1 FROM spools WHERE id = ?", (spool_id,)).fetchone():
+        if not conn.execute("SELECT 1 FROM spools WHERE id = ? AND deleted = 0", (spool_id,)).fetchone():
             raise KeyError(f"No spool with ID {spool_id}")
         archived = conn.execute(
-            "SELECT archived FROM spools WHERE id = ?", (spool_id,)
+            "SELECT archived FROM spools WHERE id = ? AND deleted = 0", (spool_id,)
         ).fetchone()
         if archived and bool(archived["archived"]):
             raise ValueError("Die Spule ist archiviert und gesperrt.")
@@ -1430,7 +1497,7 @@ def delete_spool(spool_id: int | str) -> None:
             raise ValueError(_spool_lock_message(conn, spool_id))
         if _spool_has_bookings(conn, spool_id):
             raise ValueError("Eine gebuchte Spule kann nicht gelöscht werden")
-        conn.execute("DELETE FROM spools WHERE id = ?", (spool_id,))
+        conn.execute("UPDATE spools SET deleted = 1, updated_at = ? WHERE id = ?", (_now(), spool_id))
 
 
 def _as_spool(row: sqlite3.Row) -> dict[str, Any]:
@@ -1508,8 +1575,10 @@ def set_spool_extra(spool_id: int | str, values: dict[str, Any]) -> None:
         fields["updated_at"] = _now()
         with _connect() as conn:
             current = conn.execute(
-                "SELECT nfc_tag_id, archived, active_tray, active_tray_source FROM spools WHERE id = ?", (int(spool_id),)
+                "SELECT nfc_tag_id, archived, active_tray, active_tray_source FROM spools WHERE id = ? AND deleted = 0", (int(spool_id),)
             ).fetchone()
+            if not current:
+                raise KeyError(f"No spool with ID {spool_id}")
             if current and _has_active_print(conn) and {"tag", "active_tray"}.intersection(fields):
                 raise ValueError("NFC-Tag und aktives Fach können während eines Drucks nicht geändert werden.")
             system_clear = fields.get("active_tray_source") == "system_clear"
@@ -1543,7 +1612,7 @@ def set_spool_extra(spool_id: int | str, values: dict[str, Any]) -> None:
             if system_clear:
                 fields["active_tray_source"] = None
                 fields["active_tray_nfc_uid"] = None
-            conn.execute(f"UPDATE spools SET {','.join(f'{key} = ?' for key in fields)} WHERE id = ?", list(fields.values()) + [int(spool_id)])
+            conn.execute(f"UPDATE spools SET {','.join(f'{key} = ?' for key in fields)} WHERE id = ? AND deleted = 0", list(fields.values()) + [int(spool_id)])
 
 
 def sync_active_trays(assignments: dict[int | str, str]) -> dict[str, int]:
@@ -1558,7 +1627,7 @@ def sync_active_trays(assignments: dict[int | str, str]) -> dict[str, int]:
     changed = 0
     cleared = 0
     with _connect() as conn:
-        rows = conn.execute("SELECT id, active_tray, active_tray_source FROM spools").fetchall()
+        rows = conn.execute("SELECT id, active_tray, active_tray_source FROM spools WHERE deleted = 0").fetchall()
         for row in rows:
             spool_id = int(row["id"])
             desired = normalized.get(spool_id)
@@ -1584,6 +1653,8 @@ def record_consumption(spool_id: int | str, weight_grams: float | None = None,
     if weight_grams is None and length_mm is None:
         raise ValueError("weight_grams or length_mm is required")
     with _connect() as conn:
+        if not conn.execute("SELECT 1 FROM spools WHERE id = ? AND deleted = 0", (int(spool_id),)).fetchone():
+            raise KeyError(f"No spool with ID {spool_id}")
         conn.execute(
             "INSERT INTO spool_consumption_events(spool_id, weight_grams, length_mm, occurred_at, created_at) VALUES (?, ?, ?, ?, ?)",
             (int(spool_id), weight_grams, length_mm, occurred_at or _now(), _now()),
@@ -1601,7 +1672,7 @@ def set_filament_extra(filament_id: int | str, values: dict[str, Any]) -> dict[s
     with _connect() as conn:
         if allowed:
             conn.execute(
-                f"UPDATE filaments SET {','.join(f'{key} = ?' for key in allowed)}, updated_at = ? WHERE id = ?",
+                f"UPDATE filaments SET {','.join(f'{key} = ?' for key in allowed)}, updated_at = ? WHERE id = ? AND deleted = 0",
                 list(allowed.values()) + [_now(), int(filament_id)],
             )
     return get_spool_for_filament(int(filament_id))
@@ -1609,5 +1680,5 @@ def set_filament_extra(filament_id: int | str, values: dict[str, Any]) -> dict[s
 
 def get_spool_for_filament(filament_id: int) -> dict[str, Any]:
     with _connect() as conn:
-        row = conn.execute("SELECT id FROM spools WHERE filament_id = ? ORDER BY id LIMIT 1", (filament_id,)).fetchone()
+        row = conn.execute("SELECT id FROM spools WHERE filament_id = ? AND deleted = 0 ORDER BY id LIMIT 1", (filament_id,)).fetchone()
     return get_spool(row["id"]) if row else {"id": filament_id, "filament": {"id": filament_id}}
