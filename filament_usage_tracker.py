@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from config import EXTERNAL_SPOOL_AMS_ID, EXTERNAL_SPOOL_ID, TRACK_LAYER_USAGE
-from inventory_repository import record_consumption
+from inventory_repository import record_consumption, record_usage_marker
 from inventory_service import fetchSpools, getAMSFromTray, trayUid
 import inventory_database
 from tools_3mf import available_thumbnail_filename, download3mfFromCloud, download3mfFromFTP, download3mfFromLocalFilesystem, getMetaDataFrom3mf, getMetaDataFromLocal3mf, get_source_file_name, is_valid_gcode_content, validate_local_3mf_gcode
@@ -553,7 +553,16 @@ class FilamentUsageTracker:
     if use_ams:
       self.ams_mapping = ams_mapping or []
       self.using_ams = True
-      log(f"[filament-tracker] Using AMS mapping: {self.ams_mapping}")
+      mapping_text = ", ".join(
+        f"F{index}=A{int(tray) + 1}" if tray is not None and tray != EXTERNAL_SPOOL_ID
+        else f"F{index}=EXTERNAL" if tray == EXTERNAL_SPOOL_ID
+        else f"F{index}=UNRESOLVED"
+        for index, tray in enumerate(self.ams_mapping)
+      )
+      log(
+        f"[filament-tracker][MAPPING] print_id={self.print_id} "
+        f"raw={self.ams_mapping!r} resolved=[{mapping_text}] source=3mf"
+      )
     else:
       self.using_ams = False
       self.ams_mapping = None
@@ -694,7 +703,16 @@ class FilamentUsageTracker:
     if self.ams_mapping == ams_mapping and self.using_ams:
       return
 
-    log(f"[filament-tracker] Applying AMS mapping: {ams_mapping}")
+    mapping_text = ", ".join(
+      f"F{index}=A{int(tray) + 1}" if tray is not None and tray != EXTERNAL_SPOOL_ID
+      else f"F{index}=EXTERNAL" if tray == EXTERNAL_SPOOL_ID
+      else f"F{index}=UNRESOLVED"
+      for index, tray in enumerate(ams_mapping)
+    )
+    log(
+      f"[filament-tracker][MAPPING] print_id={self.print_id} "
+      f"raw={ams_mapping!r} resolved=[{mapping_text}]"
+    )
     self.ams_mapping = ams_mapping
     self.using_ams = True
     if self.print_metadata is not None:
@@ -865,15 +883,17 @@ class FilamentUsageTracker:
       if observed_tray is None:
         self._pending_usage_mm[filament] = self._pending_usage_mm.get(filament, 0.0) + total_mm
         log(
-          f"[filament-tracker] Verbrauch für Filament {filament} wartet auf "
-          "eine bestätigte AMS-Fachmeldung"
+          f"[filament-tracker][BOOKING-WAIT] print_id={self.print_id} "
+          f"filament_index={filament} mapping_tray={mapping_value} "
+          "observed_tray=UNRESOLVED reason=no_confirmed_ams_tray"
         )
         return False
       if mapping_value != observed_tray:
         self._pending_usage_mm[filament] = self._pending_usage_mm.get(filament, 0.0) + total_mm
         log(
-          f"[filament-tracker] Verbrauch für Filament {filament} zurückgestellt: "
-          f"3MF-Fach={mapping_value}, Drucker-Fach={observed_tray}"
+          f"[filament-tracker][BOOKING-WAIT] print_id={self.print_id} "
+          f"filament_index={filament} mapping_tray={mapping_value} "
+          f"observed_tray={observed_tray} reason=tray_mismatch"
         )
         return False
 
@@ -884,7 +904,13 @@ class FilamentUsageTracker:
 
     spool_id = self._lookup_spool_for_tray(tray_uid)
     if spool_id is None:
-      log(f"[filament-tracker] Queued {round(total_mm, 5)}mm for filament {filament} (tray {tray_uid} has no assigned spool)")
+      log(
+        f"[filament-tracker][BOOKING-WAIT] print_id={self.print_id} "
+        f"filament_index={filament} mapping_tray={mapping_value} "
+        f"observed_tray={self._observed_ams_tray} tray_uid={tray_uid} "
+        f"spool_id=UNRESOLVED length_mm={round(total_mm, 5)} "
+        "reason=no_local_spool_assignment"
+      )
       self._pending_usage_mm[filament] = self._pending_usage_mm.get(filament, 0.0) + total_mm
       return False
 
@@ -919,7 +945,18 @@ class FilamentUsageTracker:
     self.cumulative_length_used[filament_key] = cumulative_length
 
     grams_rounded = round(self.cumulative_grams_used[filament_key], 2)
-    log(f"[filament-tracker] Consume spool {spool_id} for filament {filament} with {usage_rounded}mm ({grams_rounded}g cumulative) (tray_uid={tray_uid})")
+    expected_mm = self._total_usage_mm_per_filament.get(filament)
+    expected_grams = None
+    if expected_mm is not None:
+      expected_grams = round(self._mm_to_grams(expected_mm, diameter_mm, density), 2)
+    log(
+      f"[filament-tracker][BOOKING] print_id={self.print_id} "
+      f"layer={event_layer} filament_index={filament} "
+      f"mapping_tray={mapping_value} observed_tray={self._observed_ams_tray} "
+      f"tray_uid={tray_uid} spool_id={spool_id} "
+      f"delta_mm={usage_rounded} delta_g={round(usage_grams, 3)} "
+      f"booked_total_g={grams_rounded} expected_total_g={expected_grams}"
+    )
 
     try:
       record_consumption(spool_id, length_mm=usage_rounded)
@@ -943,6 +980,12 @@ class FilamentUsageTracker:
         log(f"[filament-tracker] History segment could not be saved: print_id={self.print_id}, filament={filament}, spool_id={spool_id}, error={exc!r}")
         return False
       set_filament_usage_event_status(self.print_id, event_layer, filament, "confirmed")
+      log(
+        f"[filament-tracker][BOOKING-OK] print_id={self.print_id} "
+        f"layer={event_layer} filament_index={filament} spool_id={spool_id} "
+        f"ams_slot={mapping_value} grams={round(usage_grams, 3)} "
+        f"length_mm={usage_rounded} status=confirmed"
+      )
 
     self._filament_spool_id_map[filament] = spool_id
     self._spool_data_cache[spool_id] = spool_data
@@ -1147,10 +1190,18 @@ class FilamentUsageTracker:
     # Print accounting exclusively uses the tray assignments stored in the
     # local catalog.  MQTT status keeps this catalog current; color and the
     # Color or printer metadata must never decide a print's spool assignment.
-    candidates = [
-      spool for spool in inventory_database.list_spools(include_archived=True)
-      if str(spool.get("active_tray") or "") == str(tray_uid)
-    ]
+    target = str(tray_uid or "").strip().strip('"')
+    candidates = []
+    for spool in inventory_database.list_spools(include_archived=True):
+      active = spool.get("active_tray")
+      if not active:
+        active = (spool.get("extra") or {}).get("active_tray")
+      try:
+        decoded = json.loads(active) if isinstance(active, str) else active
+      except (TypeError, ValueError):
+        decoded = active
+      if str(decoded or "").strip().strip('"') == target:
+        candidates.append(spool)
     if len(candidates) == 1:
       return candidates[0].get("id")
     if len(candidates) > 1:
@@ -1262,6 +1313,15 @@ class FilamentUsageTracker:
       f"[filament-tracker] AMS tray switch detected: filament={filament_index}, "
       f"tray={previous_tray} -> {tray}; remapping usage to the active spool"
     )
+    # A tray switch is a real last-use event even when no extrusion follows
+    # (for example the print ends immediately after loading white filament).
+    # Record only the timestamp; never book weight here.
+    try:
+      switched_spool_id = self._lookup_spool_for_tray(self._tray_uid_from_mapping(tray))
+      if switched_spool_id is not None:
+        record_usage_marker(switched_spool_id)
+    except Exception as exc:
+      log(f"[filament-tracker] AMS last-use marker failed for tray {tray}: {exc!r}")
     self.apply_ams_mapping(mapping)
 
   def _attempt_print_resume(self, model_url=None, print_obj=None) -> None:

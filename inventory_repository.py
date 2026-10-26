@@ -38,6 +38,11 @@ def record_consumption(
     return True
 
 
+def record_usage_marker(spool_id: int | str, *, occurred_at: str | None = None) -> bool:
+    _local.record_usage_marker(spool_id, occurred_at)
+    return True
+
+
 def update_spool_extra(spool_id: int | str, old_extra: dict[str, Any] | None, **values: Any) -> None:
     _local.set_spool_extra(spool_id, values)
 

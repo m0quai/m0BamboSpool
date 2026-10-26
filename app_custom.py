@@ -53,6 +53,8 @@ def _readonly_augment_tray(spool_list, tray_data, ams_id, tray_id):
     # Keep External Spool actionable; only mark genuinely empty AMS trays.
     tray_data["ams_empty"] = False
     tray_data["ams_loading"] = mqtt_bambulab.is_ams_tray_operation_pending(ams_id, tray_id)
+    tray_data["ams_loading_state"] = "loading" if tray_data["ams_loading"] else ""
+    tray_data["ams_activity_state"] = tray_data["ams_loading_state"]
     if tray_data["ams_loading"]:
         tray_data["ams_material_missing"] = False
         tray_data["ams_material_missing_message"] = ""
@@ -79,10 +81,46 @@ def _readonly_augment_tray(spool_list, tray_data, ams_id, tray_id):
                 and tray_color in {"", "FFFFFFFF"}
             )
             tray_status = str(tray.get("tray_status") or tray.get("status") or "").lower()
+            tray_data["ams_loading_state"] = "unloading" if tray_status in {"unloading", "unload"} else ("loading" if tray_data["ams_loading"] or tray_status in {"loading", "load", "changing"} else "")
             tray_data["ams_loading"] = (
                 mqtt_bambulab.is_ams_tray_operation_pending(ams_id, tray_id)
                 or tray_status in {"loading", "unloading", "changing", "load", "unload"}
             )
+            # During a print the printer reports filament changes primarily
+            # through stg_cur/mc_print_sub_stage and tray_tar rather than a
+            # tray_status field. Reflect that live transition on the AMS card.
+            print_state = (getattr(mqtt_bambulab, "PRINTER_STATE", {}) or {}).get("print", {}) or {}
+            try:
+                target_tray = str((print_state.get("ams") or {}).get("tray_tar"))
+                physical_tray = int(ams_id) * 4 + int(tray_id)
+                stage = int(print_state.get("stg_cur", -1))
+                sub_stage = int(print_state.get("mc_print_sub_stage", -1))
+            except (TypeError, ValueError):
+                target_tray, physical_tray, stage, sub_stage = "", -1, -1, -1
+            transition = stage == 4 or sub_stage in {2, 4}
+            if transition and target_tray == str(physical_tray):
+                tray_data["ams_loading"] = True
+                tray_data["ams_loading_state"] = "unloading" if target_tray in {"254", "255"} else "loading"
+                tray_data["ams_activity_state"] = tray_data["ams_loading_state"]
+            if target_tray in {"254", "255"}:
+                previous_print = (getattr(mqtt_bambulab, "PRINTER_STATE_LAST", {}) or {}).get("print", {}) or {}
+                previous_target = str((previous_print.get("ams") or {}).get("tray_tar") or "")
+                if previous_target == str(physical_tray) and transition:
+                    tray_data["ams_loading"] = True
+                    tray_data["ams_loading_state"] = "unloading"
+                    tray_data["ams_activity_state"] = "unloading"
+            if not tray_data["ams_activity_state"] and str(print_state.get("gcode_state") or "").upper() == "RUNNING":
+                try:
+                    active_mapping = mqtt_bambulab._active_tray_mapping(print_state)
+                    live_tray_value = int((print_state.get("ams") or {}).get("tray_tar"))
+                    if 0 <= live_tray_value < 16:
+                        active_mapping = live_tray_value
+                    if int(active_mapping) == physical_tray:
+                        tray_data["ams_activity_state"] = "printing"
+                except (TypeError, ValueError):
+                    pass
+            if tray_data["ams_loading"] and not tray_data["ams_loading_state"]:
+                tray_data["ams_loading_state"] = "loading"
             if tray_data["ams_loading"]:
                 tray_data["ams_material_missing"] = False
                 tray_data["ams_material_missing_message"] = ""
@@ -353,6 +391,10 @@ _UI_TRANSLATIONS["de"].update({"Ende": "Ende", "Dauer": "Dauer"})
 _UI_TRANSLATIONS["en"].update({"Ende": "End", "Dauer": "Duration"})
 _UI_TRANSLATIONS["de"].update({"Letzter Druck": "Letzter Druck", "Letzter Status": "Letzter Status", "Letzte Buchung": "Letzte Buchung"})
 _UI_TRANSLATIONS["en"].update({"Letzter Druck": "Last print", "Letzter Status": "Last status", "Letzte Buchung": "Last booking"})
+_UI_TRANSLATIONS["de"].update({"wird geladen": "wird geladen", "wird entladen": "wird entladen", "wird gedruckt": "wird gedruckt"})
+_UI_TRANSLATIONS["en"].update({"wird geladen": "is loading", "wird entladen": "is unloading", "wird gedruckt": "is printing"})
+_UI_TRANSLATIONS["de"].update({"Filament wird geladen": "Filament wird geladen", "Filament wird entladen": "Filament wird entladen", "Filament wird gedruckt": "Filament wird gedruckt"})
+_UI_TRANSLATIONS["en"].update({"Filament wird geladen": "Filament is loading", "Filament wird entladen": "Filament is unloading", "Filament wird gedruckt": "Filament is printing"})
 
 # The external module is the authoritative source; the legacy inline map
 # above is retained only for compatibility with older local checkouts.
@@ -756,6 +798,7 @@ def _current_printer_status_payload():
         "printer_state": print_state.get("gcode_state") or "OFFLINE",
         "printer_status": _ui_text(_printer_status_code()),
         "printer_preparation_status": _ui_text(_printer_preparation_status_code() or ""),
+        "filament_activity": _current_filament_activity(),
         "print_id": active_print_id,
         "last_print": last_print,
         "temperatures": _printer_temperature_status(),
@@ -765,6 +808,100 @@ def _current_printer_status_payload():
             if key in {"transfer_id", "state", "percent", "bytes_downloaded", "bytes_total", "speed_bytes_per_second", "elapsed_seconds", "error"}
         },
     }
+
+
+def _current_filament_activity():
+    # Expose the physical filament currently being loaded or used for printing.
+    # The AMS tray assignment is authoritative; color is only the display label.
+    print_state = (getattr(mqtt_bambulab, "PRINTER_STATE", {}).get("print", {}) or {})
+    ams_config = getattr(mqtt_bambulab, "LAST_AMS_CONFIG", {}) or {}
+    candidate = None
+    for ams in ams_config.get("ams", []) or []:
+        for tray in ams.get("tray", []) or []:
+            tray_status = str(tray.get("tray_status") or tray.get("status") or "").strip().lower()
+            tray_pending = False
+            try:
+                tray_pending = mqtt_bambulab.is_ams_tray_operation_pending(ams.get("id"), tray.get("id"))
+            except Exception:
+                tray_pending = False
+            if tray_pending or tray_status in {"loading", "unloading", "changing", "load", "unload"}:
+                activity_state = "unloading" if tray_status in {"unloading", "unload"} else "loading"
+                candidate = (ams.get("id"), tray.get("id"), activity_state)
+                break
+        if candidate:
+            break
+    try:
+        mapping = mqtt_bambulab._active_tray_mapping(print_state)
+    except Exception:
+        mapping = None
+    # For the currently printing filament, tray_tar is the printer's live
+    # physical tray and takes precedence over the 3MF filament-order mapping.
+    try:
+        live_tray = int((print_state.get("ams") or {}).get("tray_tar"))
+        if 0 <= live_tray < 16:
+            mapping = live_tray
+    except (TypeError, ValueError):
+        pass
+    state = str(print_state.get("gcode_state") or "").upper()
+    try:
+        stage = int(print_state.get("stg_cur", -1))
+        sub_stage = int(print_state.get("mc_print_sub_stage", -1))
+        tray_target = str((print_state.get("ams") or {}).get("tray_tar"))
+    except (TypeError, ValueError):
+        stage, sub_stage, tray_target = -1, -1, ""
+    if candidate is None and (stage == 4 or sub_stage in {2, 4}) and tray_target not in {"", "254", "255"}:
+        try:
+            physical_tray = int(tray_target)
+            candidate = (mqtt_bambulab.getAMSFromTray(physical_tray), physical_tray % 4, "loading")
+        except (TypeError, ValueError):
+            candidate = None
+    if candidate is None and tray_target in {"254", "255"}:
+        previous_print = (getattr(mqtt_bambulab, "PRINTER_STATE_LAST", {}) or {}).get("print", {}) or {}
+        previous_target = str((previous_print.get("ams") or {}).get("tray_tar") or "")
+        if previous_target.isdigit() and 0 <= int(previous_target) < 16:
+            candidate = (mqtt_bambulab.getAMSFromTray(int(previous_target)), int(previous_target) % 4, "unloading")
+    if candidate is None and state in {"PREPARE", "RUNNING", "PAUSE"} and mapping is not None:
+        try:
+            ams_id = mqtt_bambulab.getAMSFromTray(mapping)
+            tray_id = int(mapping) - int(ams_id) * 4
+            if 0 <= tray_id < 4:
+                candidate = (ams_id, tray_id, "printing")
+        except (TypeError, ValueError):
+            candidate = None
+    if candidate is None:
+        return None
+    ams_id, tray_id, activity_state = candidate
+    tray_key = json.dumps(f"{PRINTER_ID}_{ams_id}_{tray_id}")
+    ams_tray = next(
+        (tray for ams in ams_config.get("ams", []) or []
+         if str(ams.get("id")) == str(ams_id)
+         for tray in ams.get("tray", []) or []
+         if str(tray.get("id")) == str(tray_id)),
+        None,
+    )
+    spool = next(
+        (item for item in inventory_db.list_spools(include_archived=True)
+         if str(item.get("active_tray") or "") in {tray_key, tray_key.strip('"')}),
+        None,
+    )
+    filament = (spool or {}).get("filament") or {}
+    label = ""
+    physical_color = str((ams_tray or {}).get("tray_color") or "").strip().replace("#", "").upper()
+    if len(physical_color) >= 8:
+        physical_color = physical_color[:6]
+    if physical_color:
+        try:
+            color_match = next(
+                (color for color in inventory_db.list_colors()
+                 if str(color.get("hex_code") or "").replace("#", "").upper()[:6] == physical_color),
+                None,
+            )
+            label = str((color_match or {}).get("name") or "").strip()
+        except Exception:
+            label = ""
+    if not label:
+        label = str(filament.get("name") or filament.get("material") or "Filament").strip()
+    return {"label": label, "state": activity_state, "tray": f"{ams_id}:{tray_id}"}
 
 
 def _inventory_ams_status_fingerprint():
@@ -1048,6 +1185,7 @@ def inject_m0bambospool_version():
         "printer_status": _ui_text(_printer_status_code()),
         "printer_waiting_message": _ui_text(_printer_temperature_waiting_code() or ""),
         "printer_preparation_status": _ui_text(_printer_preparation_status_code() or ""),
+        "filament_activity": _current_filament_activity(),
         "mqtt_connected": mqtt_bambulab.isMqttClientConnected(),
         "PRINTER_ID": PRINTER_ID,
         "printer_is_busy": _printer_is_busy(),

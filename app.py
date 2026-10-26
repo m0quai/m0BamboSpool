@@ -700,6 +700,36 @@ def print_history():
   # Historical print assignments are resolved from our local catalog.
   spool_list = inventory_database.list_spools(include_archived=True)
 
+  # The AMS slot is authoritative for historical rows that were recorded
+  # before the spool identity was resolved.  Build a current slot index so a
+  # transient ``spool_id = NULL`` row cannot appear as an extra filament in
+  # history when the slot is already assigned locally.
+  active_spools_by_slot = {}
+  for assigned_spool in spool_list:
+    active_tray = assigned_spool.get("active_tray")
+    if not active_tray:
+      active_tray = (assigned_spool.get("extra") or {}).get("active_tray")
+    try:
+      active_text = str(active_tray or "").strip().strip('"')
+      active_parts = active_text.rsplit("_", 2)
+      if len(active_parts) == 3:
+        assigned_slot = int(active_parts[1]) * 4 + int(active_parts[2])
+        if 0 <= assigned_slot < 16:
+          existing = active_spools_by_slot.get(assigned_slot)
+          if existing is None:
+            active_spools_by_slot[assigned_slot] = assigned_spool
+          else:
+            # Never guess when the local catalog contains a conflicting
+            # assignment.  The AMS refresh must resolve this before a row can
+            # be rebound safely.
+            active_spools_by_slot[assigned_slot] = False
+            log(
+              f"[History] Mehrdeutige lokale Fachzuordnung A{assigned_slot + 1}: "
+              f"Spulen {existing.get('id')} und {assigned_spool.get('id')}"
+            )
+    except (TypeError, ValueError):
+      continue
+
   for print in prints:
     tracking_row = layer_tracking_map.get(print["id"])
     if tracking_row:
@@ -758,11 +788,94 @@ def print_history():
     print["filament_usage"] = filament_usage_data
     print["total_cost"] = 0
 
+    # Physical slots already represented by a resolved spool in this print.
+    # This prevents an unresolved logical filament from being attached to the
+    # same AMS slot again merely because its logical index happens to match.
+    occupied_history_slots = set()
+    logical_history_slots = set()
+    resolved_history_spools = set()
+    for existing_filament in print["filament_usage"]:
+      try:
+        if existing_filament.get("ams_slot") is not None:
+          logical_history_slots.add(int(existing_filament.get("ams_slot")))
+      except (TypeError, ValueError):
+        pass
+      existing_id = existing_filament.get("spool_id")
+      if existing_id is None:
+        continue
+      resolved_history_spools.add(existing_id)
+      existing_spool = next((item for item in spool_list if item.get("id") == existing_id), None)
+      if existing_spool is None:
+        continue
+      existing_active = existing_spool.get("active_tray") or (existing_spool.get("extra") or {}).get("active_tray")
+      try:
+        existing_parts = str(existing_active or "").strip().strip('"').rsplit("_", 2)
+        if len(existing_parts) == 3:
+          existing_slot = int(existing_parts[1]) * 4 + int(existing_parts[2])
+          if 0 <= existing_slot < 16:
+            occupied_history_slots.add(existing_slot)
+      except (TypeError, ValueError):
+        continue
+
     for filament in print["filament_usage"]:
+      # A tracker row can be emitted before the RFID/AMS identity is known.
+      # Resolve that row from its physical (or logical fallback) AMS slot;
+      # never infer the spool from colour.
+      if filament.get("spool_id") is None:
+        slot_value = filament.get("physical_ams_slot")
+        if slot_value is None:
+          slot_value = filament.get("ams_slot")
+        try:
+          resolved_slot = int(slot_value)
+        except (TypeError, ValueError):
+          resolved_slot = None
+        resolved_spool = active_spools_by_slot.get(resolved_slot)
+        if resolved_spool not in (None, False) and resolved_slot in occupied_history_slots:
+          # Prefer an otherwise unrepresented active AMS slot. This is still
+          # purely AMS-based and avoids rendering a second copy of the spool
+          # already assigned to the candidate slot.
+          free_slots = sorted(
+            slot for slot, candidate in active_spools_by_slot.items()
+            if candidate not in (None, False) and slot not in occupied_history_slots
+          )
+          if free_slots:
+            # If a logical filament still has no resolved spool, use the
+            # remaining active AMS slot even for a completed/aborted print.
+            # Once all logical filaments already have a spool, the row is a
+            # stale provisional duplicate and must not invent Orange/A2.
+            if len(resolved_history_spools) < len(logical_history_slots):
+              resolved_slot = free_slots[0]
+              resolved_spool = active_spools_by_slot[resolved_slot]
+            else:
+              # A completed/aborted job may contain a stale provisional row
+              # for a logical filament that was never used. Do not invent an
+              # unrelated AMS spool (for example Orange in A2) for history.
+              filament["_drop_unresolved_duplicate"] = True
+        if resolved_spool not in (None, False):
+          filament["spool_id"] = resolved_spool.get("id")
+          filament["physical_ams_slot"] = resolved_slot
+          occupied_history_slots.add(resolved_slot)
+          resolved_history_spools.add(filament.get("spool_id"))
       if filament["spool_id"]:
         for spool in spool_list:
           if spool['id'] == filament["spool_id"]:
             filament["spool"] =  spool
+            # The local AMS assignment is authoritative.  The initial 3MF
+            # mapping can be provisional (especially after reconnect/resume),
+            # so resolve the displayed tray from the spool's current AMS
+            # assignment.  This is an AMS lookup, never a colour lookup.
+            active_tray = spool.get("active_tray")
+            if not active_tray:
+              active_tray = (spool.get("extra") or {}).get("active_tray")
+            try:
+              active_text = str(active_tray or "").strip().strip('"')
+              active_parts = active_text.rsplit("_", 2)
+              if len(active_parts) == 3:
+                physical_slot = int(active_parts[1]) * 4 + int(active_parts[2])
+                if 0 <= physical_slot < 16:
+                  filament["physical_ams_slot"] = physical_slot
+            except (TypeError, ValueError):
+              pass
             initial_weight = _to_float(spool.get("initial_weight")) or 0.0
             price = _to_float(spool.get("price")) or 0.0
             cost_per_gram = _to_float(spool.get("cost_per_gram"))
@@ -771,6 +884,47 @@ def print_history():
             filament["cost"] = (_to_float(filament.get("grams_used")) or 0.0) * cost_per_gram
             print["total_cost"] += filament["cost"]
             break
+
+    # AMS tray order is the stable history order.  This is deliberately done
+    # after enrichment because legacy rows may receive a fallback slot above.
+    print["filament_usage"].sort(key=_history_slot_order)
+
+    # One physical spool can be represented by multiple logical 3MF
+    # filament entries. Show it once in history and aggregate its usage.
+    merged_usage = []
+    merged_by_slot = {}
+    for filament in print["filament_usage"]:
+      if filament.get("_drop_unresolved_duplicate"):
+        continue
+      # Keep every logical G-Code filament visible.  A reconnect can create
+      # duplicate rows for the same logical index, but two different logical
+      # filament indices must never be collapsed merely because the printer
+      # temporarily mapped them to the same physical spool/tray.
+      key = (
+        filament.get("spool_id"),
+        filament.get("physical_ams_slot"),
+        filament.get("ams_slot"),
+      )
+      if filament.get("spool_id") is not None and key in merged_by_slot:
+        target = merged_by_slot[key]
+        for field in ("grams_used", "length_used", "calculated_length", "consumed_length"):
+          current = _to_float(target.get(field))
+          added = _to_float(filament.get(field))
+          if added is not None:
+            target[field] = (current or 0.0) + added
+        # Expected values describe the logical G-Code filament and must not
+        # be doubled when a reconnect created a duplicate tracker row.
+        for field in ("estimated_grams", "estimated_length"):
+          current = _to_float(target.get(field))
+          added = _to_float(filament.get(field))
+          if current is None:
+            target[field] = added
+          elif added is not None:
+            target[field] = max(current, added)
+        continue
+      merged_by_slot[key] = filament
+      merged_usage.append(filament)
+    print["filament_usage"] = merged_usage
   
   total_pages = max(1, math.ceil(total_prints / per_page))
 

@@ -13,6 +13,13 @@ from config import DATABASE_NAME, DATABASE_PATH, DATABASE_PATH_OVERRIDE, DATABAS
 
 LEGACY_DATABASE_NAME = "3d_printer_logs.db"
 
+# Humidity/temperature charts are deliberately short-lived telemetry.  The
+# writer stores one sample per quarter-hour, so two days equals 96 * 2 active
+# samples per AMS.  We cap by sample count instead of wall-clock age: if the
+# printer is offline for several days, its last samples are not discarded just
+# because time passed without new telemetry.
+HUMIDITY_HISTORY_MAX_SAMPLES = 192
+
 
 def _migrate_legacy_database_file(target_path: Path) -> None:
     default_target = Path(__file__).resolve().parent / "data" / DATABASE_NAME
@@ -58,8 +65,9 @@ def connect_database(path: str | Path | None = None) -> sqlite3.Connection:
     target_path = Path(path).expanduser() if path is not None else DATABASE_PATH
     target_path.parent.mkdir(parents=True, exist_ok=True)
     _migrate_legacy_database_file(target_path)
-    connection = sqlite3.connect(str(target_path))
+    connection = sqlite3.connect(str(target_path), timeout=15)
     connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute("PRAGMA busy_timeout = 15000")
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS runtime_metadata (
@@ -137,12 +145,14 @@ def record_humidity_snapshots(
     inserted = 0
     with connect_database() as connection:
         connection.execute("BEGIN IMMEDIATE")
+        touched_ams_ids: set[str] = set()
         for index, metric in enumerate(metrics):
             if not isinstance(metric, dict):
                 continue
             ams_id = str(metric.get("id", index)).strip()
             if not ams_id:
                 ams_id = str(index)
+            touched_ams_ids.add(ams_id)
             raw_value = metric.get("humidity_raw")
             try:
                 humidity_raw = float(str(raw_value).rstrip("%")) if raw_value not in (None, "") else None
@@ -179,6 +189,21 @@ def record_humidity_snapshots(
                     (str(printer_id), ams_id, timestamp, humidity_raw, humidity_level, temperature),
                 )
                 inserted += 1
+        # Keep only the newest two days worth of quarter-hour samples for each
+        # AMS.  Older rows are soft-deleted (never physically removed).
+        for ams_id in touched_ams_ids:
+            stale_rows = connection.execute(
+                "SELECT id FROM humidity_history "
+                "WHERE printer_id = ? AND ams_id = ? AND deleted = 0 "
+                "ORDER BY observed_at DESC, id DESC "
+                "LIMIT -1 OFFSET ?",
+                (str(printer_id), ams_id, HUMIDITY_HISTORY_MAX_SAMPLES),
+            ).fetchall()
+            if stale_rows:
+                connection.executemany(
+                    "UPDATE humidity_history SET deleted = 1 WHERE id = ?",
+                    [(row[0],) for row in stale_rows],
+                )
         connection.commit()
     return inserted
 
@@ -190,9 +215,9 @@ def list_humidity_history(
 ) -> list[dict]:
     # Return humidity history in chronological order for the chart.
     try:
-        safe_limit = max(1, min(int(limit), 2000))
+        safe_limit = max(1, min(int(limit), HUMIDITY_HISTORY_MAX_SAMPLES))
     except (TypeError, ValueError):
-        safe_limit = 500
+        safe_limit = HUMIDITY_HISTORY_MAX_SAMPLES
     with connect_database() as connection:
         if ams_id not in (None, ""):
             rows = connection.execute(

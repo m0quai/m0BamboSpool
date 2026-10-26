@@ -1,4 +1,5 @@
 import sqlite3
+import time
 from datetime import datetime
 from pathlib import Path
 from config import DATABASE_NAME, DATABASE_PATH, DATABASE_TYPE
@@ -78,6 +79,8 @@ def create_database() -> None:
             estimated_length REAL,
             calculated_length REAL,
             consumed_length REAL,
+            gcode_filament_type TEXT,
+            gcode_color TEXT,
             deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
         FOREIGN KEY (print_id) REFERENCES prints (id) ON DELETE CASCADE
         )
@@ -101,7 +104,8 @@ def create_database() -> None:
         cursor.execute('''
             CREATE VIEW v_spool_usage AS
             SELECT u.*, f.name AS filament_name, m.name AS material_name,
-                   c.hex_code AS color_hex
+                   COALESCE(u.gcode_color, c.hex_code) AS color_hex,
+                   u.gcode_color, u.gcode_filament_type
             FROM spool_usage u
             LEFT JOIN spools s ON s.id = u.spool_id AND s.deleted = 0
             LEFT JOIN filaments f ON f.id = s.filament_id AND f.deleted = 0
@@ -192,6 +196,8 @@ def create_database() -> None:
         "physical_ams_slot",
         "INTEGER",
     )
+    _ensure_column(cursor, "spool_usage", "gcode_filament_type", "TEXT")
+    _ensure_column(cursor, "spool_usage", "gcode_color", "TEXT")
 
     # Ensure column definitions exist for older databases
     _ensure_column(
@@ -239,15 +245,17 @@ def create_database() -> None:
             physical_ams_slot INTEGER,
             calculated_length REAL,
             consumed_length REAL,
+            gcode_filament_type TEXT,
+            gcode_color TEXT,
             deleted INTEGER NOT NULL DEFAULT 0
         )""")
         cursor.execute("""INSERT INTO spool_usage_new
             (id, print_id, spool_id, grams_used, ams_slot, estimated_grams,
              length_used, estimated_length, physical_ams_slot, calculated_length,
-             consumed_length, deleted)
+             consumed_length, gcode_filament_type, gcode_color, deleted)
             SELECT id, print_id, spool_id, grams_used, ams_slot, estimated_grams,
                    length_used, estimated_length, physical_ams_slot, calculated_length,
-                   consumed_length, deleted
+                   consumed_length, gcode_filament_type, gcode_color, deleted
             FROM spool_usage""")
         cursor.execute("DROP TABLE spool_usage")
         cursor.execute("ALTER TABLE spool_usage_new RENAME TO spool_usage")
@@ -256,7 +264,8 @@ def create_database() -> None:
         cursor.execute('''
             CREATE VIEW v_spool_usage AS
             SELECT u.*, f.name AS filament_name, m.name AS material_name,
-                   c.hex_code AS color_hex
+                   COALESCE(u.gcode_color, c.hex_code) AS color_hex,
+                   u.gcode_color, u.gcode_filament_type
             FROM spool_usage u
             LEFT JOIN spools s ON s.id = u.spool_id AND s.deleted = 0
             LEFT JOIN filaments f ON f.id = s.filament_id AND f.deleted = 0
@@ -286,6 +295,23 @@ def create_database() -> None:
         cursor.execute("DROP TABLE filament_usage_events")
         cursor.execute("ALTER TABLE filament_usage_events_new RENAME TO filament_usage_events")
 
+    # Keep the compatibility view in sync after every schema migration.  A
+    # view created by an older image would otherwise hide the persisted 3MF
+    # colour and history would regress to the stale spool colour.
+    if has_spools_table:
+        cursor.execute("DROP VIEW IF EXISTS v_spool_usage")
+        cursor.execute('''
+            CREATE VIEW v_spool_usage AS
+            SELECT u.*, f.name AS filament_name, m.name AS material_name,
+                   COALESCE(u.gcode_color, c.hex_code) AS color_hex,
+                   u.gcode_color, u.gcode_filament_type
+            FROM spool_usage u
+            LEFT JOIN spools s ON s.id = u.spool_id AND s.deleted = 0
+            LEFT JOIN filaments f ON f.id = s.filament_id AND f.deleted = 0
+            LEFT JOIN materials m ON m.id = f.material_id AND m.deleted = 0
+            LEFT JOIN colors c ON c.id = f.color_id AND c.deleted = 0
+            WHERE u.deleted = 0
+        ''')
     conn.commit()
     conn.close()
 
@@ -571,25 +597,36 @@ def get_filament_usage_for_reconciliation(print_id: int) -> list[dict]:
 def set_estimated_duration_from_remaining(print_id: int, remaining_minutes: float) -> None:
     if print_id is None or remaining_minutes <= 0:
         return
-    conn = connect_database(db_config["db_path"])
-    row = conn.execute(
-        "SELECT print_date FROM prints WHERE id = ?",
-        (int(print_id),),
-    ).fetchone()
-    elapsed_minutes = 0.0
-    if row and row[0]:
+    for attempt in range(3):
+        conn = None
         try:
-            started_at = datetime.fromisoformat(str(row[0]))
-            elapsed_minutes = max((datetime.now() - started_at).total_seconds() / 60.0, 0.0)
-        except ValueError:
+            conn = connect_database(db_config["db_path"])
+            row = conn.execute(
+                "SELECT print_date FROM prints WHERE id = ?",
+                (int(print_id),),
+            ).fetchone()
             elapsed_minutes = 0.0
-    estimated_total = max(float(remaining_minutes) + elapsed_minutes, float(remaining_minutes))
-    conn.execute(
-        "UPDATE print_layer_tracking SET estimated_duration_minutes = ? WHERE print_id = ?",
-        (estimated_total, int(print_id)),
-    )
-    conn.commit()
-    conn.close()
+            if row and row[0]:
+                try:
+                    started_at = datetime.fromisoformat(str(row[0]))
+                    elapsed_minutes = max((datetime.now() - started_at).total_seconds() / 60.0, 0.0)
+                except ValueError:
+                    elapsed_minutes = 0.0
+            estimated_total = max(float(remaining_minutes) + elapsed_minutes, float(remaining_minutes))
+            conn.execute(
+                "UPDATE print_layer_tracking SET estimated_duration_minutes = ? WHERE print_id = ?",
+                (estimated_total, int(print_id)),
+            )
+            conn.commit()
+            return
+        except sqlite3.OperationalError as exc:
+            transient = any(token in str(exc).lower() for token in ("disk i/o", "database is locked", "busy"))
+            if not transient or attempt == 2:
+                raise
+            time.sleep(0.25 * (attempt + 1))
+        finally:
+            if conn is not None:
+                conn.close()
 
 
 def update_printer_job_status(
@@ -763,6 +800,8 @@ def insert_filament_usage(
     cursor.execute(
         """UPDATE spool_usage
            SET grams_used = MAX(COALESCE(grams_used, 0), ?),
+               gcode_filament_type = COALESCE(NULLIF(?, ''), gcode_filament_type),
+               gcode_color = COALESCE(NULLIF(?, ''), gcode_color),
                estimated_grams = COALESCE(?, estimated_grams),
                length_used = MAX(COALESCE(length_used, 0), ?),
                estimated_length = COALESCE(?, estimated_length),
@@ -771,6 +810,8 @@ def insert_filament_usage(
            WHERE print_id = ? AND ams_slot = ?""",
         (
             grams_used,
+            filament_type,
+            color,
             estimated_grams,
             length_used,
             estimated_length,
@@ -782,9 +823,9 @@ def insert_filament_usage(
     )
     if cursor.rowcount == 0:
         cursor.execute('''
-            INSERT INTO spool_usage (print_id, grams_used, ams_slot, estimated_grams, length_used, estimated_length, calculated_length, physical_ams_slot)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (print_id, grams_used, ams_slot, estimated_grams, length_used, estimated_length, length_used, physical_ams_slot))
+            INSERT INTO spool_usage (print_id, grams_used, ams_slot, estimated_grams, length_used, estimated_length, calculated_length, physical_ams_slot, gcode_filament_type, gcode_color)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (print_id, grams_used, ams_slot, estimated_grams, length_used, estimated_length, length_used, physical_ams_slot, filament_type, color))
     conn.commit()
     conn.close()
 
@@ -1005,6 +1046,35 @@ def update_filament_grams_used(print_id: int, filament_id: int, grams_used: floa
     conn.close()
 
 
+def _ensure_spool_usage_view(conn: sqlite3.Connection) -> None:
+    # The inventory migration can recreate tables after print_history startup.
+    # Recreate the derived view before any history query so that ordering of
+    # module initialization cannot cause a missing-view error.
+    view_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'view' AND name = 'v_spool_usage'"
+    ).fetchone()
+    if view_exists:
+        return
+    required = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('spool_usage', 'spools', 'filaments', 'materials', 'colors')"
+    )}
+    if 'spool_usage' not in required:
+        return
+    conn.executescript("""
+        DROP VIEW IF EXISTS v_spool_usage;
+        CREATE VIEW v_spool_usage AS
+        SELECT u.*, f.name AS filament_name, m.name AS material_name,
+               c.hex_code AS color_hex
+        FROM spool_usage u
+        LEFT JOIN spools s ON s.id = u.spool_id AND s.deleted = 0
+        LEFT JOIN filaments f ON f.id = s.filament_id AND f.deleted = 0
+        LEFT JOIN materials m ON m.id = f.material_id AND m.deleted = 0
+        LEFT JOIN colors c ON c.id = f.color_id AND c.deleted = 0
+        WHERE u.deleted = 0;
+    """)
+    conn.commit()
+
+
 def get_prints_with_filament(limit: int | None = None, offset: int | None = None, include_deleted: bool = False):
     #
     # Retrieves print jobs along with their associated filament usage, grouped by print job.
@@ -1012,6 +1082,7 @@ def get_prints_with_filament(limit: int | None = None, offset: int | None = None
     # A total count is returned to support pagination.
     conn = connect_database(db_config["db_path"])
     conn.row_factory = sqlite3.Row  # Enable column name access
+    _ensure_spool_usage_view(conn)
 
     count_cursor = conn.cursor()
     where_clause = "" if include_deleted else " WHERE COALESCE(is_deleted, 0) = 0 AND COALESCE(deleted, 0) = 0"
@@ -1028,6 +1099,8 @@ def get_prints_with_filament(limit: int | None = None, offset: int | None = None
                'spool_id', f.spool_id,
                 'filament_type', f.material_name,
                 'color', f.color_hex,
+                'gcode_color', f.gcode_color,
+                'gcode_filament_type', f.gcode_filament_type,
                 'grams_used', f.grams_used,
                 'estimated_grams', f.estimated_grams,
                 'length_used', f.length_used,

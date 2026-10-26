@@ -2,12 +2,16 @@ import os
 import time
 import re
 import builtins
+import threading
 from datetime import datetime
 
 
 _pending_ams_tray = None
 _pending_ams_uid = None
 _live_line_open = False
+_recent_log_lock = threading.Lock()
+_recent_log_entries = {}
+_DUPLICATE_LOG_WINDOW_SECONDS = 2.0
 _ZERO_AMS_UID = "00000000000000000000000000000000"
 _APPLICATION_ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -195,7 +199,7 @@ def _format_ams_console_message(text):
 def log_with_timestamp(*args, sep=" ", end="\n", file=None, flush=True) -> None:
     #
     # Print a message with a leading timestamp, preserving the standard print API.
-    global _live_line_open
+    global _live_line_open, _recent_log_entries
     if _live_line_open:
         builtins.print()
         _live_line_open = False
@@ -208,6 +212,26 @@ def log_with_timestamp(*args, sep=" ", end="\n", file=None, flush=True) -> None:
         if formatted is None:
             return
         args = (formatted,)
+
+    # MQTT reconnects can replay the same status packet immediately. Avoid
+    # filling the logbook with byte-identical entries while preserving later
+    # legitimate repeats. The key deliberately includes the complete rendered
+    # message, so different bookings are never collapsed.
+    if file is None and end == "\n":
+        dedup_key = (sep, tuple(str(value) for value in args))
+        now = time.monotonic()
+        with _recent_log_lock:
+            previous = _recent_log_entries.get(dedup_key)
+            _recent_log_entries[dedup_key] = now
+            if previous is not None and now - previous <= _DUPLICATE_LOG_WINDOW_SECONDS:
+                return
+            if len(_recent_log_entries) > 2048:
+                cutoff = now - _DUPLICATE_LOG_WINDOW_SECONDS
+                _recent_log_entries = {
+                    key: timestamp
+                    for key, timestamp in _recent_log_entries.items()
+                    if timestamp >= cutoff
+                }
 
     builtins.print(f"[{timestamp}]", *args, sep=sep, end=end, file=file, flush=flush)
 

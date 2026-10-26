@@ -347,12 +347,13 @@ def _metadata_filament_entries(metadata: dict) -> dict[int, dict]:
 
 
 def _normalize_3mf_ams_mapping(metadata: dict) -> None:
-  """Map zero-based M620 indices to physical AMS trays by RFID/color."""
-  def _color_key(value):
-    value = str(value or "").replace("#", "").strip().lower()
-    if len(value) >= 8:
-      value = value[:6]
-    return value
+  """Map zero-based M620 indices to observed physical AMS trays.
+
+  Filament colours in a 3MF are descriptive only.  They are not a reliable
+  spool identifier because the same colour may exist in several trays.  The
+  physical tray is learned from the printer's ``tray_tar`` packets and from
+  an unambiguous RFID assignment when one exists.
+  """
 
   entries = _metadata_filament_entries(metadata)
   if not entries:
@@ -373,21 +374,15 @@ def _normalize_3mf_ams_mapping(metadata: dict) -> None:
       ams_trays.append((ams_id * 4 + tray_id, tray))
   for logical_id, filament in entries.items():
     wanted_rfid = str(filament.get("tray_info_idx") or "").strip().lower()
-    wanted_color = _color_key(filament.get("color_hex") or filament.get("color"))
-    color_matches = []
     rfid_matches = []
     for tray_value, tray in ams_trays:
       tray_rfid = str(tray.get("tray_info_idx") or "").strip().lower()
-      tray_color = _color_key(tray.get("tray_color"))
       if wanted_rfid and tray_rfid and wanted_rfid == tray_rfid:
         rfid_matches.append(tray_value)
-      if wanted_color and tray_color and wanted_color == tray_color:
-        color_matches.append(tray_value)
-    # A shared Bambu profile/RFID is common for generic filament.  The exact
-    # live color therefore takes precedence whenever it identifies one tray.
-    if len(set(color_matches)) == 1:
-      mapping[logical_id] = color_matches[0]
-    elif len(set(rfid_matches)) == 1:
+    # RFID is used only when it identifies exactly one tray.  Shared profile
+    # IDs (for example GFA00) intentionally remain unresolved until the
+    # printer reports the active tray.
+    if len(set(rfid_matches)) == 1:
       mapping[logical_id] = rfid_matches[0]
   order = metadata.get("filamentOrder") or {}
   first_id = min(logical_ids, key=lambda key: order.get(str(key), order.get(key, key)))
@@ -411,9 +406,9 @@ def _spool_for_mapping(mapping_value):
       continue
     try:
       active = json.loads(active)
-    except Exception:
-      pass
-    if active == target_uid:
+    except (TypeError, ValueError):
+      active = str(active).strip().strip('"')
+    if str(active or "").strip().strip('"') == str(target_uid).strip().strip('"'):
       return spool
   return None
 
@@ -810,11 +805,15 @@ def map_filament(tray_tar):
   # Prüfen, ob ein Filamentwechsel aktiv ist (stg_cur == 4)
   #if stg_cur == 4 and tray_tar is not None:
   if PENDING_PRINT_METADATA:
-    PENDING_PRINT_METADATA["filamentChanges"].append(tray_tar)  # Jeder Wechsel zählt, auch auf das gleiche Tray
-    log(f'Filamentchange {len(PENDING_PRINT_METADATA["filamentChanges"])}: Tray {tray_tar}')
+    # Metadata can arrive from the background 3MF worker without the runtime
+    # bookkeeping arrays.  Initialize them before processing a live MQTT
+    # tray change so one sparse status packet cannot stop the MQTT loop.
+    changes = PENDING_PRINT_METADATA.setdefault("filamentChanges", [])
+    changes.append(tray_tar)  # Jeder Wechsel zählt, auch auf das gleiche Tray
+    log(f'Filamentchange {len(changes)}: Tray {tray_tar}')
 
     # Anzahl der erkannten Wechsel
-    change_count = len(PENDING_PRINT_METADATA["filamentChanges"]) - 1  # -1, weil der erste Eintrag kein Wechsel ist
+    change_count = len(changes) - 1  # -1, weil der erste Eintrag kein Wechsel ist
 
     filament_order = PENDING_PRINT_METADATA.get("filamentOrder") or {}
     ordered_filaments = sorted(filament_order.items(), key=lambda entry: entry[1])

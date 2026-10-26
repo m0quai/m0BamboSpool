@@ -59,6 +59,7 @@
       <div class="card-body">
         <ol class="home-activity-list mb-0" id="home-activity-list">
           <li class="active"><span class="home-activity-dot"></span><strong>{{ _('Druckerstatus') }}: {{ printer_status }}</strong><small>{{ format_datetime(now()) if now is defined else '' }}</small></li>
+          {% if filament_activity %}<li class="active"><span class="home-activity-dot"></span><strong><span class="filament-activity-spinner" aria-hidden="true"></span>{{ filament_activity.label }} {{ {'loading': _('wird geladen'), 'unloading': _('wird entladen'), 'printing': _('wird gedruckt')}.get(filament_activity.state, '') }}</strong><small>{{ format_datetime(now()) if now is defined else '' }}</small></li>{% endif %}
           {% if printer_preparation_status %}
           <li class="active"><span class="home-activity-dot"></span><strong>{{ _('Current activity') }}: {{ printer_preparation_status }}</strong><small>{{ format_datetime(now()) if now is defined else '' }}</small></li>
           {% endif %}
@@ -168,6 +169,11 @@
     finished: {{ _('Finished')|tojson }},
     unknown: {{ _('Unknown')|tojson }}
   };
+  const filamentActivityLabels = {
+    loading: {{ _('wird geladen')|tojson }},
+    unloading: {{ _('wird entladen')|tojson }},
+    printing: {{ _('wird gedruckt')|tojson }}
+  };
 
   function statusLabel(value) {
     const labels = { COMPLETED: {{ _('Finished')|tojson }}, ABORTED: {{ _('Aborted')|tojson }}, FAILED: {{ _('Failed')|tojson }}, RUNNING: {{ _('Printing')|tojson }}, PREPARING: {{ _('Preparing')|tojson }}, PAUSED: {{ _('Paused')|tojson }} };
@@ -190,13 +196,15 @@
     return `<span class="humidity-droplet-wrapper humidity-droplet-home" title="${letter}" aria-label="${letter}"><svg class="humidity-droplet" viewBox="-0.5 -0.5 17 17" aria-hidden="true" focusable="false"><defs><clipPath id="${clipId}"><path d="M8 16a6 6 0 0 0 6-6c0-1.655-1.122-2.904-2.432-4.362C10.254 4.176 8.75 2.503 8 0c0 0-6 5.686-6 10a6 6 0 0 0 6 6M6.646 4.646l.708.708c-.29.29-1.128 1.311-1.907 2.87l-.894-.448c.82-1.641-1.717-2.753-2.093-3.13" /></clipPath></defs><rect width="100%" height="100%" class="droplet-base" clip-path="url(#${clipId})" /><rect width="100%" height="${fill}%" y="${top}%" class="droplet-fill" clip-path="url(#${clipId})" /><path class="droplet-outline" d="M8 16a6 6 0 0 0 6-6c0-1.655-1.122-2.904-2.432-4.362C10.254 4.176 8.75 2.503 8 0c0 0-6 5.686-6 10a6 6 0 0 0 6 6" /></svg><span class="humidity-level-number">${letter}</span></span>`;
   }
 
-  function renderActivities(item, printerStatus, preparationStatus) {
+  function renderActivities(item, printerStatus, preparationStatus, filamentStatus) {
     if (!activityList) return;
     const preparationEntries = preparationStatus
       ? [{ label: `${activityLabels.currentActivity}: ${preparationStatus}`, time: new Date().toISOString(), active: true }]
       : [];
+    const filamentEntries = filamentStatus ? [{ label: `${filamentStatus.label} ${filamentActivityLabels[filamentStatus.state] || ''}`, time: new Date().toISOString(), active: true, icon: true }] : [];
     const entries = [
       { label: `${activityLabels.printerStatus}: ${printerStatus || activityLabels.unknown}`, time: new Date().toISOString(), active: true },
+      ...filamentEntries,
       ...preparationEntries,
       ...(item ? [
         { label: `${activityLabels.status}: ${statusLabel(item.status)}`, time: item.last_status_at || item.print_date, active: true },
@@ -206,7 +214,7 @@
         { label: activityLabels.finished, time: item.actual_end_time }
       ] : preparationEntries)
     ].filter(entry => entry.time);
-    activityList.innerHTML = entries.map(entry => `<li class="${entry.active ? 'active' : ''}"><span class="home-activity-dot"></span><strong>${entry.label}</strong><small>${formatUiDateTime(entry.time)}</small></li>`).join('');
+    activityList.innerHTML = entries.map(entry => `<li class="${entry.active ? 'active' : ''}"><span class="home-activity-dot"></span><strong>${entry.icon ? '<span class="filament-activity-spinner" aria-hidden="true"></span>' : ''}${entry.label}</strong><small>${formatUiDateTime(entry.time)}</small></li>`).join('');
   }
 
   function update(data) {
@@ -269,7 +277,7 @@
       }
     }
 
-    renderActivities(data.last_print, data.printer_status, preparationStatus);
+    renderActivities(data.last_print, data.printer_status, preparationStatus, data.filament_activity || null);
 
     const download = data.download || {};
     if (!downloadStatus) return;

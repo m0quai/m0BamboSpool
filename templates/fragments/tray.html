@@ -21,6 +21,12 @@
       {% if tray_data.get('nfc_identified') %}
         <i class="bi bi-nfc text-primary" title="{{ _('Per NFC identifiziert und gesperrt') }}" aria-label="{{ _('Per NFC identifiziert und gesperrt') }}"></i>
       {% endif %}
+      {% if tray_data.get('ams_activity_state') %}
+        <span class="ams-tray-activity text-primary" title="{{ _('Filament wird entladen') if tray_data.get('ams_activity_state') == 'unloading' else (_('Filament wird gedruckt') if tray_data.get('ams_activity_state') == 'printing' else _('Filament wird geladen')) }}" aria-label="{{ _('Filament wird entladen') if tray_data.get('ams_activity_state') == 'unloading' else (_('Filament wird gedruckt') if tray_data.get('ams_activity_state') == 'printing' else _('Filament wird geladen')) }}">
+          <span class="filament-activity-spinner" aria-hidden="true"></span>
+          <span>{{ {'loading': _('wird geladen'), 'unloading': _('wird entladen'), 'printing': _('wird gedruckt')}.get(tray_data.get('ams_activity_state'), '') }}</span>
+        </span>
+      {% endif %}
     </div>
     {% if tray_data.tray_color and tray_data.spool_id and not physically_empty %}
       {% if tray_data.color_mismatch %}

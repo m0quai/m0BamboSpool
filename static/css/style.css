@@ -1952,3 +1952,49 @@ main.container {
 .reference-color-preview { display: flex; align-items: center; justify-content: center; min-height: 2.1rem; margin: .25rem 0 1rem; border: 1px solid var(--bs-border-color); border-radius: .35rem; font-family: var(--bs-font-monospace); font-size: .85rem; font-weight: 600; }
 @media (max-width: 900px) { .reference-management-layout { grid-template-columns: 1fr; } .reference-management-editor { position: static; } }
 @media (max-width: 520px) { .reference-management-heading { align-items: start; flex-direction: column; } }
+.ams-tray-activity {
+  display: inline-flex;
+  align-items: center;
+  gap: .25rem;
+  white-space: nowrap;
+  font-size: .82rem;
+}
+
+.home-filament-activity {
+    color: var(--m0-ink);
+    font-weight: 600;
+    padding: .45rem .65rem;
+    border: 1px solid var(--m0-line);
+    border-radius: .5rem;
+    background: #f7faff;
+}
+
+.ams-tray-activity-icon {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  margin-right: .35rem;
+  vertical-align: -.1em;
+  transform-origin: center;
+  animation: ams-tray-activity-spin 1s linear infinite;
+}
+
+.filament-activity-spinner {
+  display: inline-block;
+  width: .9rem;
+  height: .9rem;
+  margin-right: .4rem;
+  vertical-align: -.1rem;
+  border: 2px solid rgba(40, 120, 240, .22);
+  border-top-color: var(--m0-brand);
+  border-radius: 50%;
+  animation: filament-activity-spin .8s linear infinite;
+}
+
+@keyframes filament-activity-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes ams-tray-activity-spin {
+  to { transform: rotate(360deg); }
+}

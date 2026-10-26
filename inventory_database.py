@@ -43,6 +43,7 @@ def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(path, timeout=15, factory=_ClosingConnection)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 15000")
     return conn
 
 
@@ -1579,9 +1580,9 @@ def set_spool_extra(spool_id: int | str, values: dict[str, Any]) -> None:
             ).fetchone()
             if not current:
                 raise KeyError(f"No spool with ID {spool_id}")
-            if current and _has_active_print(conn) and {"tag", "active_tray"}.intersection(fields):
-                raise ValueError("NFC-Tag und aktives Fach können während eines Drucks nicht geändert werden.")
             system_clear = fields.get("active_tray_source") == "system_clear"
+            if current and _has_active_print(conn) and {"tag", "active_tray"}.intersection(fields) and not system_clear:
+                raise ValueError("NFC-Tag und aktives Fach können während eines Drucks nicht geändert werden.")
             if current and _spool_is_nfc_bound(conn, spool_id) and "active_tray" in fields and not system_clear:
                 raise ValueError(_spool_lock_message(conn, spool_id))
             if "active_tray" in fields:
@@ -1658,6 +1659,23 @@ def record_consumption(spool_id: int | str, weight_grams: float | None = None,
         conn.execute(
             "INSERT INTO spool_consumption_events(spool_id, weight_grams, length_mm, occurred_at, created_at) VALUES (?, ?, ?, ?, ?)",
             (int(spool_id), weight_grams, length_mm, occurred_at or _now(), _now()),
+        )
+
+
+def record_usage_marker(spool_id: int | str, occurred_at: str | None = None) -> None:
+    """Record a confirmed AMS selection without booking material.
+
+    This updates ``letzte Verwendung`` when the printer loads/switches to a
+    spool but no measurable extrusion happens afterwards.  It deliberately
+    stores no weight or length, so inventory consumption remains unchanged.
+    """
+    with _connect() as conn:
+        if not conn.execute("SELECT 1 FROM spools WHERE id = ? AND deleted = 0", (int(spool_id),)).fetchone():
+            raise KeyError(f"No spool with ID {spool_id}")
+        now = occurred_at or _now()
+        conn.execute(
+            "INSERT INTO spool_consumption_events(spool_id, weight_grams, length_mm, occurred_at, created_at) VALUES (?, NULL, NULL, ?, ?)",
+            (int(spool_id), now, _now()),
         )
 
 
