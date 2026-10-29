@@ -369,6 +369,7 @@ class FilamentUsageTracker:
     self._mc_remaining_time_minutes = None
     self._last_logged_gcode_state = None
     self._printing_started = False
+    self._replay_after_assignment = False
   def set_print_metadata(self, metadata: dict | None) -> None:
     metadata = metadata or {}
     incoming_id = metadata.get("print_id")
@@ -404,6 +405,7 @@ class FilamentUsageTracker:
       self.spent_layers = set()
       self.cumulative_grams_used = {}
       self.cumulative_length_used = {}
+      self._replay_after_assignment = False
       self._reset_layer_tracking_state()
     else:
       self.print_metadata = metadata
@@ -491,7 +493,27 @@ class FilamentUsageTracker:
     log("[filament-tracker] Print start")
 
     model_url = print_obj.get("url")
-    model_path = print_obj.get("local_model_path") or self._retrieve_model(model_url)
+    model_path = print_obj.get("local_model_path")
+    if model_path is None and model_url and not print_obj.get("_metadata_job_queued"):
+      # Remote 3MF retrieval is owned by the central worker.  A project_file
+      # packet can reach the tracker before the normal MQTT queue path (for
+      # example when AUTO_SPEND is disabled); downloading here as a fallback
+      # would create a second FTP transfer for the same print.
+      try:
+        import mqtt_bambulab
+        queue_job = getattr(mqtt_bambulab, "_queue_3mf_job", None)
+        if callable(queue_job):
+          queued = queue_job(dict(print_obj), resume=True)
+          if queued:
+            log(
+              f"[filament-tracker] Remote 3MF an zentralen Worker delegiert: "
+              f"print_id={queued.get('print_id')}"
+            )
+          return
+      except Exception as exc:
+        log(f"[filament-tracker] Zentraler 3MF-Worker konnte nicht beauftragt werden: {exc!r}")
+      log("[filament-tracker] Remote 3MF ohne zentralen Worker nicht direkt laden")
+      return
 
     if model_path is None:
       log("Failed to retrieve model. Print will not be tracked.")
@@ -666,6 +688,17 @@ class FilamentUsageTracker:
     except (TypeError, ValueError):
       current_layer = 0
     buffered_layer = max(self._pending_observed_layer or 0, current_layer)
+    # A reconnect/resume can deliver the current RUNNING layer without the
+    # original ``_resume_layer`` marker.  Once a positive layer is reported,
+    # the printer is past preparation and buffered layers may be booked.
+    if buffered_layer > 0 and str(print_obj.get("gcode_state") or "").upper() == "RUNNING":
+      self._printing_started = True
+    # Resume packets usually carry the currently confirmed physical AMS tray.
+    # Preserve it while the model is reconstructed so replay does not turn a
+    # whole buffered range into one unresolved aggregate delta.
+    observed_tray = self._active_ams_tray(print_obj)
+    if observed_tray is not None:
+      self._observed_ams_tray = observed_tray
     # A valid 3MF only proves that the model can be tracked. It does not prove
     # that the printer has started extrusion; stage 14, for example, is still
     # nozzle cleaning. Keep layer 0 buffered until stage 0 arrives.
@@ -685,11 +718,34 @@ class FilamentUsageTracker:
         self.cumulative_grams_used[slot] = usage.get("grams_used") or 0.0
         self.cumulative_length_used[slot] = usage.get("length_used") or 0.0
 
+    # A checkpoint can contain a high-water layer even when its bookings were
+    # deferred because the AMS assignment was missing.  Once every mapped
+    # physical tray has a local spool again, replay all known layers; event
+    # claims are idempotent and this restores the deferred consumption.
+    if self.using_ams and self.ams_mapping:
+      mapped_trays = {
+        int(tray)
+        for tray in self.ams_mapping
+        if tray is not None and tray != EXTERNAL_SPOOL_ID
+      }
+      assignments_ready = all(
+        self._lookup_spool_for_tray(self._tray_uid_from_mapping(tray)) is not None
+        for tray in mapped_trays
+      )
+      if assignments_ready:
+        # Pending usage is only a fallback for an unavailable assignment. Once
+        # the validated spool is known, replay the model's individual layers;
+        # retaining the aggregate would book all missing layers again on the
+        # first successful flush.
+        self._pending_usage_mm.clear()
+        self.spent_layers = set()
     self.current_layer = None
     for layer in range(buffered_layer + 1):
       self._handle_layer_change(layer)
       self.current_layer = layer
     self._pending_observed_layer = None
+    if self._replay_after_assignment:
+      self._replay_layers_after_assignment()
     update_checkpoint_layer(buffered_layer)
     self._update_layer_tracking_progress()
     log(
@@ -998,6 +1054,46 @@ class FilamentUsageTracker:
       return
     for filament in list(self._pending_usage_mm.keys()):
       self._apply_usage_for_filament(filament, 0.0)
+
+  def flush_pending_usage(self) -> None:
+    """Retry buffered consumption after an AMS assignment was restored.
+
+    AMS recovery happens after the normal MQTT packet pass.  Exposing this
+    small, synchronous retry prevents a valid spool from remaining in
+    ``BOOKING-WAIT`` until the next printer telemetry packet arrives.
+    """
+    self._flush_all_pending_usage()
+
+  def request_replay_after_assignment(self) -> None:
+    """Replay tracked layers whose bookings waited for an AMS assignment."""
+    self._replay_after_assignment = True
+    if self.active_model is not None:
+      self._replay_layers_after_assignment()
+
+  def _replay_layers_after_assignment(self) -> None:
+    if self.active_model is None or not self._printing_started:
+      return
+    try:
+      current_layer = max(0, int(self.current_layer or 0))
+    except (TypeError, ValueError):
+      current_layer = 0
+    # Layer events are idempotent (claim_filament_usage_event rejects an
+    # already confirmed layer/filament pair).  Replaying the complete known
+    # range is therefore safe and repairs layers that advanced while the
+    # local AMS assignment was temporarily absent.
+    self._pending_usage_mm.clear()
+    self.spent_layers = set()
+    self.current_layer = None
+    for layer in range(current_layer + 1):
+      self._handle_layer_change(layer)
+      self.current_layer = layer
+    self._replay_after_assignment = False
+    self._flush_all_pending_usage()
+    update_checkpoint_layer(current_layer)
+    log(
+      f"[filament-tracker] Gepufferte Schichten nach AMS-Wiederherstellung "
+      f"erneut geprüft: print_id={self.print_id}, schichten=0..{current_layer}"
+    )
 
   def _reset_layer_tracking_state(self) -> None:
     self._layer_tracking_total_layers = None

@@ -325,6 +325,7 @@ body {
 }
 
 .home-progress-ring {
+    --home-progress-color: var(--m0-brand);
     display: grid;
     place-items: center;
     align-content: center;
@@ -332,8 +333,8 @@ body {
     height: 138px;
     margin: auto;
     border: 11px solid #e7eef5;
-    border-top-color: var(--m0-brand);
-    border-right-color: var(--m0-brand);
+    border-top-color: var(--home-progress-color);
+    border-right-color: var(--home-progress-color);
     border-radius: 50%;
 }
 
@@ -473,10 +474,21 @@ body {
 }
 
 .home-progress-ring {
+    --home-progress-color: var(--m0-brand);
     border: 11px solid #e7eef5;
-    background: conic-gradient(var(--m0-brand) var(--home-progress, 0%), #e7eef5 0);
+    background: conic-gradient(var(--home-progress-color) var(--home-progress, 0%), #e7eef5 0);
     background-clip: border-box;
     position: relative;
+}
+
+.home-progress-ring[data-status="COMPLETED"] {
+    --home-progress-color: var(--m0-success);
+}
+
+.home-progress-ring[data-status="ABORTED"],
+.home-progress-ring[data-status="FAILED"],
+.home-progress-ring[data-status="CANCELLED"] {
+    --home-progress-color: #dc3545;
 }
 
 .home-progress-ring::after {
@@ -1896,6 +1908,8 @@ main.container {
 .inventory-spool-print-link:hover { text-decoration: underline; }
 .inventory-readonly { background-color: var(--bs-secondary-bg); color: var(--bs-body-color); cursor: default; opacity: 1; }
 .inventory-stock-adjustment { display: grid; gap: .65rem; margin: .85rem 0; padding: .8rem; border: 1px solid var(--bs-border-color); border-radius: .45rem; background: var(--bs-tertiary-bg); }
+.inventory-stock-correction { display: flex; justify-content: space-between; align-items: center; gap: .75rem; color: var(--bs-secondary-color); }
+.inventory-stock-correction strong { color: var(--bs-body-color); font-variant-numeric: tabular-nums; }
 .inventory-stock-tabs { display: flex; gap: .35rem; }
 .inventory-stock-entry { display: grid; grid-template-columns: minmax(9rem, 1fr) minmax(11rem, 16rem) auto; gap: .5rem; align-items: end; }
 .inventory-stock-entry .form-label { align-self: center; }

@@ -9,9 +9,7 @@
         <span class="home-status-pill" id="home-printer-status">{{ printer_status }}</span>
       </div>
       <div class="card-body">
-        <div class="home-printer-context" id="home-printer-name">{{ PRINTER_NAME or PRINTER_MODEL.get('devicename') or PRINTER_MODEL.get('model') or PRINTER_ID }}</div>
         <dl class="home-metric-list mb-0">
-          <div><dt><i class="bi bi-wifi me-2" aria-hidden="true"></i>{{ _('MQTT') }}</dt><dd id="home-mqtt-status">{{ _('Verbunden') if mqtt_connected|default(false) else _('Nicht verbunden') }}</dd></div>
           <div><dt><i class="bi bi-droplet me-2" aria-hidden="true"></i>{{ _('Humidity') }}</dt><dd><button type="button" id="home-humidity" class="home-humidity-history-trigger d-flex align-items-center gap-2" aria-haspopup="dialog" aria-controls="humidity-history-dialog"{% if not printer_ams_environment %} disabled{% endif %} data-ams-id="{{ printer_ams_environment[0].id if printer_ams_environment else '' }}">{% if printer_ams_environment %}{{ humidity_index_icon(printer_ams_environment[0].humidity_level, 'home', 'humidity-droplet-home') }}<span id="home-humidity-value">{{ printer_ams_environment[0].humidity or '–' }}</span>{% else %}<span id="home-humidity-value">–</span>{% endif %}</button></dd></div>
           <div><dt><i class="bi bi-thermometer-half me-2" aria-hidden="true"></i>{{ _('Temperature') }}</dt><dd id="home-ams-temperature">{% if printer_ams_environment %}{{ printer_ams_environment[0].temperature or '–' }}°C{% else %}–{% endif %}</dd></div>
           <div><dt><i class="bi bi-fire me-2" aria-hidden="true"></i>{{ _('Hotend') }}</dt><dd id="home-hotend">{% if printer_temperatures.hotend is not none %}{{ printer_temperatures.hotend|round|int }}°C{% else %}–{% endif %}{% if printer_temperatures.hotend_target is not none %} / {{ printer_temperatures.hotend_target|round|int }}°C{% endif %}</dd></div>
@@ -31,7 +29,7 @@
       <div class="card-body">
         <div class="home-last-print-name" id="home-last-print-name">{% if last_print %}{{ last_print.file_name }}{% else %}–{% endif %}</div>
         <div class="home-print-detail-grid">
-          <div class="home-progress-ring" id="home-progress-ring" aria-label="{{ _('Progress') }}" style="--home-progress: {% if last_print and last_print.printer_percent is not none %}{{ last_print.printer_percent }}{% elif last_print and last_print.total_layers %}{{ ((last_print.layers_printed or 0) * 100 / last_print.total_layers)|round(0) }}{% else %}0{% endif %}%"><span id="home-last-print-progress">{% if last_print and last_print.printer_percent is not none %}{{ '%.0f'|format(last_print.printer_percent) }}%{% elif last_print and last_print.total_layers %}{{ '%.0f'|format((last_print.layers_printed or 0) * 100 / last_print.total_layers) }}%{% else %}–{% endif %}</span><small>{{ _('Progress') }}</small></div>
+          <div class="home-progress-ring" id="home-progress-ring" data-status="{{ last_print.status if last_print else '' }}" aria-label="{{ _('Progress') }}" style="--home-progress: {% if last_print and last_print.printer_percent is not none %}{{ last_print.printer_percent }}{% elif last_print and last_print.total_layers %}{{ ((last_print.layers_printed or 0) * 100 / last_print.total_layers)|round(0) }}{% else %}0{% endif %}%"><span id="home-last-print-progress">{% if last_print and last_print.printer_percent is not none %}{{ '%.0f'|format(last_print.printer_percent) }}%{% elif last_print and last_print.total_layers %}{{ '%.0f'|format((last_print.layers_printed or 0) * 100 / last_print.total_layers) }}%{% else %}–{% endif %}</span><small>{{ _('Progress') }}</small></div>
           <dl class="home-metric-list home-print-metrics mb-0">
             <div><dt><i class="bi bi-layers me-2" aria-hidden="true"></i>{{ _('Layers') }}</dt><dd id="home-last-print-layers">{% if last_print and last_print.total_layers %}{{ last_print.layers_printed or 0 }} / {{ last_print.total_layers }}{% else %}–{% endif %}</dd></div>
             <div><dt><i class="bi bi-clock me-2" aria-hidden="true"></i>{{ _('Erwartetes Ende:') }}</dt><dd id="home-last-print-expected-end">{% if last_print and last_print.predicted_end_time %}{{ format_datetime(last_print.predicted_end_time) }}{% else %}–{% endif %}</dd></div>
@@ -39,7 +37,6 @@
             <div><dt><i class="bi bi-database me-2" aria-hidden="true"></i>{{ _('Consumed') }}</dt><dd id="home-last-print-consumed">{% if last_print and last_print.filament_grams_billed is not none %}{{ format_number(last_print.filament_grams_billed) }} g{% else %}–{% endif %}</dd></div>
           </dl>
         </div>
-        <div class="home-last-print-status-line"><span>{{ _('Status') }}</span><strong id="home-last-print-status">{% if last_print %}{{ _({'COMPLETED':'Finished','ABORTED':'Aborted','FAILED':'Failed','RUNNING':'Running'}.get(last_print.status, last_print.status or 'Unknown')) }}{% else %}–{% endif %}</strong></div>
         <div class="home-print-actions">
           <div id="home-unload-filament-action" class="home-unload-filament-action"{% if not last_print or last_print.status != 'ABORTED' %} hidden{% endif %}>
             <button type="button" id="home-unload-filament" class="btn btn-outline-primary btn-sm"{% if not mqtt_connected|default(false) %} disabled{% endif %}><i class="bi bi-arrow-down-circle me-1" aria-hidden="true"></i>{{ _('Filament entladen') }}</button>
@@ -59,15 +56,12 @@
       <div class="card-body">
         <ol class="home-activity-list mb-0" id="home-activity-list">
           <li class="active"><span class="home-activity-dot"></span><strong>{{ _('Druckerstatus') }}: {{ printer_status }}</strong><small>{{ format_datetime(now()) if now is defined else '' }}</small></li>
-          {% if filament_activity %}<li class="active"><span class="home-activity-dot"></span><strong><span class="filament-activity-spinner" aria-hidden="true"></span>{{ filament_activity.label }} {{ {'loading': _('wird geladen'), 'unloading': _('wird entladen'), 'printing': _('wird gedruckt')}.get(filament_activity.state, '') }}</strong><small>{{ format_datetime(now()) if now is defined else '' }}</small></li>{% endif %}
+          {% if filament_activity %}<li class="active"><span class="home-activity-dot"></span><strong><span class="filament-activity-spinner" aria-hidden="true"></span>{{ filament_activity.label }}{% if filament_activity.spool_id is not none %} #{{ filament_activity.spool_id }}{% endif %} {{ {'loading': _('wird geladen'), 'unloading': _('wird entladen'), 'printing': _('ist in Benutzung')}.get(filament_activity.state, '') }}</strong><small>{{ format_datetime(now()) if now is defined else '' }}</small></li>{% endif %}
           {% if printer_preparation_status %}
           <li class="active"><span class="home-activity-dot"></span><strong>{{ _('Current activity') }}: {{ printer_preparation_status }}</strong><small>{{ format_datetime(now()) if now is defined else '' }}</small></li>
           {% endif %}
           {% if last_print %}
-          <li class="active"><span class="home-activity-dot"></span><strong>{{ _('Status') }}: {{ _({'COMPLETED':'Finished','ABORTED':'Aborted','FAILED':'Failed','RUNNING':'Printing','PREPARING':'Preparing','PAUSED':'Paused'}.get(last_print.status, 'Unknown')) }}</strong><small>{{ format_datetime(last_print.last_status_at or last_print.print_date) }}</small></li>
-          {% if last_print.predicted_end_time %}<li><span class="home-activity-dot"></span><strong>{{ _('Expected end:') }}</strong><small>{{ format_datetime(last_print.predicted_end_time) }}</small></li>{% endif %}
           {% if last_print.last_usage_event_at %}<li><span class="home-activity-dot"></span><strong>{{ _('Last booking') }}</strong><small>{{ format_datetime(last_print.last_usage_event_at) }}</small></li>{% endif %}
-          <li><span class="home-activity-dot"></span><strong>{{ _('Print ID') }} #{{ last_print.id }}</strong><small>{{ format_datetime(last_print.print_date) }}</small></li>
           {% if last_print.actual_end_time %}<li><span class="home-activity-dot"></span><strong>{{ _('Finished') }}</strong><small>{{ format_datetime(last_print.actual_end_time) }}</small></li>{% endif %}
           {% else %}
           <li class="active"><span class="home-activity-dot"></span><strong>{{ _('No print history') }}</strong></li>
@@ -133,7 +127,6 @@
   const printerPreparationText = document.getElementById('home-printer-preparation-text');
   const lastPrint = document.getElementById('home-last-print');
   const lastPrintLink = document.getElementById('home-last-print-link');
-  const lastPrintStatus = document.getElementById('home-last-print-status');
   const unloadFilamentAction = document.getElementById('home-unload-filament-action');
   const unloadFilamentButton = document.getElementById('home-unload-filament');
   const unloadFilamentFeedback = document.getElementById('home-unload-filament-feedback');
@@ -172,8 +165,16 @@
   const filamentActivityLabels = {
     loading: {{ _('wird geladen')|tojson }},
     unloading: {{ _('wird entladen')|tojson }},
-    printing: {{ _('wird gedruckt')|tojson }}
+    printing: {{ _('ist in Benutzung')|tojson }}
   };
+
+  function filamentActivityText(activity) {
+    if (!activity) return '';
+    const spool = activity.spool_id === null || activity.spool_id === undefined || activity.spool_id === ''
+      ? '' : ` #${activity.spool_id}`;
+    const state = filamentActivityLabels[activity.state] || '';
+    return `${activity.label || 'Filament'}${spool} ${state}`.trim();
+  }
 
   function statusLabel(value) {
     const labels = { COMPLETED: {{ _('Finished')|tojson }}, ABORTED: {{ _('Aborted')|tojson }}, FAILED: {{ _('Failed')|tojson }}, RUNNING: {{ _('Printing')|tojson }}, PREPARING: {{ _('Preparing')|tojson }}, PAUSED: {{ _('Paused')|tojson }} };
@@ -201,16 +202,13 @@
     const preparationEntries = preparationStatus
       ? [{ label: `${activityLabels.currentActivity}: ${preparationStatus}`, time: new Date().toISOString(), active: true }]
       : [];
-    const filamentEntries = filamentStatus ? [{ label: `${filamentStatus.label} ${filamentActivityLabels[filamentStatus.state] || ''}`, time: new Date().toISOString(), active: true, icon: true }] : [];
+    const filamentEntries = filamentStatus ? [{ label: filamentActivityText(filamentStatus), time: new Date().toISOString(), active: true, icon: true }] : [];
     const entries = [
       { label: `${activityLabels.printerStatus}: ${printerStatus || activityLabels.unknown}`, time: new Date().toISOString(), active: true },
       ...filamentEntries,
       ...preparationEntries,
       ...(item ? [
-        { label: `${activityLabels.status}: ${statusLabel(item.status)}`, time: item.last_status_at || item.print_date, active: true },
-        { label: activityLabels.expectedEnd, time: item.predicted_end_time },
         { label: activityLabels.lastBooking, time: item.last_usage_event_at },
-        { label: `${activityLabels.printId} #${item.id}`, time: item.print_date },
         { label: activityLabels.finished, time: item.actual_end_time }
       ] : preparationEntries)
     ].filter(entry => entry.time);
@@ -245,10 +243,7 @@
         lastPrintLink.textContent = `#${item.id}`;
         lastPrintLink.href = `/print_history?print_id=${encodeURIComponent(item.id)}#print_${encodeURIComponent(item.id)}`;
       }
-      if (lastPrintStatus) {
-        const statusLabels = { COMPLETED: {{ _('Finished')|tojson }}, ABORTED: {{ _('Aborted')|tojson }}, FAILED: {{ _('Failed')|tojson }}, RUNNING: {{ _('Running')|tojson }} };
-        lastPrintStatus.textContent = statusLabels[item.status] || item.status || '';
-      }
+      if (progressRing) progressRing.dataset.status = String(item.status || '').toUpperCase();
       if (unloadFilamentAction) unloadFilamentAction.hidden = item.status !== 'ABORTED';
       if (unloadFilamentButton && item.status !== 'ABORTED') unloadFilamentButton.disabled = true;
       const printerIsActive = ['PREPARING', 'RUNNING', 'PAUSED', 'SLICING'].includes(String(data.printer_state || '').toUpperCase()) || ['PREPARING', 'RUNNING', 'PAUSED'].includes(item.status);

@@ -62,6 +62,7 @@
         <div class="inventory-current-weight-bar" role="progressbar" aria-label="{{ _('Aktuelles Spulengewicht') }}"><i id="inventory-current-weight-fill"></i></div>
       </div>
       <div id="inventory-stock-adjustment" class="inventory-stock-adjustment" hidden>
+        <div class="inventory-stock-correction"><span>{{ _('Gewichtskorrektur (g)') }}</span><strong id="inventory-stock-correction-value">0,00 g</strong></div>
         <div class="inventory-stock-tabs" role="tablist" aria-label="{{ _('Bestandskorrektur') }}">
           <button type="button" class="btn btn-sm btn-primary" data-stock-mode="delta">{{ _('Gewicht') }}</button>
           <button type="button" class="btn btn-sm btn-outline-secondary" data-stock-mode="absolute">{{ _('Gemessenes Gewicht') }}</button>
@@ -146,6 +147,8 @@ document.addEventListener('DOMContentLoaded', () => {
     correction: {{ _('Gewicht korrigieren (g)')|tojson }},
     adjustStock: {{ _('Bestand verändern')|tojson }},
     lastUsed: {{ _('Letzte Verwendung')|tojson }},
+    purchaseDate: {{ _('Kaufdatum')|tojson }},
+    comment: {{ _('Kommentar')|tojson }},
     activeTray: {{ _('Aktives Fach')|tojson }},
     activeTrayLocked: {{ _('Das aktive Fach kann während eines Drucks nicht geändert werden.')|tojson }},
     activeTrayReadOnly: {{ _('Die Fachzuordnung erfolgt ausschließlich auf der AMS-Seite.')|tojson }},
@@ -197,6 +200,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const currentWeight = document.getElementById('inventory-current-weight');
   const currentWeightValue = document.getElementById('inventory-current-weight-value');
   const currentWeightFill = document.getElementById('inventory-current-weight-fill');
+  const stockCorrectionValue = document.getElementById('inventory-stock-correction-value');
   const spoolPrints = document.getElementById('inventory-spool-prints');
   const spoolPrintsList = document.getElementById('inventory-spool-prints-list');
   let inventoryAmsFingerprint = null;
@@ -332,6 +336,12 @@ document.addEventListener('DOMContentLoaded', () => {
       hour12: locale === 'en-US',
     }).format(date);
   };
+  const formatDateLocal = value => {
+    if (!value) return '';
+    const text = String(value).trim();
+    const match = text.match(/^(\d{4}-\d{2}-\d{2})/);
+    return match ? match[1] : '';
+  };
   const moneyOrWeightField = name => name === 'price' || name.includes('weight');
 
   function groupEntries() {
@@ -428,7 +438,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const hasFilamentDefault = filamentDefaultValue !== null && filamentDefaultValue !== undefined;
     const defaultFromFilament = Boolean(record.filament_defaults?.[name]);
     const archived = Boolean(record.archived);
-    const wrap = make('div', name === 'name' || name === 'nfc_tag_id' || name === 'active_tray' ? 'col-12' : 'col-12 col-md-6');
+    // NFC tag and active tray are compact spool metadata and share one row;
+    // keep long text fields (name/comment) full width.
+    const wrap = make('div', name === 'name' || name === 'comment'
+      ? 'col-12'
+      : 'col-12 col-md-6');
     wrap.dataset.fieldWrap = name;
     const labelNode = make('label', 'form-label small mb-1', label);
     let input;
@@ -479,13 +493,20 @@ document.addEventListener('DOMContentLoaded', () => {
       input.type = 'checkbox';
       input.className = 'form-check-input ms-1';
       input.checked = Boolean(record[name]);
+    } else if (type === 'textarea') {
+      input = document.createElement('textarea');
+      input.rows = 2;
+      input.className = 'form-control form-control-sm';
+      input.value = record[name] ?? '';
     } else {
       input = document.createElement('input');
-      input.type = 'text';
+      input.type = type === 'date' ? 'date' : 'text';
       input.inputMode = type === 'numeric' ? 'decimal' : 'text';
       input.className = 'form-control form-control-sm';
       input.value = defaultFromFilament ? '' : (type === 'datetime'
         ? (record[`${name}_display`] || formatDisplayDateTime(record[name]))
+        : type === 'date'
+        ? formatDateLocal(record[name])
         : type === 'numeric'
         ? formatEditorNumber(name, record[name])
         : (record[name] ?? ''));
@@ -530,7 +551,9 @@ document.addEventListener('DOMContentLoaded', () => {
       input.disabled = true;
       editorState.textContent = inventoryText.saving;
       try {
-        const savedValue = type === 'numeric' && value !== '' ? value.replace(',', '.') : value;
+        const savedValue = type === 'numeric' && value !== ''
+          ? value.replace(',', '.')
+          : value;
         const result = await save(name, savedValue);
         input.dataset.originalValue = String(value);
         if (type === 'color') {
@@ -643,6 +666,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     stockAdjustment.hidden = true;
     stockValue.value = '';
+    if (stockCorrectionValue) {
+      stockCorrectionValue.textContent = kind === 'spool'
+        ? `${formatEditorNumber('weight_correction', record.weight_correction)} g`
+        : '–';
+    }
     // The correction value is calculated and must remain disabled. The
     // adjustment dialog itself follows the selected spool's lock state and
     // must be re-enabled when switching back from a locked spool.
@@ -738,8 +766,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const definitions = kind === 'vendor'
       ? [['name', 'Name', 'text']]
       : kind === 'spool'
-        ? [['filament_id', record.active_print_locked ? inventoryText.filamentCurrentPrint : inventoryText.filament, 'select', [...localFilaments.values()], Boolean(record.active_print_locked)], ['initial_weight', inventoryText.weight, 'numeric'], ['spool_weight', inventoryText.emptySpoolWeight, 'numeric'], ['price', inventoryText.price, 'numeric'], ['weight_correction', inventoryText.correction, 'numeric'], ['last_used', inventoryText.lastUsed, 'datetime', null, true], ['nfc_tag_id', inventoryText.nfcTag, 'select', nfcTagOptions, activePrintRunning], ['active_tray', inventoryText.activeTray, 'readonly', activeTrayOptions], ['archived', inventoryText.archived, 'checkbox']]
-        : [['name', {{ _('Name')|tojson }}, 'text'], ['vendor_id', inventoryText.manufacturer, 'select', [...localVendors.values()]], ['material_id', inventoryText.material, 'select', [...materials]], ['color_hex', inventoryText.color, 'color'], ['diameter', inventoryText.diameter, 'numeric'], ['weight', inventoryText.weight, 'numeric'], ['spool_weight', inventoryText.emptySpoolWeight, 'numeric'], ['price', inventoryText.price, 'numeric'], ['nozzle_temp_min', inventoryText.nozzleTemperatureMin, 'numeric'], ['nozzle_temp_max', inventoryText.nozzleTemperatureMax, 'numeric']];
+        ? [['filament_id', record.active_print_locked ? inventoryText.filamentCurrentPrint : inventoryText.filament, 'select', [...localFilaments.values()], Boolean(record.active_print_locked)], ['initial_weight', inventoryText.weight, 'numeric'], ['spool_weight', inventoryText.emptySpoolWeight, 'numeric'], ['price', inventoryText.price, 'numeric'], ['purchase_date', inventoryText.purchaseDate, 'date'], ['last_used', inventoryText.lastUsed, 'datetime', null, true], ['comment', inventoryText.comment, 'textarea'], ['nfc_tag_id', inventoryText.nfcTag, 'select', nfcTagOptions, activePrintRunning], ['active_tray', inventoryText.activeTray, 'readonly', activeTrayOptions], ['archived', inventoryText.archived, 'checkbox']]
+        : [['name', {{ _('Name')|tojson }}, 'text'], ['vendor_id', inventoryText.manufacturer, 'select', [...localVendors.values()]], ['material_id', inventoryText.material, 'select', [...materials]], ['color_hex', inventoryText.color, 'color'], ['diameter', inventoryText.diameter, 'numeric'], ['weight', inventoryText.weight, 'numeric'], ['spool_weight', inventoryText.emptySpoolWeight, 'numeric'], ['price', inventoryText.price, 'numeric'], ['nozzle_temp_min', inventoryText.nozzleTemperatureMin, 'numeric'], ['nozzle_temp_max', inventoryText.nozzleTemperatureMax, 'numeric'], ['comment', inventoryText.comment, 'textarea']];
     definitions.forEach(definition => editorFields.append(buildInput(definition, record, save)));
     if (kind === 'filament') {
       const minimumWrap = editorFields.querySelector('[data-field-wrap="nozzle_temp_min"]');
@@ -770,22 +798,6 @@ document.addEventListener('DOMContentLoaded', () => {
         filamentInput.replaceWith(control);
         control.append(filamentInput, colorPreview);
         if (!fillMode) control.append(openFilamentButton);
-      }
-      const correctionInput = editorFields.querySelector('[data-field-name="weight_correction"]');
-      const correctionField = correctionInput?.parentElement;
-      if (correctionInput && correctionField) {
-        correctionInput.readOnly = true;
-        correctionInput.disabled = true;
-        correctionInput.tabIndex = -1;
-        correctionInput.setAttribute('aria-readonly', 'true');
-        correctionInput.title = inventoryText.adjustStock;
-        correctionInput.classList.add('inventory-correction-input');
-        correctionInput.classList.add('inventory-readonly');
-        const control = make('div', 'inventory-correction-control');
-        correctionInput.replaceWith(control);
-        control.append(correctionInput, adjustStockButton);
-        adjustStockButton.hidden = false;
-        control.after(stockAdjustment);
       }
     }
     if (spoolLocked) {
@@ -953,9 +965,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const material = materialOf(entry);
     const vendor = vendorOf(entry);
     const name = filament.name || inventoryText.unnamed;
-    const diameter = filament.diameter ? `${formatDecimal(filament.diameter)} mm` : '';
     const title = mode === 'vendor' || mode === 'filament' ? name : `${vendor} · ${name}`;
-    const meta = [material, diameter].filter(Boolean).join(' · ');
+    // The left selection tree stays compact; the filament diameter remains
+    // available in the editor/filament details, but is not repeated per spool.
+    const meta = [material].filter(Boolean).join(' · ');
     const left = make('span', `inventory-spool-left${mode === 'filament' ? ' inventory-spool-left-compact' : ''}`);
     const spoolNumber = make('strong', 'inventory-spool-number', `#${entry.spool.id}`);
     if (spoolInUse) {

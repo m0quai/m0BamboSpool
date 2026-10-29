@@ -9,6 +9,7 @@ from typing import Any
 
 from config import DATABASE_PATH, DATABASE_TYPE
 from filament_color_catalog import SUNLU_COLOR_OPTIONS
+from ui_formatting import LOCAL_TIMEZONE
 
 DEFAULT_MATERIALS = (
     "PLA", "PLA+", "PETG", "ABS", "ASA", "TPU", "PA", "PC", "PVA", "HIPS",
@@ -48,7 +49,7 @@ def _connect() -> sqlite3.Connection:
 
 
 def _now() -> str:
-    return datetime.now().astimezone().isoformat(timespec="seconds")
+    return datetime.now(LOCAL_TIMEZONE).isoformat(timespec="seconds")
 
 
 def _number(value: Any) -> float:
@@ -62,6 +63,11 @@ def _number(value: Any) -> float:
         elif comma >= 0:
             value = value.replace(",", ".")
     return float(value)
+
+
+def _date_only(value: Any) -> str | None:
+    text = str(value or "").strip().replace("T", " ")
+    return text.split(" ", 1)[0] if text else None
 
 
 def _temperature_range(value: Any) -> tuple[int | None, int | None]:
@@ -163,6 +169,7 @@ def initialize() -> None:
                 cali_idx INTEGER,
                 bambu_filament_id TEXT,
                 bambu_setting_id TEXT,
+                comment TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1))
@@ -179,6 +186,8 @@ def initialize() -> None:
                 active_tray TEXT,
                 active_tray_source TEXT,
                 active_tray_nfc_uid TEXT,
+                purchase_date TEXT,
+                comment TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1))
@@ -382,9 +391,27 @@ def initialize() -> None:
             ("weight", "REAL"),
             ("spool_weight", "REAL"),
             ("price", "REAL"),
+            ("comment", "TEXT"),
         ):
             if column not in columns:
                 conn.execute(f"ALTER TABLE filaments ADD COLUMN {column} {definition}")
+        spool_columns = {row["name"] for row in conn.execute("PRAGMA table_info(spools)")}
+        if "purchase_date" not in spool_columns:
+            if "first_used" in spool_columns:
+                try:
+                    conn.execute("ALTER TABLE spools RENAME COLUMN first_used TO purchase_date")
+                except sqlite3.OperationalError:
+                    conn.execute("ALTER TABLE spools ADD COLUMN purchase_date TEXT")
+                    conn.execute("UPDATE spools SET purchase_date = first_used")
+            else:
+                conn.execute("ALTER TABLE spools ADD COLUMN purchase_date TEXT")
+        spool_columns = {row["name"] for row in conn.execute("PRAGMA table_info(spools)")}
+        if "comment" not in spool_columns:
+            conn.execute("ALTER TABLE spools ADD COLUMN comment TEXT")
+        conn.execute(
+            "UPDATE spools SET purchase_date = substr(replace(purchase_date, 'T', ' '), 1, 10) "
+            "WHERE purchase_date IS NOT NULL AND trim(purchase_date) <> ''"
+        )
         # Archived spools keep a snapshot of inherited filament defaults so
         # later master-data changes cannot alter their historical values.
         for archived_spool in conn.execute(
@@ -416,7 +443,7 @@ def initialize() -> None:
             SELECT f.id, f.vendor_id, f.material_id, f.name, f.color_id,
                    f.diameter, f.weight, f.spool_weight, f.price,
                    f.nozzle_temp_min, f.nozzle_temp_max, f.cali_idx,
-                   f.bambu_filament_id, f.bambu_setting_id,
+                   f.bambu_filament_id, f.bambu_setting_id, f.comment,
                    f.deleted,
                    f.created_at, f.updated_at,
                    c.name AS color_name, c.hex_code AS color_hex,
@@ -782,7 +809,7 @@ def save_entity(entity: str, values: dict[str, Any], entity_id: int | None = Non
         "filaments": (
             "vendor_id", "material_id", "name", "color_id", "diameter",
             "weight", "spool_weight", "price", "nozzle_temp_min", "nozzle_temp_max",
-            "cali_idx", "bambu_filament_id", "bambu_setting_id",
+            "cali_idx", "bambu_filament_id", "bambu_setting_id", "comment",
         ),
     }
     if entity not in columns:
@@ -792,6 +819,8 @@ def save_entity(entity: str, values: dict[str, Any], entity_id: int | None = Non
     if not str(row.get("name") or "").strip():
         raise ValueError("Name is required")
     row["name"] = str(row["name"]).strip()
+    if entity == "filaments":
+        row["comment"] = str(row.get("comment") or "").strip() or None
     if entity == "filaments":
         row["color_id"] = values.get("color_id") or values.get("color_hex")
         row["diameter"] = _number(row["diameter"]) if row["diameter"] not in (None, "") else 1.75
@@ -873,7 +902,7 @@ def update_filament_fields(filament_id: int, values: dict[str, Any]) -> dict[str
     editable = {
         "vendor_id", "material_id", "name", "color_id", "diameter",
         "weight", "spool_weight", "price",
-        "nozzle_temp_min", "nozzle_temp_max", "cali_idx", "bambu_filament_id", "bambu_setting_id",
+        "nozzle_temp_min", "nozzle_temp_max", "cali_idx", "bambu_filament_id", "bambu_setting_id", "comment",
     }
     updates = {key: value for key, value in values.items() if key in editable or key == "color_hex"}
     if not updates:
@@ -888,7 +917,7 @@ def update_filament_fields(filament_id: int, values: dict[str, Any]) -> dict[str
             updates["color_id"] = value
             if key == "color_hex":
                 updates.pop("color_hex", None)
-        elif key in {"name", "bambu_filament_id", "bambu_setting_id"}:
+        elif key in {"name", "bambu_filament_id", "bambu_setting_id", "comment"}:
             updates[key] = str(value).strip() or None
     if "name" in updates and not updates["name"]:
         raise ValueError("Name is required")
@@ -1031,7 +1060,7 @@ def _has_active_print(conn: sqlite3.Connection) -> bool:
 def update_spool_fields(spool_id: int, values: dict[str, Any]) -> dict[str, Any]:
     """Persist only the explicitly changed local spool fields."""
     initialize()
-    editable = {"filament_id", "price", "archived", "initial_weight", "spool_weight", "tag", "nfc_tag_id", "active_tray"}
+    editable = {"filament_id", "price", "archived", "initial_weight", "spool_weight", "tag", "nfc_tag_id", "active_tray", "purchase_date", "comment"}
     updates = {key: value for key, value in values.items() if key in editable}
     if not updates:
         raise ValueError("No editable spool field was supplied")
@@ -1042,6 +1071,10 @@ def update_spool_fields(spool_id: int, values: dict[str, Any]) -> dict[str, Any]
         elif key == "nfc_tag_id":
             updates[key] = int(value) if str(value or "").strip() else None
         elif key == "active_tray":
+            updates[key] = str(value).strip() or None
+        elif key == "purchase_date":
+            updates[key] = _date_only(value)
+        elif key == "comment":
             updates[key] = str(value).strip() or None
         elif key == "archived":
             updates[key] = int(value is True or str(value).strip().lower() in {"1", "true", "yes", "on"})
@@ -1220,7 +1253,7 @@ def save_spool(values: dict[str, Any], spool_id: int | None = None) -> int:
     initialize()
     if spool_id is not None and "weight_correction" in values:
         raise ValueError("Die Bestandskorrektur kann nur über die Bestandsveränderung geändert werden")
-    fields = ("filament_id", "price", "archived", "initial_weight", "spool_weight", "weight_correction", "nfc_tag_id", "active_tray")
+    fields = ("filament_id", "price", "archived", "initial_weight", "spool_weight", "weight_correction", "nfc_tag_id", "active_tray", "purchase_date", "comment")
     row = {field: values.get(field) for field in fields}
     for field in ("price", "initial_weight", "spool_weight"):
         if row[field] not in (None, ""):
@@ -1229,11 +1262,14 @@ def save_spool(values: dict[str, Any], spool_id: int | None = None) -> int:
                 row[field] = None
     row["archived"] = int(row["archived"] is True or str(row["archived"]).strip().lower() in {"1", "true", "yes", "on"})
     row["weight_correction"] = _number(row["weight_correction"] or 0)
+    row["purchase_date"] = _date_only(row["purchase_date"])
+    row["comment"] = str(row["comment"] or "").strip() or None
     now = _now()
     with _connect() as conn:
         existing = conn.execute(
             """SELECT s.filament_id, s.nfc_tag_id, s.active_tray, s.active_tray_source,
                       s.archived, s.initial_weight, s.spool_weight, s.price,
+                      s.purchase_date, s.comment,
                       f.weight AS filament_weight,
                       f.spool_weight AS filament_spool_weight,
                       f.price AS filament_price
@@ -1300,6 +1336,8 @@ def save_spool(values: dict[str, Any], spool_id: int | None = None) -> int:
                 raise ValueError("Dieser NFC-Tag ist bereits einer anderen Spule zugeordnet.")
             row["tag"] = tag_row["tag_value"]
         row["active_tray"] = str(row["active_tray"] or "").strip() or None if "active_tray" in values else (existing["active_tray"] if existing else None)
+        row["purchase_date"] = _date_only(row["purchase_date"]) if "purchase_date" in values else (existing["purchase_date"] if existing else None)
+        row["comment"] = str(row["comment"] or "").strip() or None if "comment" in values else (existing["comment"] if existing else None)
         old_nfc_id = int(existing["nfc_tag_id"]) if existing and existing["nfc_tag_id"] else None
         if row["archived"]:
             row["tag"] = None
@@ -1478,6 +1516,8 @@ def duplicate_spool(spool_id: int | str) -> int:
         "weight_correction": 0,
         "tag": None,
         "active_tray": None,
+        "purchase_date": None,
+        "comment": source.get("comment"),
         "archived": False,
     }
     return save_spool(values)
@@ -1557,7 +1597,7 @@ def _as_spool(row: sqlite3.Row) -> dict[str, Any]:
     return spool
 
 
-def set_spool_extra(spool_id: int | str, values: dict[str, Any]) -> None:
+def set_spool_extra(spool_id: int | str, values: dict[str, Any], *, allow_active_print: bool = False) -> None:
     import json
     fields = {}
     for key in ("tag", "active_tray", "active_tray_source", "active_tray_nfc_uid"):
@@ -1581,9 +1621,9 @@ def set_spool_extra(spool_id: int | str, values: dict[str, Any]) -> None:
             if not current:
                 raise KeyError(f"No spool with ID {spool_id}")
             system_clear = fields.get("active_tray_source") == "system_clear"
-            if current and _has_active_print(conn) and {"tag", "active_tray"}.intersection(fields) and not system_clear:
+            if current and _has_active_print(conn) and {"tag", "active_tray"}.intersection(fields) and not (system_clear or allow_active_print):
                 raise ValueError("NFC-Tag und aktives Fach können während eines Drucks nicht geändert werden.")
-            if current and _spool_is_nfc_bound(conn, spool_id) and "active_tray" in fields and not system_clear:
+            if current and _spool_is_nfc_bound(conn, spool_id) and "active_tray" in fields and not (system_clear or allow_active_print):
                 raise ValueError(_spool_lock_message(conn, spool_id))
             if "active_tray" in fields:
                 if system_clear or not fields["active_tray"]:

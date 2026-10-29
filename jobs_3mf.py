@@ -10,6 +10,7 @@ import queue
 import tempfile
 import threading
 import time
+import traceback
 from typing import Callable
 from urllib.parse import urlparse
 
@@ -223,7 +224,24 @@ class Job3MFManager:
                 self._update(transfer_id, state="ready", percent=100 if self.get(transfer_id).get("bytes_total") else None)
                 if remote_path:
                     metadata["_remote_3mf_path"] = remote_path
-                callback(transfer_id, local_path, metadata, None)
+                # The file transfer is already complete and validated at this
+                # point.  Keep callback/database failures separate from the
+                # transfer state so Home does not falsely report “3MF konnte
+                # nicht geladen werden” after a successful download.  The
+                # callback itself logs the actionable persistence error.
+                try:
+                    callback(transfer_id, local_path, metadata, None)
+                except Exception as callback_error:
+                    self._update(
+                        transfer_id,
+                        state="ready",
+                        error=None,
+                        postprocess_error=str(callback_error),
+                    )
+                    log(
+                        f"[3MF] Nachverarbeitung fehlgeschlagen, Transfer bleibt gültig: "
+                        f"job={transfer_id}: {callback_error}\n{traceback.format_exc()}"
+                    )
             except Exception as exc:
                 cancelled = self._cancel_events.get(transfer_id, threading.Event()).is_set()
                 if cancelled:

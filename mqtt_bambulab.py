@@ -52,6 +52,7 @@ from print_history import (
   update_layer_tracking,
   find_open_print_for_printer_source,
   find_active_print_for_printer_source,
+  get_completed_remote_3mf_cleanup_path,
   find_recent_aborted_print,
   find_previous_metadata_print_name,
   get_filament_usage_for_reconciliation,
@@ -61,6 +62,7 @@ from print_history import (
   update_printer_job_status,
   update_latest_printer_job_status,
   get_layer_tracking_for_prints,
+  get_filament_usage_for_reconciliation,
   printer_state_to_history_status,
   bind_filament_usage_spool,
   claim_filament_usage_event,
@@ -96,6 +98,114 @@ AMS_STATUS_QUERY_ATTEMPTS = 10
 AMS_STATUS_QUERY_INTERVAL = 2
 ACTIVE_SPOOL_LOOKUP_ATTEMPTS = 5
 ACTIVE_SPOOL_LOOKUP_INTERVAL = 0.4
+
+
+def _active_print_id_for_ams_recovery() -> int | None:
+  """Return the currently running local print, if one is known.
+
+  A brief AMS ``empty`` packet can clear a local tray assignment while the
+  printer is recovering a jam.  During a running print the validated 3MF
+  usage row is the authoritative source for the spool that was already used
+  in that physical tray.  This helper deliberately does not inspect colour
+  or other presentation metadata.
+  """
+  current_print = PRINTER_STATE.get("print", {}) or {}
+  state = str(current_print.get("gcode_state") or "").upper()
+  if state not in {"PREPARE", "RUNNING", "PAUSE", "PAUSED"}:
+    return None
+  job = _active_3mf_job_for_source(current_print)
+  if job and job.get("print_id") is not None:
+    try:
+      return int(job["print_id"])
+    except (TypeError, ValueError):
+      pass
+  try:
+    persisted = find_active_print_for_printer_source(
+      current_print.get("subtask_name"),
+      current_print.get("gcode_file"),
+      current_print.get("url"),
+    )
+    return int(persisted["id"]) if persisted and persisted.get("id") is not None else None
+  except Exception:
+    return None
+
+
+def _recover_spool_assignment_from_active_print(ams_id, tray_id, spool_list):
+  """Restore a tray assignment after a transient jam/removal report.
+
+  The recovery is intentionally based only on the physical AMS slot and the
+  already validated usage row of the active print.  It never chooses a spool
+  by colour, material, vendor, or remaining weight.  If there is no unique
+  prior spool binding, the tray remains visibly unassigned and booking stays
+  queued for safety.
+  """
+  print_id = _active_print_id_for_ams_recovery()
+  if print_id is None:
+    return None
+  try:
+    physical_slot = int(ams_id) * 4 + int(tray_id)
+  except (TypeError, ValueError):
+    return None
+  try:
+    usage_rows = get_filament_usage_for_reconciliation(print_id)
+  except Exception as exc:
+    log(f"[AMS] Aktive Druckzuordnung konnte nicht gelesen werden: {exc!r}")
+    return None
+
+  candidates = []
+  for row in usage_rows or []:
+    spool_id = row.get("spool_id")
+    if spool_id is None:
+      continue
+    try:
+      row_slot = row.get("physical_ams_slot")
+      if row_slot is None:
+        row_slot = row.get("ams_slot")
+      if int(row_slot) != physical_slot:
+        continue
+      spool_id = int(spool_id)
+    except (TypeError, ValueError):
+      continue
+    if spool_id not in {item.get("id") for item in candidates}:
+      candidates.append({"id": spool_id})
+  if len(candidates) != 1:
+    return None
+
+  spool_id = candidates[0]["id"]
+  spool = next((item for item in spool_list or [] if int(item.get("id", -1)) == spool_id), None)
+  if not spool or spool.get("archived") or spool.get("deleted"):
+    return None
+  extras = spool.setdefault("extra", {}) or {}
+  current = extras.get("active_tray")
+  try:
+    current = json.loads(current) if current else ""
+  except (TypeError, ValueError):
+    current = str(current or "")
+  target = trayUid(ams_id, tray_id)
+  if current and current != target:
+    return None
+  source = str(extras.get("active_tray_source") or "manual").lower()
+  source = "nfc" if source == "nfc" else "manual"
+  try:
+    setActiveTray(
+      spool_id,
+      extras,
+      int(ams_id),
+      int(tray_id),
+      source=source,
+      nfc_uid=extras.get("active_tray_nfc_uid"),
+      internal_recovery=True,
+    )
+  except (TypeError, ValueError) as exc:
+    log(f"[AMS] Zuordnung aus Druckhistorie abgelehnt: Spule #{spool_id}, Fach {int(tray_id) + 1}: {exc}")
+    return None
+  extras["active_tray"] = json.dumps(target)
+  extras["active_tray_source"] = source
+  log(
+    f"[AMS] Temporäre Fachunterbrechung erkannt: Spule #{spool_id} "
+    f"für Fach {num2letter(ams_id)}{int(tray_id) + 1} aus Druck #{print_id} wiederhergestellt."
+  )
+  return spool
 
 # Bambu frequently publishes sparse AMS status updates while RFID/material
 # reading is in progress.  These fields are required before a tray update may
@@ -753,18 +863,29 @@ def _reconcile_completed_printer_job(print_data: dict) -> None:
     # the calculated end time captured from mc_remaining_time; only use the
     # receipt time when no calculated end time exists at all.
     mark_print_reconciled(print_id, updates, completion_time)
-    remote_path = candidate.get("remote_3mf_path")
-    if remote_path:
-      try:
-        delete3mfFromFTP(remote_path)
-      except Exception as exc:
-        log(f"[3MF][FTP] Exakte Druckdatei konnte nicht gelöscht werden: {exc!r}")
+    _cleanup_completed_remote_3mf(print_id)
     log(
       f"[filament-tracker] Abschluss-Recovery abgeschlossen: Print {print_id}, "
       f"Druckerstatus={state}/{percent:.0f}%, errechnetes_ende={completion_time}"
     )
   finally:
     _COMPLETION_RECONCILE_LOCK.release()
+
+
+def _cleanup_completed_remote_3mf(print_id: int) -> None:
+  """Delete a completed printer-side 3MF only when no newer job uses it."""
+  remote_path = get_completed_remote_3mf_cleanup_path(print_id)
+  if not remote_path:
+    return
+  try:
+    delete3mfFromFTP(remote_path)
+  except Exception as exc:
+    log(f"[3MF][FTP] Exakte Druckdatei konnte nicht gelöscht werden: {exc!r}")
+    return
+  # Do not try DELE again on every repeated FINISH packet. The physical file
+  # is gone; the path remains available in older history only until cleanup.
+  update_layer_tracking(print_id, remote_3mf_path=None)
+  log(f"[3MF][FTP] Abgeschlossene Druckdatei entfernt: print_id={print_id}, pfad={remote_path}")
 
 
 def _mask_serial(serial: str | None, keep_chars: int = 3) -> str:
@@ -958,6 +1079,8 @@ def processMessage(data):
         if status in {"FAILED", "ABORTED"}:
           status_fields["actual_end_time"] = status_at
         update_layer_tracking(active_job["print_id"], **status_fields)
+        if status == "COMPLETED":
+          _cleanup_completed_remote_3mf(active_job["print_id"])
         if status in {"COMPLETED", "ABORTED", "FAILED"} and terminal_percent is None:
           set_printer_percent_from_layers(active_job["print_id"])
     else:
@@ -996,6 +1119,8 @@ def processMessage(data):
           update_layer_tracking(candidate["id"], **status_fields)
           if terminal_percent is None:
             set_printer_percent_from_layers(candidate["id"])
+          if terminal_status == "COMPLETED":
+            _cleanup_completed_remote_3mf(candidate["id"])
           log(
             f"[History] Offener Druck {candidate['id']} anhand Druckerstatus "
             f"{state} auf {terminal_status} gesetzt."
@@ -1976,6 +2101,29 @@ def on_message(client, userdata, msg):
                 if log_ams:
                   log(f"      - Spool #{spool.get('id')}: {description or 'RFID zugeordnet'}")
                 break
+
+            if not found and (not tray_uuid or tray_uuid == zero_uuid) and not tray.get("ams_empty"):
+              # A jam/runout can produce a short empty report even though the
+              # same spool is inserted again immediately.  The active print's
+              # validated usage row is the only safe recovery source; do not
+              # infer a spool from colour or material metadata.
+              recovered_spool = _recover_spool_assignment_from_active_print(
+                ams["id"], tray.get("id"), spool_list,
+              )
+              if recovered_spool:
+                found = True
+                assigned_spool = recovered_spool
+                filament = recovered_spool.get("filament") or {}
+                vendor = (filament.get("vendor") or {}).get("name") or ""
+                material = filament.get("material") or ""
+                name = filament.get("name") or ""
+                description = " - ".join(value for value in (material, name, vendor) if value)
+                if log_ams:
+                  log(f"      - Spool #{recovered_spool.get('id')}: {description or 'aus aktivem Druck wiederhergestellt'}")
+                try:
+                  FILAMENT_TRACKER.request_replay_after_assignment()
+                except Exception as flush_error:
+                  log(f"[filament-tracker] Gepufferter Verbrauch konnte nach AMS-Wiederherstellung nicht gebucht werden: {flush_error!r}")
 
             if not found and (not tray_uuid or tray_uuid == zero_uuid):
               if log_ams:

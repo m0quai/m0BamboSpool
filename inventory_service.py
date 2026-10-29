@@ -8,13 +8,13 @@ from config import (
     COLOR_DISTANCE_TOLERANCE,
 )
 from datetime import datetime
-from zoneinfo import ZoneInfo
 from pathlib import Path
 from print_history import update_filament_spool
 import json
 
 import inventory_repository as spool_data
 from logger import log
+from ui_formatting import LOCAL_TIMEZONE
 
 SPOOLS = {}
 INVENTORY_SETTINGS = {}
@@ -37,8 +37,11 @@ def _parse_last_used(value):
     except ValueError:
       return None
   if dt.tzinfo is None:
-    dt = dt.replace(tzinfo=ZoneInfo("UTC"))
-  return dt
+    # SQLite's historic last_used values are local wall-clock timestamps,
+    # not UTC.  Using UTC here shifted every summer value by two hours and
+    # every winter value by one hour when it was rendered in the UI.
+    return dt.replace(tzinfo=LOCAL_TIMEZONE)
+  return dt.astimezone(LOCAL_TIMEZONE)
 
 
 def clear_active_spool_for_tray(ams_id: int, tray_id: int) -> None:
@@ -312,7 +315,7 @@ def augment_tray_data(spool_list, tray_data, ams_id, tray_id):
           tray_data["last_used"] = "-"
           tray_data.pop("last_used_iso", None)
         else:
-          local_time = dt.astimezone()
+          local_time = dt.astimezone(LOCAL_TIMEZONE)
           tray_data["last_used_iso"] = local_time.isoformat()
           # Keep the value machine-readable; templates apply the central
           # locale-aware date/time formatter for the visible value.
@@ -522,7 +525,7 @@ def spendFilaments(printdata):
         spool_data.record_consumption(spool["id"], weight_grams=used_grams)
 
 
-def setActiveTray(spool_id, spool_extra, ams_id, tray_id, source="manual", nfc_uid=None):
+def setActiveTray(spool_id, spool_extra, ams_id, tray_id, source="manual", nfc_uid=None, internal_recovery=False):
   if spool_extra is None:
     spool_extra = {}
 
@@ -557,6 +560,7 @@ def setActiveTray(spool_id, spool_extra, ams_id, tray_id, source="manual", nfc_u
       active_tray=json.dumps(trayUid(ams_id, tray_id)),
       active_tray_source="nfc" if str(source).lower() == "nfc" else "manual",
       active_tray_nfc_uid=json.dumps(str(normalized_nfc_uid or "").strip().upper()) if source_name == "nfc" and normalized_nfc_uid else json.dumps(""),
+      allow_active_print=bool(internal_recovery),
     )
 
     # Remove active tray from inactive spools

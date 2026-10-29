@@ -18,9 +18,15 @@ from logger import log
 
 
 _BBL_PATH_CACHE = {}
-FTP_LOW_SPEED_LIMIT = 1024
-# Reopen the printer connection quickly when no bytes arrive at all.
-FTP_LOW_SPEED_TIME = 30
+# The explicit progress callback below detects a true no-progress stall.  Keep
+# libcurl's low-speed fallback equally short, but permit any positive transfer
+# rate so a slow printer is not mistaken for a stall.
+FTP_LOW_SPEED_LIMIT = 1
+# Abort a transfer only after a sustained idle period.  Eight seconds gives
+# the printer a little more room during FTP response/packet gaps while still
+# triggering a fresh handle promptly when bytes truly stop moving.
+FTP_LOW_SPEED_TIME = 8
+FTP_STALL_TIMEOUT = 8
 FTP_RECEIVE_BUFFER_SIZE = 512 * 1024
 RUNTIME_METADATA_NAMESPACE = "printer_3mf_paths"
 
@@ -512,11 +518,6 @@ def download3mfFromFTP(filename, destFile, progress_callback=None, cancel_event=
         f"stillstand={FTP_LOW_SPEED_LIMIT}B/s für {FTP_LOW_SPEED_TIME}s, "
         f"receive_buffer={FTP_RECEIVE_BUFFER_SIZE}B"
     )
-    log(
-        "[3MF][FTP] FTP-Teilbereiche unterstützt: nein/für dieses Gerät nicht funktionsfähig "
-        "(Druckerprobe 2026-09-25: RANGE 0-4095 scheiterte mit libcurl 56); "
-        "verwende Einzeltransfer."
-    )
     remote_paths = []
     current_context = _current_print_context()
     if filename.startswith("/") and filename.lower().endswith(".3mf"):
@@ -553,6 +554,8 @@ def download3mfFromFTP(filename, destFile, progress_callback=None, cancel_event=
         "started": None,
         "last_log": 0.0,
         "last_bytes": 0,
+        "last_progress_bytes": 0,
+        "last_progress_at": None,
         "first_data": False,
     }
 
@@ -563,6 +566,21 @@ def download3mfFromFTP(filename, destFile, progress_callback=None, cancel_event=
         total = int(_download_total or 0)
         done = int(downloaded or 0)
         now = time.monotonic()
+        if done > progress_state["last_progress_bytes"]:
+            progress_state["last_progress_bytes"] = done
+            progress_state["last_progress_at"] = now
+        elif (
+            progress_state["last_progress_at"] is not None
+            and now - progress_state["last_progress_at"] >= FTP_STALL_TIMEOUT
+        ):
+            stalled_for = now - progress_state["last_progress_at"]
+            log(
+                f"[3MF][FTP] Transfer ohne Fortschritt seit {stalled_for:.1f}s; "
+                f"Handle wird für sofortigen neuen Versuch abgebrochen: "
+                f"pfad={progress_state['path']}, versuch={progress_state['attempt']}, "
+                f"bytes={done}/{total or '?'}, prozent={round(done * 100 / total, 1) if total else '?'}"
+            )
+            return 1
         if done > 0 and not progress_state["first_data"]:
             progress_state["first_data"] = True
             log(
@@ -613,6 +631,8 @@ def download3mfFromFTP(filename, destFile, progress_callback=None, cancel_event=
                     "started": attempt_started,
                     "last_log": attempt_started,
                     "last_bytes": 0,
+                    "last_progress_bytes": 0,
+                    "last_progress_at": attempt_started,
                     "first_data": False,
                 })
                 log(
@@ -649,7 +669,7 @@ def download3mfFromFTP(filename, destFile, progress_callback=None, cancel_event=
                             f"lokale_bytes={os.path.getsize(local_path) if os.path.exists(local_path) else 0}, "
                             f"curl={_curl_diagnostics(c)}, fehler={exc!r}"
                         )
-                        if err_code in reconnect_codes:
+                        if err_code in reconnect_codes or err_code == 42:
                             try:
                                 c.close()
                             except Exception:
@@ -660,7 +680,7 @@ def download3mfFromFTP(filename, destFile, progress_callback=None, cancel_event=
                             )
                             c = setupPycurlConnection(ftp_user, ftp_pass)
                             configure_progress(c)
-                        if attempt == 1 and err_code in reconnect_codes:
+                        if attempt == 1 and (err_code in reconnect_codes or err_code == 42):
                             continue
                         if err_code == 9:
                             log(f"[3MF][FTP] Zugriff verweigert: {remote_path}")

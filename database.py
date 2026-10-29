@@ -5,10 +5,12 @@ from __future__ import annotations
 import os
 import sqlite3
 import json
+import threading
 from pathlib import Path
 from datetime import datetime
 
 from config import DATABASE_NAME, DATABASE_PATH, DATABASE_PATH_OVERRIDE, DATABASE_TYPE
+from ui_formatting import LOCAL_TIMEZONE
 
 
 LEGACY_DATABASE_NAME = "3d_printer_logs.db"
@@ -19,6 +21,31 @@ LEGACY_DATABASE_NAME = "3d_printer_logs.db"
 # printer is offline for several days, its last samples are not discarded just
 # because time passed without new telemetry.
 HUMIDITY_HISTORY_MAX_SAMPLES = 192
+
+# Schema creation/migrations used to run on every short-lived connection.
+# During a layer-by-layer 3MF replay that made many concurrent SQLite handles
+# repeatedly acquire the schema lock on the Windows bind mount and could end
+# in the misleading ``disk I/O error`` reported by the 3MF worker.  Keep the
+# one-time migration state per database path for the lifetime of this process.
+_SCHEMA_READY: set[str] = set()
+_SCHEMA_READY_LOCK = threading.RLock()
+
+
+class _ClosingConnection(sqlite3.Connection):
+    """SQLite context manager that also releases the file handle.
+
+    ``sqlite3.Connection`` commits or rolls back when used with ``with``,
+    but it deliberately leaves the connection open.  The application uses
+    short-lived connections throughout, and leaving those handles alive is
+    especially visible on Windows where a temporary database cannot be
+    removed while it is still open.
+    """
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
 
 
 def _migrate_legacy_database_file(target_path: Path) -> None:
@@ -65,9 +92,20 @@ def connect_database(path: str | Path | None = None) -> sqlite3.Connection:
     target_path = Path(path).expanduser() if path is not None else DATABASE_PATH
     target_path.parent.mkdir(parents=True, exist_ok=True)
     _migrate_legacy_database_file(target_path)
-    connection = sqlite3.connect(str(target_path), timeout=15)
+    connection = sqlite3.connect(str(target_path), timeout=15, factory=_ClosingConnection)
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA busy_timeout = 15000")
+
+    schema_key = str(target_path.resolve())
+    # The application initializes the database during startup.  Once that
+    # migration completed, ordinary read/write connections must not repeat
+    # CREATE/ALTER/INDEX statements; this is particularly important for the
+    # Windows/9p bind mount used by Docker Desktop.
+    with _SCHEMA_READY_LOCK:
+        schema_already_ready = schema_key in _SCHEMA_READY
+    if schema_already_ready:
+        return connection
+
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS runtime_metadata (
@@ -122,6 +160,8 @@ def connect_database(path: str | Path | None = None) -> sqlite3.Connection:
         "ON humidity_history (printer_id, ams_id, observed_at)"
     )
     connection.commit()
+    with _SCHEMA_READY_LOCK:
+        _SCHEMA_READY.add(schema_key)
     return connection
 
 
@@ -133,9 +173,14 @@ def record_humidity_snapshots(
     # Store one latest-value row per printer, AMS and full quarter-hour.
     if not printer_id or not metrics:
         return 0
-    timestamp_dt = datetime.fromisoformat(observed_at) if observed_at else datetime.now().astimezone()
+    timestamp_dt = datetime.fromisoformat(observed_at) if observed_at else datetime.now(LOCAL_TIMEZONE)
     if timestamp_dt.tzinfo is None:
-        timestamp_dt = timestamp_dt.astimezone()
+        # Telemetry from older callers is a local wall-clock value.  Attach
+        # the configured IANA zone before quarter-hour bucketing so the DST
+        # boundary cannot move a sample into the wrong slot.
+        timestamp_dt = timestamp_dt.replace(tzinfo=LOCAL_TIMEZONE)
+    else:
+        timestamp_dt = timestamp_dt.astimezone(LOCAL_TIMEZONE)
     timestamp_dt = timestamp_dt.replace(
         minute=(timestamp_dt.minute // 15) * 15,
         second=0,

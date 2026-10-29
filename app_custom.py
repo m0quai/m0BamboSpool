@@ -360,48 +360,7 @@ def _render_template_with_printer_progress(template_name, *args, **kwargs):
 
 _m0bambospool_app_module.render_template = _render_template_with_printer_progress
 
-_UI_TRANSLATIONS = {
-        "de": {"Home":"Home", "History":"History", "LiveCam":"LiveCam", "Inventory":"Inventar", "Settings":"Settings", "Spool":"Spule", "Hersteller":"Hersteller", "Material":"Material", "Filament":"Filament", "Farbe":"Farbe", "Restgewicht":"Restgewicht", "Drucke":"Drucke", "Alle":"Alle", "Status":"Status", "ausgewählt":"ausgewählt", "Datum":"Datum", "Auftrag":"Auftrag", "Verbrauch":"Verbrauch", "Ohne Namen":"Ohne Namen", "ungebraucht":"ungebraucht", "Keine Spulen gefunden":"Keine Spulen gefunden", "Sprache":"Sprache", "Deutsch":"Deutsch", "Englisch":"Englisch", "Speichern":"Speichern", "Print history":"Druckhistorie", "Jetzt aktualisieren":"Jetzt aktualisieren", "Druckname":"Druckname", "Aktive anzeigen":"Aktive anzeigen", "Gelöschte anzeigen":"Gelöschte anzeigen", "Previous":"Zurück", "Next":"Weiter", "Page":"Seite", "of":"von", "Abmelden":"Abmelden", "Drucker übernehmen":"Drucker übernehmen", "Code bestätigen":"Code bestätigen", "Bei Bambu anmelden":"Bei Bambu anmelden", "Drucker Verbindung":"Drucker Verbindung", "Verbindungsmodus":"Verbindungsmodus", "Lokaler LAN-Modus":"Lokaler LAN-Modus", "Online-Authentifizierung":"Online-Authentifizierung", "Direkte Verbindung zum Drucker im lokalen Netzwerk.":"Direkte Verbindung zum Drucker im lokalen Netzwerk.", "Drucker-IP":"Drucker-IP", "Seriennummer":"Seriennummer", "Druckername":"Druckername", "Printer Access LAN":"Printer Access LAN", "Drucker auswählen":"Drucker auswählen", "Keine gebundenen Drucker zurückgegeben.":"Keine gebundenen Drucker zurückgegeben."},
-    "en": {"Home":"Home", "History":"History", "LiveCam":"LiveCam", "Inventory":"Inventory", "Settings":"Settings", "Spool":"Spool", "Hersteller":"Manufacturer", "Material":"Material", "Filament":"Filament", "Farbe":"Color", "Restgewicht":"Remaining weight", "Drucke":"Prints", "Alle":"All", "Status":"Status", "ausgewählt":"selected", "Datum":"Date", "Auftrag":"Job", "Verbrauch":"Usage", "Ohne Namen":"Unnamed", "ungebraucht":"Unused", "Keine Spulen gefunden":"No spools found", "Sprache":"Language", "Deutsch":"German", "Englisch":"English", "Speichern":"Save", "Print history":"Print history", "Jetzt aktualisieren":"Refresh now", "Druckname":"Print name", "Aktive anzeigen":"Show active", "Gelöschte anzeigen":"Show deleted", "Previous":"Previous", "Next":"Next", "Page":"Page", "of":"of", "Abmelden":"Sign out", "Drucker übernehmen":"Use printer", "Code bestätigen":"Confirm code", "Bei Bambu anmelden":"Sign in to Bambu", "Drucker Verbindung":"Printer connection", "Verbindungsmodus":"Connection mode", "Lokaler LAN-Modus":"Local LAN mode", "Online-Authentifizierung":"Online authentication", "Direkte Verbindung zum Drucker im lokalen Netzwerk.":"Direct connection to the printer on the local network.", "Drucker-IP":"Printer IP", "Seriennummer":"Serial number", "Druckername":"Printer name", "Printer Access LAN":"Printer LAN access", "Drucker auswählen":"Select printer", "Keine gebundenen Drucker zurückgegeben.":"No bound printers returned."},
-}
-
-# Additional labels used by the existing pages. Keeping these keys here lets
-# legacy templates migrate incrementally while still using one translation
-# source.
-_UI_TRANSLATIONS["de"].update({
-    "Deutsch oder Englisch für die Benutzeroberfläche": "Deutsch oder Englisch für die Benutzeroberfläche",
-    "Ein LAN Access-Code ist gespeichert. Leer lassen, um ihn beizubehalten.": "Ein LAN Access-Code ist gespeichert. Leer lassen, um ihn beizubehalten.",
-    "Bambu Cloud": "Bambu Cloud", "Angemeldet": "Angemeldet", "als": "als", "Name": "Name", "Modell": "Modell", "Online": "Online", "Lokale IP": "Lokale IP", "Bambu Cloud anmelden": "Bambu Cloud anmelden", "Bambu E-Mail": "Bambu E-Mail", "Passwort": "Passwort", "Verbunden": "Verbunden", "Nicht verbunden": "Nicht verbunden", "MQTT": "MQTT", "Status:": "Status:",
-    "Bambu tag": "Bambu-Tag", "Error": "Fehler", "Back": "Zurück", "Fill Tray": "Fach füllen", "External Spool": "Externe Spule", "Solve issue": "Problem lösen", "Livebild": "Livebild", "NFC-Tags": "NFC-Tags", "Zurück": "Zurück", "Unbekannter NFC-Tag": "Unbekannter NFC-Tag", "Spule auswählen ...": "Spule auswählen ...", "Spule zuordnen": "Spule zuordnen", "Keine unbekannten NFC-Tags vorhanden.": "Keine unbekannten NFC-Tags vorhanden.", "Change spool": "Spule ändern", "Assign spool to print": "Spule dem Druck zuordnen", "Assign Tray": "Fach zuordnen", "NFC Write Process": "NFC-Schreibvorgang", "Follow the steps below to write data to your NFC tag.": "Folge den Schritten zum Schreiben deines NFC-Tags.", "Allow NFC usage if prompted.": "Erlaube die NFC-Nutzung, wenn du dazu aufgefordert wirst.", "Bring the tag close to your phone when prompted.": "Halte den Tag an dein Telefon, wenn du dazu aufgefordert wirst.", "Humidity": "Luftfeuchtigkeit", "Filament type mismatch": "Filamenttyp stimmt nicht überein", "No AMS material selected": "Kein AMS-Material ausgewählt", "Fach leer": "Fach leer", "Unknown spool detected": "Unbekannte Spule erkannt", "Last used:": "Zuletzt verwendet:", "Full": "Voll", "Remaining:": "Verbleibend:", "Assign": "Zuordnen", "Clear": "Leeren", "Fill": "Füllen", "No Image": "Kein Bild", "Print ID": "Druck-ID", "Druck": "Druck", "Layers": "Schichten", "Billed": "Abgerechnet", "Progress": "Fortschritt", "No spool assigned": "Keine Spule zugeordnet", "printed": "gedruckt", "expected": "erwartet", "Spule ändern": "Spule ändern", "Eintrag aus der History ausblenden": "Eintrag aus der History ausblenden", "Eintrag löschen": "Eintrag löschen", "Remaining Weight:": "Restgewicht:", "Remaining Length:": "Restlänge:", "Nozzle Temp:": "Düsentemperatur:", "Registered:": "Registriert:", "Last Used:": "Zuletzt verwendet:", "Keine Historie vorhanden.": "Keine Historie vorhanden.", "Success!": "Erfolgreich!"
-})
-_UI_TRANSLATIONS["en"].update({
-    "Deutsch oder Englisch für die Benutzeroberfläche": "German or English for the user interface", "Ein LAN Access-Code ist gespeichert. Leer lassen, um ihn beizubehalten.": "A LAN access code is saved. Leave empty to keep it.", "Angemeldet": "Signed in", "als": "as", "Lokale IP": "Local IP", "Verbunden": "Connected", "Nicht verbunden": "Not connected", "Status:": "Status:", "Zurück": "Back", "Spule zuordnen": "Assign spool", "Keine unbekannten NFC-Tags vorhanden.": "No unknown NFC tags found.", "No Image": "No image", "Success!": "Success!", "Keine Historie vorhanden.": "No history available.", "Clear": "Clear", "Fill": "Fill", "Assign": "Assign", "Back": "Back", "Error": "Error", "Livebild": "Live view", "Humidity": "Humidity", "Full": "Full", "Remaining:": "Remaining:", "Last used:": "Last used:", "Unbekannter NFC-Tag": "Unknown NFC tag", "Spule auswählen ...": "Select spool ...", "Spule ändern": "Change spool", "Eintrag löschen": "Delete entry", "Eintrag aus der History ausblenden": "Hide history entry", "Keine Spule zugeordnet": "No spool assigned", "gedruckt": "printed", "erwartet": "expected", "Druck-ID": "Print ID", "Druck": "Print", "Schichten": "Layers", "Abgerechnet": "Billed", "Fortschritt": "Progress", "Restgewicht:": "Remaining weight:", "Restlänge:": "Remaining length:", "Düsentemperatur:": "Nozzle temperature:", "Registriert:": "Registered:", "Zuletzt verwendet:": "Last used:"
-})
-_UI_TRANSLATIONS["de"]["Last print"] = "Letzter Druck"
-_UI_TRANSLATIONS["en"]["Last print"] = "Last print"
-_UI_TRANSLATIONS["de"]["(geschätzt)"] = "(geschätzt)"
-_UI_TRANSLATIONS["en"]["(geschätzt)"] = "(estimated)"
-_UI_TRANSLATIONS["de"].update({"Finished": "Abgeschlossen", "Completed": "Abgeschlossen", "Failed": "Fehlgeschlagen", "Cancelled": "Abgebrochen", "Aborted": "Abgebrochen", "Running": "Druck läuft"})
-_UI_TRANSLATIONS["en"].update({"Finished": "Finished", "Completed": "Completed", "Failed": "Failed", "Cancelled": "Cancelled", "Aborted": "Aborted", "Running": "Printing"})
-_UI_TRANSLATIONS["de"]["Ready"] = "Bereit"
-_UI_TRANSLATIONS["en"]["Ready"] = "Ready"
-_UI_TRANSLATIONS["de"].update({"Last status": "Letzter Status", "Last booking": "Letzte Buchung"})
-_UI_TRANSLATIONS["en"].update({"Last status": "Last status", "Last booking": "Last booking"})
-_UI_TRANSLATIONS["de"].update({"Ende": "Ende", "Dauer": "Dauer"})
-_UI_TRANSLATIONS["en"].update({"Ende": "End", "Dauer": "Duration"})
-_UI_TRANSLATIONS["de"].update({"Letzter Druck": "Letzter Druck", "Letzter Status": "Letzter Status", "Letzte Buchung": "Letzte Buchung"})
-_UI_TRANSLATIONS["en"].update({"Letzter Druck": "Last print", "Letzter Status": "Last status", "Letzte Buchung": "Last booking"})
-_UI_TRANSLATIONS["de"].update({"wird geladen": "wird geladen", "wird entladen": "wird entladen", "wird gedruckt": "wird gedruckt"})
-_UI_TRANSLATIONS["en"].update({"wird geladen": "is loading", "wird entladen": "is unloading", "wird gedruckt": "is printing"})
-_UI_TRANSLATIONS["de"].update({"Filament wird geladen": "Filament wird geladen", "Filament wird entladen": "Filament wird entladen", "Filament wird gedruckt": "Filament wird gedruckt"})
-_UI_TRANSLATIONS["en"].update({"Filament wird geladen": "Filament is loading", "Filament wird entladen": "Filament is unloading", "Filament wird gedruckt": "Filament is printing"})
-
-# The external module is the authoritative source; the legacy inline map
-# above is retained only for compatibility with older local checkouts.
 from translations import UI_TRANSLATIONS as _UI_TRANSLATIONS
-
-_UI_TRANSLATIONS["de"].update({"Schicht": "Schicht", "Ende": "Ende", "Restlaufzeit": "Restlaufzeit", "Verbleibend": "verbleibend"})
-_UI_TRANSLATIONS["en"].update({"Schicht": "Layer", "Ende": "End", "Restlaufzeit": "Remaining", "Verbleibend": "remaining"})
 
 def _ui_language():
     language = session.get("ui_language", "de")
@@ -723,7 +682,11 @@ mqtt_bambulab.getMetaDataFrom3mf = _get_metadata_from_3mf_with_retry
 
 @app.before_request
 def open_bambu_setup_when_mqtt_is_offline():
-    if request.endpoint == "home" and not mqtt_bambulab.isMqttClientConnected():
+    # The bare application URL is the local Home dashboard.  It must remain
+    # reachable even while MQTT is offline so the user can see the offline
+    # state and use the rest of the local UI; cloud setup remains available
+    # through its explicit route.
+    if request.endpoint == "home" and request.path != "/" and not mqtt_bambulab.isMqttClientConnected():
         return redirect(url_for("bambu_cloud.index"))
 
 
@@ -735,6 +698,18 @@ def home_status():
         last_print=print_history_service.get_latest_print_summary(),
         active_print_running=_active_print_is_running(),
     )
+
+
+@app.route("/home/", endpoint="home_status_trailing")
+def home_status_trailing():
+    # Accept the trailing-slash variant without creating a second dashboard.
+    return home_status()
+
+
+# app.py owns the historical `/` route.  The custom entry point is the active
+# application, so point that existing rule at the local Home dashboard without
+# modifying app.py.  `/ams` remains the explicit legacy AMS dashboard route.
+_m0bambospool_app_module.app.view_functions["home"] = home_status
 
 
 @app.route("/ams")
@@ -885,11 +860,14 @@ def _current_filament_activity():
         None,
     )
     filament = (spool or {}).get("filament") or {}
-    label = ""
+    # The local filament record is authoritative for the activity label.  Do
+    # not derive the name from the physical tray colour: identical colours may
+    # exist in multiple filaments and the AMS colour is only presentation data.
+    label = str(filament.get("name") or filament.get("material") or "").strip()
     physical_color = str((ams_tray or {}).get("tray_color") or "").strip().replace("#", "").upper()
     if len(physical_color) >= 8:
         physical_color = physical_color[:6]
-    if physical_color:
+    if not label and physical_color:
         try:
             color_match = next(
                 (color for color in inventory_db.list_colors()
@@ -900,8 +878,13 @@ def _current_filament_activity():
         except Exception:
             label = ""
     if not label:
-        label = str(filament.get("name") or filament.get("material") or "Filament").strip()
-    return {"label": label, "state": activity_state, "tray": f"{ams_id}:{tray_id}"}
+        label = "Filament"
+    return {
+        "label": label,
+        "spool_id": spool.get("id") if spool else None,
+        "state": activity_state,
+        "tray": f"{ams_id}:{tray_id}",
+    }
 
 
 def _inventory_ams_status_fingerprint():
@@ -1249,11 +1232,13 @@ def inventory():
     except Exception as exc:
         _log(f"Inventory could not load archived spools: {exc}")
         spools = [spool for spool in mqtt_bambulab.fetchSpools() if not spool.get("archived")]
+    spool_ids = [spool.get("id") for spool in spools if spool.get("id") is not None]
+    prints_by_spool = print_history_service.get_spool_print_usage_for_spools(spool_ids)
     for spool in spools:
         spool_id = spool.get("id")
         if spool_id is None:
             continue
-        prints = print_history_service.get_spool_print_usage(spool_id)
+        prints = prints_by_spool.get(int(spool_id), [])
         # The local catalog owns the authoritative timestamp.  The print history
         # is a fallback for older records that do not expose last_used.
         last_used = spool.get("last_used") or (prints[0].get("print_date") if prints else None)
@@ -1265,14 +1250,14 @@ def inventory():
     show_status_column = any(bool(item["spool"].get("archived")) for item in inventory_rows)
     local_mode = True
     try:
-        # The local catalog is the inventory, AMS and print-usage backend.
-        for item in inventory_rows:
-            inventory_db.ensure_local_spool_from_inventory(item["spool"])
+        # The local catalog is already authoritative.  Do not re-synchronize
+        # every spool during a read-only page request; that caused one schema
+        # initialization and several SQLite writes per spool.
         vendors = inventory_db.list_entities("vendors")
         materials = inventory_db.list_entities("materials")
         colors = inventory_db.list_colors()
         filaments = inventory_db.list_filaments()
-        local_spools = inventory_db.list_spools(include_archived=True)
+        local_spools = spools
         inventory_last_used = {
             str(item["spool"].get("id")): item.get("last_used")
             for item in inventory_rows
@@ -1473,7 +1458,7 @@ def duplicate_local_filament(filament_id):
         values = {field: source.get(field) for field in (
             "vendor_id", "material_id", "color_id", "color_hex", "diameter", "weight",
             "spool_weight", "price", "nozzle_temp_min", "nozzle_temp_max",
-            "cali_idx", "bambu_filament_id", "bambu_setting_id",
+            "cali_idx", "bambu_filament_id", "bambu_setting_id", "comment",
         )}
         values["name"] = f'{source.get("name") or "Filament"} (Kopie)'
         new_id = inventory_db.save_entity("filaments", values)

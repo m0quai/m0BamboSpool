@@ -43,8 +43,14 @@ def record_usage_marker(spool_id: int | str, *, occurred_at: str | None = None) 
     return True
 
 
-def update_spool_extra(spool_id: int | str, old_extra: dict[str, Any] | None, **values: Any) -> None:
-    _local.set_spool_extra(spool_id, values)
+def update_spool_extra(
+    spool_id: int | str,
+    old_extra: dict[str, Any] | None,
+    *,
+    allow_active_print: bool = False,
+    **values: Any,
+) -> None:
+    _local.set_spool_extra(spool_id, values, allow_active_print=allow_active_print)
 
 
 def update_filament_metadata(

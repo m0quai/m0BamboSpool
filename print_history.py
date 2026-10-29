@@ -516,6 +516,36 @@ def find_active_print_for_printer_source(*names: str | None) -> dict | None:
     return None
 
 
+def get_completed_remote_3mf_cleanup_path(print_id: int) -> str | None:
+    """Return a printer-side 3MF path only when it is safe to remove.
+
+    Bambu reuses names such as ``/BoxenInhalt.gcode.3mf`` for consecutive
+    jobs.  A completed older print must therefore never delete a path that a
+    newer active print is currently using.
+    """
+    with connect_database(db_config["db_path"]) as conn:
+        row = conn.execute(
+            """SELECT remote_3mf_path FROM print_layer_tracking
+               WHERE print_id = ? AND status = 'COMPLETED'
+                 AND COALESCE(deleted, 0) = 0
+                 AND remote_3mf_path IS NOT NULL AND remote_3mf_path <> ''""",
+            (int(print_id),),
+        ).fetchone()
+        if not row:
+            return None
+        remote_path = str(row[0]).strip()
+        active = conn.execute(
+            """SELECT 1 FROM print_layer_tracking
+               WHERE print_id <> ?
+                 AND status IN ('PREPARING', 'RUNNING', 'PAUSED')
+                 AND COALESCE(deleted, 0) = 0
+                 AND remote_3mf_path = ?
+               LIMIT 1""",
+            (int(print_id), remote_path),
+        ).fetchone()
+        return None if active else remote_path
+
+
 def find_recent_aborted_print(file_name: str, cooldown_seconds: int = 120):
     """Return a recently aborted attempt for the same printer file.
 
@@ -966,8 +996,12 @@ def claim_filament_usage_event(print_id: int | None, layer: int, filament_index:
     if print_id is None:
         return "pending"
     conn = connect_database(db_config["db_path"])
+    # Claim and state transition must be one SQLite transaction. Without an
+    # immediate lock, the replay worker and the live MQTT layer can both see
+    # the same missing event and race into a duplicate insert/consumption.
+    conn.execute("BEGIN IMMEDIATE")
     row = conn.execute(
-        "SELECT status FROM filament_usage_events WHERE print_id = ? AND layer = ? AND filament_index = ?",
+        "SELECT id, status, deleted FROM filament_usage_events WHERE print_id = ? AND layer = ? AND filament_index = ?",
         (print_id, int(layer), int(filament_index)),
     ).fetchone()
     if row is None:
@@ -978,12 +1012,20 @@ def claim_filament_usage_event(print_id: int | None, layer: int, filament_index:
             (print_id, int(layer), int(filament_index), int(spool_id), float(length_used), datetime.now().isoformat()),
         )
         row = conn.execute(
-            "SELECT status FROM filament_usage_events WHERE print_id = ? AND layer = ? AND filament_index = ?",
+            "SELECT id, status, deleted FROM filament_usage_events WHERE print_id = ? AND layer = ? AND filament_index = ?",
             (print_id, int(layer), int(filament_index)),
         ).fetchone()
+    elif row[2]:
+        # Soft-deleted events retain the unique logical key. Reuse that row
+        # during an idempotent replay instead of attempting a duplicate insert.
+        conn.execute(
+            "UPDATE filament_usage_events SET spool_id = ?, length_used = ?, status = 'pending', deleted = 0 WHERE id = ?",
+            (int(spool_id), float(length_used), int(row[0])),
+        )
+        row = (row[0], "pending", 0)
     conn.commit()
     conn.close()
-    return row[0] if row else None
+    return row[1] if row else None
 
 
 def finalize_filament_usage_events(print_id: int) -> None:
@@ -1061,8 +1103,10 @@ def _ensure_spool_usage_view(conn: sqlite3.Connection) -> None:
     if 'spool_usage' not in required:
         return
     conn.executescript("""
-        DROP VIEW IF EXISTS v_spool_usage;
-        CREATE VIEW v_spool_usage AS
+        -- Several history requests can initialize the view concurrently.
+        -- The inventory migration owns destructive recreation; this helper
+        -- only fills a missing view and must therefore be idempotent.
+        CREATE VIEW IF NOT EXISTS v_spool_usage AS
         SELECT u.*, f.name AS filament_name, m.name AS material_name,
                c.hex_code AS color_hex
         FROM spool_usage u
@@ -1225,10 +1269,24 @@ def get_prints_by_spool(spool_id: int):
 
 def get_spool_print_usage(spool_id: int) -> list[dict]:
     # Return the print-level consumption records for one spool.
+    return get_spool_print_usage_for_spools([spool_id]).get(int(spool_id), [])
+
+
+def get_spool_print_usage_for_spools(spool_ids: list[int] | tuple[int, ...]) -> dict[int, list[dict]]:
+    """Load print-level consumption records for several spools in one query.
+
+    The inventory page displays the usage list for every spool.  Keeping this
+    batched avoids opening one SQLite connection and running one query per
+    spool on every page request.
+    """
+    ids = sorted({int(spool_id) for spool_id in (spool_ids or []) if spool_id is not None})
+    if not ids:
+        return {}
     conn = connect_database(db_config["db_path"])
     conn.row_factory = sqlite3.Row
+    placeholders = ",".join("?" for _ in ids)
     rows = conn.execute(
-        """SELECT p.id AS print_id, p.print_date, p.file_name,
+        f"""SELECT f.spool_id, p.id AS print_id, p.print_date, p.file_name,
                   f.grams_used, f.length_used, f.calculated_length,
                   f.consumed_length,
                   COALESCE(t.status, 'COMPLETED') AS status,
@@ -1240,12 +1298,17 @@ def get_spool_print_usage(spool_id: int) -> list[dict]:
            FROM prints p
            JOIN spool_usage f ON f.print_id = p.id
            LEFT JOIN print_layer_tracking t ON t.print_id = p.id
-           WHERE f.spool_id = ? AND f.deleted = 0 AND p.deleted = 0 AND COALESCE(t.deleted, 0) = 0
-           ORDER BY p.print_date DESC, p.id DESC""",
-        (int(spool_id),),
+           WHERE f.spool_id IN ({placeholders}) AND f.deleted = 0
+             AND p.deleted = 0 AND COALESCE(t.deleted, 0) = 0
+           ORDER BY f.spool_id, p.print_date DESC, p.id DESC""",
+        tuple(ids),
     ).fetchall()
     conn.close()
-    return [dict(row) for row in rows]
+    usage_by_spool = {spool_id: [] for spool_id in ids}
+    for row in rows:
+        item = dict(row)
+        usage_by_spool.setdefault(int(item.pop("spool_id")), []).append(item)
+    return usage_by_spool
 
 def get_filament_for_slot(print_id: int, ams_slot: int):
   conn = connect_database(db_config["db_path"])
