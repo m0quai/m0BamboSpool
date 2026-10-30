@@ -173,6 +173,17 @@ try:
     spool_data.ensure_local_catalog()
 except Exception as exc:
     _log(f"Local inventory schema initialization failed: {exc!r}")
+else:
+    try:
+        _density_repair = print_history_service.recalculate_usage_grams_from_lengths()
+        if _density_repair.get("usage_rows") or _density_repair.get("tracking_rows"):
+            _log(
+                "[History] Materialdichte-Rückrechnung abgeschlossen: "
+                f"{_density_repair['usage_rows']} Verbrauchszeilen, "
+                f"{_density_repair['tracking_rows']} Drucksummen."
+            )
+    except Exception as exc:
+        _log(f"Materialdichte-Rückrechnung fehlgeschlagen: {exc!r}")
 import inventory_service as _inventory_service
 
 _get_inventory_settings = _inventory_service.getSettings
@@ -237,6 +248,187 @@ def _get_prints_with_mos_pagination(limit=None, offset=None, include_deleted=Fal
 
 print_history_service.get_prints_with_filament = _get_prints_with_mos_pagination
 _original_app_render_template = _m0bambospool_app_module.render_template
+
+
+def _history_spool_cost_per_gram(spool):
+    """Return the frozen/local price per gram for a history spool.
+
+    History rows must use the spool's own snapshot first.  Falling back to the
+    filament defaults is only needed for older rows that predate the snapshot
+    fields; it keeps the display useful without ever resolving a spool by its
+    colour.
+    """
+    if not isinstance(spool, dict):
+        return 0.0
+    try:
+        initial_weight = float(spool.get("initial_weight") or 0)
+    except (TypeError, ValueError):
+        initial_weight = 0.0
+    try:
+        price = float(spool.get("price") or 0)
+    except (TypeError, ValueError):
+        price = 0.0
+    filament = spool.get("filament") if isinstance(spool.get("filament"), dict) else {}
+    if initial_weight <= 0:
+        try:
+            initial_weight = float(filament.get("weight") or 0)
+        except (TypeError, ValueError):
+            initial_weight = 0.0
+    if price <= 0:
+        try:
+            price = float(filament.get("price") or 0)
+        except (TypeError, ValueError):
+            price = 0.0
+    return price / initial_weight if initial_weight > 0 and price > 0 else 0.0
+
+
+def _history_slot_for_spool(spool):
+    if not isinstance(spool, dict):
+        return None
+    active_tray = spool.get("active_tray") or (spool.get("extra") or {}).get("active_tray")
+    try:
+        parts = str(active_tray or "").strip().strip('"').rsplit("_", 2)
+        if len(parts) != 3:
+            return None
+        slot = int(parts[1]) * 4 + int(parts[2])
+        return slot if 0 <= slot < 16 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _history_normalized_hex(value):
+    return str(value or "").strip().replace("#", "").upper()[0:6]
+
+
+def _history_spool_signature(spool):
+    if not isinstance(spool, dict):
+        return None
+    filament = spool.get("filament") if isinstance(spool.get("filament"), dict) else {}
+    color = _history_normalized_hex(filament.get("color_hex"))
+    material = str(filament.get("material") or "").strip().upper()
+    return (material, color) if material and color else None
+
+
+def _enrich_history_costs_and_repair_duplicate_spools(prints):
+    """Add costs and repair stale duplicate spool bindings for display.
+
+    Older jobs can contain two logical G-code rows bound to the same local
+    spool even though the AMS had two distinct assigned trays.  The local AMS
+    tray assignment is authoritative; colour metadata is deliberately not used
+    to choose a spool.  We retain the row on its assigned tray and use an
+    otherwise-unused active tray for the stale duplicate.  If no unambiguous
+    tray exists, the original row is left untouched for manual correction.
+    """
+    try:
+        spool_list = inventory_db.list_spools(include_archived=True)
+    except Exception:
+        # Cost fields remain available for rows already enriched by app.py;
+        # never turn a transient catalogue read into a history page failure.
+        spool_list = []
+    spool_by_id = {item.get("id"): item for item in spool_list if item.get("id") is not None}
+    active_by_slot = {}
+    for spool in spool_list:
+        slot = _history_slot_for_spool(spool)
+        if slot is None or slot in active_by_slot:
+            continue
+        active_by_slot[slot] = spool
+    active_by_signature = {}
+    for slot, spool in active_by_slot.items():
+        signature = _history_spool_signature(spool)
+        if signature is not None:
+            active_by_signature.setdefault(signature, []).append((slot, spool))
+
+    for print_entry in prints or []:
+        rows = print_entry.get("filament_usage") or []
+        # Repair legacy rows whose logical AMS index was attached to the
+        # wrong physical tray.  This is not colour-based selection: the
+        # G-code material/color is used only as a consistency key, and the
+        # candidate must be the unique matching spool already assigned in the
+        # local AMS.  Duplicate colours remain ambiguous and are untouched.
+        for row in rows:
+            gcode_signature = (
+                str(row.get("gcode_filament_type") or "").strip().upper(),
+                _history_normalized_hex(row.get("gcode_color")),
+            )
+            candidates = active_by_signature.get(gcode_signature, [])
+            if len(candidates) != 1:
+                continue
+            slot, candidate = candidates[0]
+            if row.get("spool_id") == candidate.get("id"):
+                row["physical_ams_slot"] = slot
+                continue
+            row["spool_id"] = candidate.get("id")
+            row["spool"] = candidate
+            row["physical_ams_slot"] = slot
+
+        # Detect only a genuine cross-colour duplicate.  Same-colour reconnect
+        # rows are already merged by the upstream history transformation.
+        by_spool = {}
+        for row in rows:
+            spool_id = row.get("spool_id")
+            if spool_id is not None:
+                by_spool.setdefault(spool_id, []).append(row)
+        occupied_slots = {
+            _history_slot_for_spool(row.get("spool"))
+            for row in rows
+            if row.get("spool") is not None and _history_slot_for_spool(row.get("spool")) is not None
+        }
+        for spool_id, duplicate_rows in by_spool.items():
+            if len(duplicate_rows) < 2:
+                continue
+            logical_slots = {row.get("ams_slot") for row in duplicate_rows}
+            gcode_colours = {str(row.get("gcode_color") or "").strip().lower() for row in duplicate_rows}
+            if len(logical_slots) < 2 or len(gcode_colours) < 2:
+                continue
+            source_spool = spool_by_id.get(spool_id) or next(
+                (row.get("spool") for row in duplicate_rows if row.get("spool")), None
+            )
+            source_slot = _history_slot_for_spool(source_spool)
+            # Keep the largest expected segment on the currently assigned
+            # physical tray. This is deterministic and never colour-based.
+            ordered = sorted(
+                duplicate_rows,
+                key=lambda row: float(row.get("estimated_grams") or 0),
+                reverse=True,
+            )
+            if source_slot is not None:
+                occupied_slots.add(source_slot)
+            for stale_row in ordered[1:]:
+                candidates = [
+                    (slot, candidate)
+                    for slot, candidate in sorted(active_by_slot.items())
+                    if slot not in occupied_slots and candidate.get("id") != spool_id
+                ]
+                if not candidates:
+                    continue
+                slot, replacement = candidates[0]
+                stale_row["spool_id"] = replacement.get("id")
+                stale_row["spool"] = replacement
+                stale_row["physical_ams_slot"] = slot
+                occupied_slots.add(slot)
+
+        actual_total = 0.0
+        expected_total = 0.0
+        for row in rows:
+            spool = row.get("spool")
+            rate = _history_spool_cost_per_gram(spool)
+            try:
+                actual_grams = float(row.get("grams_used") or 0)
+            except (TypeError, ValueError):
+                actual_grams = 0.0
+            try:
+                expected_grams = float(row.get("estimated_grams")) if row.get("estimated_grams") is not None else 0.0
+            except (TypeError, ValueError):
+                expected_grams = 0.0
+            row["actual_cost"] = max(0.0, actual_grams * rate)
+            row["expected_cost"] = max(0.0, expected_grams * rate)
+            # Keep the upstream alias available for any extension templates.
+            row["cost"] = row["actual_cost"]
+            actual_total += row["actual_cost"]
+            expected_total += row["expected_cost"]
+        print_entry["actual_cost_total"] = actual_total
+        print_entry["expected_cost_total"] = expected_total
+
 
 def _history_page_controls_script(page, total_pages):
     # Add numbered history pages after the untouched upstream template renders.
@@ -350,6 +542,8 @@ def _render_template_with_printer_progress(template_name, *args, **kwargs):
                 tracking["printer_percent"] = row.get("printer_percent")
                 tracking["last_status_at"] = row.get("last_status_at")
                 tracking["last_usage_event_at"] = row.get("last_usage_event_at")
+        _enrich_history_costs_and_repair_duplicate_spools(kwargs.get("prints", []) or [])
+        kwargs["history_currency_symbol"] = "€"
     rendered = _original_app_render_template(template_name, *args, **kwargs)
     if template_name == "print_history.html":
         return rendered.replace(
@@ -881,6 +1075,7 @@ def _current_filament_activity():
         label = "Filament"
     return {
         "label": label,
+        "material": str(filament.get("material") or "").strip(),
         "spool_id": spool.get("id") if spool else None,
         "state": activity_state,
         "tray": f"{ams_id}:{tray_id}",
@@ -1180,6 +1375,15 @@ def inject_m0bambospool_version():
 
 @app.before_request
 def reconcile_stale_print_history_statuses():
+    # The printer has one physical job at a time.  Replayed MQTT packets can
+    # leave an older history attempt marked RUNNING beside the current one;
+    # close that stale attempt before any page renders active-job state.
+    try:
+        print_history_service.reconcile_multiple_active_prints(
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        )
+    except Exception as exc:
+        _log(f"[History] Mehrfach aktive Drucke konnten nicht bereinigt werden: {exc!r}")
     print_state = (getattr(mqtt_bambulab, "PRINTER_STATE", {}).get("print", {}) or {})
     state = str(print_state.get("gcode_state") or "").upper()
     terminal_status = print_history_service.printer_state_to_history_status(
@@ -1748,7 +1952,10 @@ def inventory_save_entity(entity, entity_id=None):
     try:
         payload = _inventory_payload()
         saved_id = inventory_db.save_color(payload, entity_id) if entity == "colors" else inventory_db.save_entity(entity, payload, entity_id)
-        return jsonify({"ok": True, "id": saved_id, "record": {"id": saved_id, **payload}})
+        record = {"id": saved_id, **payload}
+        if entity in {"vendors", "materials"}:
+            record = next((item for item in inventory_db.list_entities(entity) if int(item["id"]) == int(saved_id)), record)
+        return jsonify({"ok": True, "id": saved_id, "record": record})
     except (ValueError, KeyError) as exc:
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:
@@ -2005,9 +2212,11 @@ def _custom_tray_clear():
 
         inventory_service.clear_active_spool_for_tray(ams_id, tray_id)
         inventory_service.SPOOLS = []
+        # The action originates on the AMS page; return there so the user can
+        # immediately verify the physical tray status and the local mapping.
         return redirect(
             url_for(
-                "home",
+                "ams",
                 success_message=(
                     f"Tray cleared in m0BamboSpool and on printer for AMS {ams_id}, "
                     f"Tray {int(tray_id) + 1}."

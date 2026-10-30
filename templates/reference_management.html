@@ -22,6 +22,8 @@
           <span class="reference-management-item-name">{{ row.name }}</span>
           {% if management_entity == 'colors' %}
           <span class="inventory-color-code" style="background-color:#{{ row.hex_code }}; color:{{ '#fff' if color_is_dark(row.hex_code) else '#111' }};">#{{ row.hex_code }}</span>
+          {% elif management_entity == 'materials' %}
+          <span class="reference-management-item-density">{{ format_number(row.density, 2) }} g/cm³</span>
           {% endif %}
         </button>
         {% else %}
@@ -45,6 +47,8 @@
         <div class="mb-3"><label class="form-label" for="reference-hex">{{ _('Farbcode') }}</label><input id="reference-hex" class="form-control" type="text" maxlength="7" pattern="^#?[0-9A-Fa-f]{6}$" placeholder="#RRGGBB" required></div>
         <div class="row g-2 mb-3"><div class="col-4"><label class="form-label" for="reference-red">{{ _('Rot') }}</label><input id="reference-red" class="form-control" type="number" min="0" max="255"></div><div class="col-4"><label class="form-label" for="reference-green">{{ _('Grün') }}</label><input id="reference-green" class="form-control" type="number" min="0" max="255"></div><div class="col-4"><label class="form-label" for="reference-blue">{{ _('Blau') }}</label><input id="reference-blue" class="form-control" type="number" min="0" max="255"></div></div>
         <div class="reference-color-preview" id="reference-color-preview"></div>
+        {% elif management_entity == 'materials' %}
+        <div class="mb-3"><label class="form-label" for="reference-density">{{ _('Dichte (g/cm³)') }}</label><input id="reference-density" class="form-control" type="number" min="0.01" step="0.01" required></div>
         {% endif %}
       </form>
     </aside>
@@ -64,6 +68,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const state = document.getElementById('reference-editor-state');
   const feedback = document.getElementById('reference-feedback');
   const nameInput = document.getElementById('reference-name');
+  const densityInput = document.getElementById('reference-density');
   const hexInput = document.getElementById('reference-hex');
   const rgbInputs = [document.getElementById('reference-red'), document.getElementById('reference-green'), document.getElementById('reference-blue')];
   const colorPreview = document.getElementById('reference-color-preview');
@@ -93,6 +98,7 @@ document.addEventListener('DOMContentLoaded', () => {
     item.append(lockSlot);
     const itemName = document.createElement('span'); itemName.className = 'reference-management-item-name'; itemName.textContent = record.name || ''; item.append(itemName);
     if (entity === 'colors') { const badge = document.createElement('span'); badge.className = 'inventory-color-code'; const hex = normalizeHex(record.hex_code) || '000000'; badge.textContent = '#' + hex; badge.style.backgroundColor = '#' + hex; badge.style.color = '#fff'; item.append(badge); }
+    if (entity === 'materials') { const density = Number(record.density) || 0; const badge = document.createElement('span'); badge.className = 'reference-management-item-density'; badge.textContent = density.toFixed(2) + ' g/cm³'; item.append(badge); }
     item.addEventListener('click', () => { hideMessage(); setEditor(records.get(item.dataset.referenceId)); });
     list.append(item);
     return item;
@@ -101,6 +107,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const locked = Boolean(record.in_use);
     creating = false; selectedId = String(record.id); editor.hidden = false; title.textContent = record.name || ''; state.textContent = ''; nameInput.value = record.name || '';
     if (hexInput) { hexInput.value = record.hex_code ? '#' + record.hex_code : '#000000'; syncRgbFromHex(); }
+    if (densityInput) { densityInput.value = Number(record.density || 0).toFixed(2); }
     deleteButton.hidden = false; deleteButton.disabled = locked;
     deleteButton.title = locked ? lockMessage : {{ _('Löschen')|tojson }};
     lock.hidden = !locked; lockText.textContent = locked ? lockMessage : '';
@@ -132,30 +139,34 @@ document.addEventListener('DOMContentLoaded', () => {
     const source = records.get(String(selectedId));
     const payload = { name: (source.name || '') + ' (Kopie)' };
     if (entity === 'colors') payload.hex_code = normalizeHex(source.hex_code);
+    if (entity === 'materials') payload.density = Number(source.density) || 0;
     copyButton.disabled = true; state.textContent = {{ _('Kopiert …')|tojson }}; hideMessage();
     try { await createRecord(payload); state.textContent = {{ _('Kopiert …')|tojson }}; } catch (error) { state.textContent = ''; showMessage(error.message); } finally { copyButton.disabled = false; }
   });
   const collectPayload = () => {
     const payload = { name: nameInput.value.trim() };
     if (entity === 'colors') { payload.hex_code = normalizeHex(hexInput.value); payload.red = rgbInputs[0].value; payload.green = rgbInputs[1].value; payload.blue = rgbInputs[2].value; }
+    if (entity === 'materials') payload.density = densityInput.value;
     return payload;
   };
   const saveCurrent = async () => {
     if (creating || selectedId === null) return;
     hideMessage(); state.textContent = {{ _('Speichert …')|tojson }};
     const payload = collectPayload();
-    if (!payload.name || (entity === 'colors' && !payload.hex_code)) { state.textContent = ''; showMessage({{ _('Bitte Name und gültigen Farbcode eingeben.')|tojson }}); return; }
+    if (!payload.name || (entity === 'colors' && !payload.hex_code) || (entity === 'materials' && !(Number(payload.density) > 0))) { state.textContent = ''; showMessage(entity === 'materials' ? {{ _('Bitte Name und eine gültige Dichte eingeben.')|tojson }} : {{ _('Bitte Name und gültigen Farbcode eingeben.')|tojson }}); return; }
     try {
       const response = await fetch('/inventory/manage/' + entity + '/' + selectedId, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || {{ _('Speichern fehlgeschlagen.')|tojson }});
-      records.set(String(selectedId), { ...records.get(String(selectedId)), ...payload }); state.textContent = {{ _('Gespeichert.')|tojson }}; title.textContent = payload.name;
+      records.set(String(selectedId), { ...records.get(String(selectedId)), ...payload, density: entity === 'materials' ? Number(payload.density) : records.get(String(selectedId)).density }); state.textContent = {{ _('Gespeichert.')|tojson }}; title.textContent = payload.name;
       const row = list.querySelector('[data-reference-id="' + CSS.escape(String(selectedId)) + '"]'); const item = row && row.querySelector('.reference-management-item-name'); if (item) item.textContent = payload.name;
       if (row && entity === 'colors') { const badge = row.querySelector('.inventory-color-code'); if (badge) { badge.textContent = '#' + payload.hex_code; badge.style.backgroundColor = '#' + payload.hex_code; } }
+      if (row && entity === 'materials') { const badge = row.querySelector('.reference-management-item-density'); if (badge) badge.textContent = Number(payload.density).toFixed(2) + ' g/cm³'; }
     } catch (error) { state.textContent = ''; showMessage(error.message); }
   };
   const scheduleSave = () => { clearTimeout(saveTimer); saveTimer = setTimeout(saveCurrent, 350); };
   nameInput.addEventListener('change', scheduleSave);
+  densityInput && densityInput.addEventListener('change', scheduleSave);
   hexInput && hexInput.addEventListener('input', () => { syncRgbFromHex(); scheduleSave(); });
   rgbInputs.forEach(input => input && input.addEventListener('input', () => { syncHexFromRgb(); scheduleSave(); }));
   form.addEventListener('submit', event => { event.preventDefault(); saveCurrent(); });

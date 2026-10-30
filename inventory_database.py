@@ -2,6 +2,7 @@
 
 import sqlite3
 import json
+import math
 import threading
 from functools import wraps
 from datetime import datetime, timezone
@@ -14,6 +15,24 @@ from ui_formatting import LOCAL_TIMEZONE
 DEFAULT_MATERIALS = (
     "PLA", "PLA+", "PETG", "ABS", "ASA", "TPU", "PA", "PC", "PVA", "HIPS",
 )
+
+# Nominal solid-polymer densities used for length/weight conversions.  Actual
+# filament values can vary by manufacturer, additives and filler content, so
+# these values are deliberately stored in the editable material catalogue.
+# They are the practical defaults for the material families shipped here.
+DEFAULT_MATERIAL_DENSITIES_G_CM3 = {
+    "pla": 1.24,
+    "pla+": 1.22,
+    "petg": 1.27,
+    "abs": 1.04,
+    "asa": 1.07,
+    "tpu": 1.21,
+    "pa": 1.14,
+    "pc": 1.20,
+    "pva": 1.23,
+    "hips": 1.05,
+}
+DEFAULT_FILAMENT_DENSITY_G_CM3 = 1.24
 
 _INITIALIZE_LOCK = threading.RLock()
 
@@ -67,7 +86,56 @@ def _number(value: Any) -> float:
 
 def _date_only(value: Any) -> str | None:
     text = str(value or "").strip().replace("T", " ")
-    return text.split(" ", 1)[0] if text else None
+    # Keep only the ISO date.  This also removes legacy leading punctuation
+    # such as `,2026-10-19` that could otherwise appear in the date editor.
+    import re
+    match = re.search(r"\d{4}-\d{2}-\d{2}", text)
+    # Do not preserve arbitrary legacy placeholders (for example a lone
+    # comma) as a date.  An empty/invalid purchase date is represented by NULL.
+    return match.group(0) if match else None
+
+
+def _material_density(name: Any, fallback: float = DEFAULT_FILAMENT_DENSITY_G_CM3) -> float:
+    key = str(name or "").strip().casefold()
+    value = DEFAULT_MATERIAL_DENSITIES_G_CM3.get(key, fallback)
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        value = fallback
+    return value if value > 0 else fallback
+
+
+def _valid_density(value: Any, material_name: Any = None) -> float:
+    """Return a positive g/cm³ value, falling back to the material family."""
+    if value not in (None, ""):
+        try:
+            number = _number(value)
+            if number > 0:
+                return number
+        except (TypeError, ValueError):
+            pass
+    return _material_density(material_name)
+
+
+def _length_mm_from_weight(
+    weight_grams: float,
+    diameter_mm: float | None,
+    density_g_per_cm3: float | None = None,
+) -> float:
+    """Estimate remaining filament length from grams and filament geometry."""
+    try:
+        weight = max(float(weight_grams or 0.0), 0.0)
+        diameter = float(diameter_mm or 1.75)
+    except (TypeError, ValueError):
+        return 0.0
+    if diameter <= 0:
+        return 0.0
+    density = _valid_density(density_g_per_cm3)
+    grams_per_mm = (
+        math.pi * ((diameter / 2.0) / 10.0) ** 2 * (1.0 / 10.0)
+        * density
+    )
+    return weight / grams_per_mm if grams_per_mm > 0 else 0.0
 
 
 def _temperature_range(value: Any) -> tuple[int | None, int | None]:
@@ -146,6 +214,7 @@ def initialize() -> None:
             CREATE TABLE IF NOT EXISTS materials (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                density REAL NOT NULL DEFAULT 1.24,
                 deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1))
             );
             CREATE TABLE IF NOT EXISTS colors (
@@ -307,6 +376,12 @@ def initialize() -> None:
                 # application still ignores the legacy column when present.
                 pass
             nfc_columns.discard("spool_id")
+        material_columns = {row["name"] for row in conn.execute("PRAGMA table_info(materials)")}
+        density_column_added = False
+        if "density" not in material_columns:
+            conn.execute("ALTER TABLE materials ADD COLUMN density REAL NOT NULL DEFAULT 1.24")
+            material_columns.add("density")
+            density_column_added = True
         # Do not allocate AUTOINCREMENT values for rows that already exist.
         existing_materials = {
             str(row[0]).casefold()
@@ -315,8 +390,22 @@ def initialize() -> None:
         for name in DEFAULT_MATERIALS:
             key = str(name).casefold()
             if key not in existing_materials:
-                conn.execute("INSERT INTO materials(name) VALUES (?)", (name,))
+                conn.execute(
+                    "INSERT INTO materials(name, density) VALUES (?, ?)",
+                    (name, _material_density(name)),
+                )
                 existing_materials.add(key)
+        # Repair old/custom rows and make sure no material is ever left
+        # without a usable density.  Existing positive values are preserved;
+        # empty/invalid values receive the family default or neutral fallback.
+        for material in conn.execute("SELECT id, name, density FROM materials").fetchall():
+            density = _material_density(material["name"]) if density_column_added else _valid_density(material["density"], material["name"])
+            try:
+                current_density = float(material["density"])
+            except (TypeError, ValueError):
+                current_density = 0.0
+            if current_density <= 0 or abs(current_density - density) > 0.000001:
+                conn.execute("UPDATE materials SET density = ? WHERE id = ?", (density, material["id"]))
         # The initial palette is kept locally so every color selector uses the
         # same editable source instead of a hard-coded template list.
         existing_color_names = {
@@ -408,10 +497,18 @@ def initialize() -> None:
         spool_columns = {row["name"] for row in conn.execute("PRAGMA table_info(spools)")}
         if "comment" not in spool_columns:
             conn.execute("ALTER TABLE spools ADD COLUMN comment TEXT")
-        conn.execute(
-            "UPDATE spools SET purchase_date = substr(replace(purchase_date, 'T', ' '), 1, 10) "
-            "WHERE purchase_date IS NOT NULL AND trim(purchase_date) <> ''"
-        )
+        # Normalize legacy values in storage as well as in the returned
+        # record.  Some old imports contained a leading comma before the date;
+        # a SQL substring would preserve that comma and show it in the editor.
+        for purchase_row in conn.execute(
+            "SELECT id, purchase_date FROM spools WHERE purchase_date IS NOT NULL"
+        ).fetchall():
+            normalized_date = _date_only(purchase_row["purchase_date"])
+            if normalized_date != purchase_row["purchase_date"]:
+                conn.execute(
+                    "UPDATE spools SET purchase_date = ? WHERE id = ?",
+                    (normalized_date, purchase_row["id"]),
+                )
         # Archived spools keep a snapshot of inherited filament defaults so
         # later master-data changes cannot alter their historical values.
         for archived_spool in conn.execute(
@@ -447,7 +544,8 @@ def initialize() -> None:
                    f.deleted,
                    f.created_at, f.updated_at,
                    c.name AS color_name, c.hex_code AS color_hex,
-                   v.name AS vendor_name, m.name AS material_name
+                   v.name AS vendor_name, m.name AS material_name,
+                   m.density AS material_density
             FROM filaments f
             LEFT JOIN colors c ON c.id = f.color_id AND c.deleted = 0
             LEFT JOIN vendors v ON v.id = f.vendor_id AND v.deleted = 0
@@ -805,7 +903,7 @@ def save_entity(entity: str, values: dict[str, Any], entity_id: int | None = Non
     initialize()
     columns = {
             "vendors": ("name",),
-        "materials": ("name",),
+        "materials": ("name", "density"),
         "filaments": (
             "vendor_id", "material_id", "name", "color_id", "diameter",
             "weight", "spool_weight", "price", "nozzle_temp_min", "nozzle_temp_max",
@@ -819,6 +917,8 @@ def save_entity(entity: str, values: dict[str, Any], entity_id: int | None = Non
     if not str(row.get("name") or "").strip():
         raise ValueError("Name is required")
     row["name"] = str(row["name"]).strip()
+    if entity == "materials":
+        row["density"] = _valid_density(row.get("density"), row["name"])
     if entity == "filaments":
         row["comment"] = str(row.get("comment") or "").strip() or None
     if entity == "filaments":
@@ -842,7 +942,10 @@ def save_entity(entity: str, values: dict[str, Any], entity_id: int | None = Non
                     (row["name"],),
                 ).fetchone()
                 if deleted_row:
-                    conn.execute("UPDATE materials SET deleted = 0 WHERE id = ?", (deleted_row["id"],))
+                    conn.execute(
+                        "UPDATE materials SET density = ?, deleted = 0 WHERE id = ?",
+                        (row["density"], deleted_row["id"]),
+                    )
                     return int(deleted_row["id"])
         if entity == "filaments":
             row["color_id"] = _color_id(conn, row.get("color_id"))
@@ -1475,6 +1578,7 @@ def list_spools(include_archived: bool = False) -> list[dict[str, Any]]:
                     f.nozzle_temp_min, f.nozzle_temp_max, f.cali_idx, f.bambu_filament_id,
                     f.bambu_setting_id, v.id AS vendor_id,
                     v.name AS vendor_name, m.id AS material_id, m.name AS material,
+                    m.density AS material_density,
                     {usage_select} AS used_weight,
                     {last_used_select} AS last_used,
                     CASE WHEN ABS(COALESCE(s.weight_correction, 0)) > 0.000001
@@ -1544,6 +1648,10 @@ def delete_spool(spool_id: int | str) -> None:
 def _as_spool(row: sqlite3.Row) -> dict[str, Any]:
     import json
     spool = dict(row)
+    # Purchase dates are date-only values.  Strip legacy timestamps, commas,
+    # and other malformed placeholders at the serialization boundary too, so
+    # stale rows can never leak the old comma into any inventory view.
+    spool["purchase_date"] = _date_only(spool.get("purchase_date"))
     filament_defaults = {
         "initial_weight": spool.pop("filament_default_weight"),
         "spool_weight": spool.pop("filament_default_spool_weight"),
@@ -1562,6 +1670,14 @@ def _as_spool(row: sqlite3.Row) -> dict[str, Any]:
     initial = float(spool.get("initial_weight") or 0)
     correction = float(spool.get("weight_correction") or 0)
     spool["remaining_weight"] = max(0.0, initial + correction - used)
+    spool["remaining_length_mm"] = round(
+        _length_mm_from_weight(
+            spool["remaining_weight"],
+            spool.get("diameter"),
+            spool.get("material_density"),
+        ),
+        1,
+    )
     spool["used_weight"] = used
     spool["filament_locked"] = bool(spool.pop("filament_locked"))
     spool["active_print_locked"] = bool(spool.pop("active_print_locked"))
@@ -1573,7 +1689,8 @@ def _as_spool(row: sqlite3.Row) -> dict[str, Any]:
     spool["active_tray_nfc_uid"] = active_tray_nfc_uid
     spool["filament"] = {
         "id": spool["filament_id"], "name": spool.pop("filament_name"),
-        "material": spool.pop("material"), "color_hex": spool.pop("color_hex"),
+        "material": spool.pop("material"), "density": _valid_density(spool.pop("material_density", None)),
+        "color_hex": spool.pop("color_hex"),
         "diameter": spool.pop("diameter"),
         "vendor": {"id": spool.pop("vendor_id"), "name": spool.pop("vendor_name")},
         "weight": resolved_filament_defaults["initial_weight"], "price": resolved_filament_defaults["price"],

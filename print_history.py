@@ -1,4 +1,5 @@
 import sqlite3
+import math
 import time
 from datetime import datetime
 from pathlib import Path
@@ -316,6 +317,105 @@ def create_database() -> None:
     conn.close()
 
 
+def recalculate_usage_grams_from_lengths(*, force: bool = False) -> dict[str, int]:
+    """Normalize historical usage grams after material densities changed.
+
+    Lengths are the authoritative measurement from the validated G-code.  Older
+    rows were converted with the former neutral density, so their stored grams
+    can disagree with the current material master.  This migration is guarded
+    by runtime metadata and is therefore safe to call during every startup.
+    """
+    conn = connect_database(db_config["db_path"])
+    conn.row_factory = sqlite3.Row
+    try:
+        required = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if not {"spool_usage", "spools", "filaments", "materials"}.issubset(required):
+            return {"usage_rows": 0, "tracking_rows": 0}
+        marker = "material_density_grams_v1"
+        if not force:
+            existing = conn.execute(
+                "SELECT metadata_value FROM runtime_metadata WHERE namespace = 'history' AND metadata_key = ? AND deleted = 0",
+                (marker,),
+            ).fetchone()
+            if existing:
+                return {"usage_rows": 0, "tracking_rows": 0}
+
+        rows = conn.execute(
+            """SELECT u.id, u.print_id, u.length_used, u.estimated_length,
+                      f.diameter, m.density
+                 FROM spool_usage u
+                 LEFT JOIN spools s ON s.id = u.spool_id
+                 LEFT JOIN filaments f ON f.id = s.filament_id
+                 LEFT JOIN materials m ON m.id = f.material_id
+                WHERE u.deleted = 0 AND u.length_used IS NOT NULL
+                  AND u.length_used >= 0"""
+        ).fetchall()
+        updated = 0
+        for row in rows:
+            try:
+                diameter = float(row["diameter"] or 1.75)
+                density = float(row["density"] or 1.24)
+                length_mm = max(0.0, float(row["length_used"] or 0.0))
+                estimated_length = row["estimated_length"]
+                estimated_length_mm = max(0.0, float(estimated_length)) if estimated_length is not None else None
+            except (TypeError, ValueError):
+                continue
+            if diameter <= 0 or density <= 0:
+                continue
+            grams_per_mm = math.pi * ((diameter / 2.0) / 10.0) ** 2 * 0.1 * density
+            grams = length_mm * grams_per_mm
+            # A zero/empty estimated length is not a usable measurement.  Keep
+            # the legacy expected grams in that case instead of accidentally
+            # erasing a valid estimate during the one-time repair.
+            estimated_grams = (
+                estimated_length_mm * grams_per_mm
+                if estimated_length_mm is not None and estimated_length_mm > 0
+                else None
+            )
+            conn.execute(
+                "UPDATE spool_usage SET grams_used = ?, estimated_grams = COALESCE(?, estimated_grams) WHERE id = ?",
+                (grams, estimated_grams, row["id"]),
+            )
+            updated += 1
+
+        tracking_rows = conn.execute(
+            """SELECT t.print_id
+                 FROM print_layer_tracking t
+                WHERE t.deleted = 0"""
+        ).fetchall()
+        tracking_updated = 0
+        for tracking in tracking_rows:
+            print_id = int(tracking["print_id"])
+            totals = conn.execute(
+                """SELECT COALESCE(SUM(grams_used), 0),
+                          COALESCE(SUM(estimated_grams), 0)
+                     FROM spool_usage
+                    WHERE print_id = ? AND deleted = 0""",
+                (print_id,),
+            ).fetchone()
+            conn.execute(
+                """UPDATE print_layer_tracking
+                      SET filament_grams_billed = ?, filament_grams_total = ?
+                    WHERE print_id = ?""",
+                (float(totals[0] or 0), float(totals[1] or 0), print_id),
+            )
+            tracking_updated += 1
+
+        conn.execute(
+            """INSERT INTO runtime_metadata(namespace, metadata_key, metadata_value, updated_at, deleted)
+               VALUES ('history', ?, 'completed', CURRENT_TIMESTAMP, 0)
+               ON CONFLICT(namespace, metadata_key) DO UPDATE SET
+                 metadata_value = excluded.metadata_value,
+                 updated_at = excluded.updated_at,
+                 deleted = 0""",
+            (marker,),
+        )
+        conn.commit()
+        return {"usage_rows": updated, "tracking_rows": tracking_updated}
+    finally:
+        conn.close()
+
+
 def insert_print(file_name: str, print_type: str, image_file: str = None, print_date: str = None) -> int:
     #
     # Inserts a new print job into the database and returns the print ID.
@@ -612,7 +712,9 @@ def get_filament_usage_for_reconciliation(print_id: int) -> list[dict]:
     conn = connect_database(db_config["db_path"])
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        """SELECT id, ams_slot, spool_id, grams_used, estimated_grams,
+        """SELECT id, ams_slot, spool_id, physical_ams_slot,
+                         gcode_filament_type, gcode_color,
+                         grams_used, estimated_grams,
                          length_used, estimated_length, calculated_length,
                          consumed_length
              FROM spool_usage
@@ -622,6 +724,49 @@ def get_filament_usage_for_reconciliation(print_id: int) -> list[dict]:
     ).fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def repair_filament_usage_spool_bindings(print_id: int, bindings: dict[tuple[str, str], tuple[int, int]]) -> int:
+    """Align active-print usage rows with the local AMS signature mapping.
+
+    A provisional row may have been created while MQTT still reported the
+    previous tray.  Once the validated 3MF and local AMS assignments are
+    available, the G-code material/colour signature is the safe key to move
+    that row to the correct spool.  Only unique signatures are passed by the
+    tracker, so repeated colours are never guessed.
+    """
+    if not print_id or not bindings:
+        return 0
+    conn = connect_database(db_config["db_path"])
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        """SELECT id, gcode_filament_type, gcode_color
+           FROM spool_usage
+           WHERE print_id = ? AND deleted = 0""",
+        (int(print_id),),
+    ).fetchall()
+    changed = 0
+    for row in rows:
+        key = (
+            str(row["gcode_filament_type"] or "").strip().upper(),
+            str(row["gcode_color"] or "").strip().replace("#", "").upper()[0:6],
+        )
+        target = bindings.get(key)
+        if target is None:
+            continue
+        spool_id, physical_slot = target
+        cursor = conn.execute(
+            """UPDATE spool_usage
+               SET spool_id = ?, physical_ams_slot = ?
+               WHERE id = ?
+                 AND (COALESCE(spool_id, -1) != ? OR COALESCE(physical_ams_slot, -1) != ?)""",
+            (int(spool_id), int(physical_slot), int(row["id"]), int(spool_id), int(physical_slot)),
+        )
+        changed += cursor.rowcount
+    if changed:
+        conn.commit()
+    conn.close()
+    return changed
 
 
 def set_estimated_duration_from_remaining(print_id: int, remaining_minutes: float) -> None:
@@ -805,6 +950,39 @@ def cancel_stale_running_prints(actual_end_time: str) -> int:
     changed = cursor.rowcount
     conn.close()
     return changed
+
+
+def reconcile_multiple_active_prints(status_at: str) -> int:
+    """Keep only the newest physical print attempt active.
+
+    The printer can execute one job at a time.  A reconnect can nevertheless
+    replay an old ``RUNNING`` row after a newer attempt already exists.  Close
+    those stale rows as aborted so the history and consumption tracker never
+    expose two active jobs simultaneously.
+    """
+    conn = connect_database(db_config["db_path"])
+    active = conn.execute(
+        """SELECT print_id FROM print_layer_tracking
+           WHERE status IN ('PREPARING', 'RUNNING', 'PAUSED') AND deleted = 0
+           ORDER BY print_id DESC"""
+    ).fetchall()
+    if len(active) <= 1:
+        conn.close()
+        return 0
+    keep_id = int(active[0][0])
+    stale_ids = [int(row[0]) for row in active[1:]]
+    placeholders = ",".join("?" for _ in stale_ids)
+    cursor = conn.execute(
+        f"""UPDATE print_layer_tracking
+            SET status = 'ABORTED', actual_end_time = COALESCE(actual_end_time, ?),
+                last_status_at = ?
+            WHERE print_id IN ({placeholders})
+              AND status IN ('PREPARING', 'RUNNING', 'PAUSED')""",
+        (status_at, status_at, *stale_ids),
+    )
+    conn.commit()
+    conn.close()
+    return cursor.rowcount
 
 def insert_filament_usage(
     print_id: int,

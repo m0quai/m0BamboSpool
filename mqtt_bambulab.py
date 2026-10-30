@@ -52,6 +52,7 @@ from print_history import (
   update_layer_tracking,
   find_open_print_for_printer_source,
   find_active_print_for_printer_source,
+  _normalise_print_name,
   get_completed_remote_3mf_cleanup_path,
   find_recent_aborted_print,
   find_previous_metadata_print_name,
@@ -371,8 +372,15 @@ def _transfer_key(print_id):
 
 
 def _active_3mf_job_for_source(print_data):
+  def normalise(value):
+    # Bambu may report the same source as an FTP URL, absolute path, plain
+    # filename, or with a query/hash suffix.  Compare the canonical print
+    # name so repeated project_file packets reuse the existing transfer.
+    text = str(value or "").replace("\\", "/").split("?", 1)[0].split("#", 1)[0]
+    return _normalise_print_name(text.rsplit("/", 1)[-1])
+
   candidates = {
-    str(value or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
+    normalise(value)
     for value in (
       print_data.get("subtask_name"),
       print_data.get("gcode_file"),
@@ -380,10 +388,11 @@ def _active_3mf_job_for_source(print_data):
     )
     if value
   }
+  candidates.discard("")
   with _ACTIVE_3MF_PRINTS_LOCK:
     jobs = list(ACTIVE_3MF_PRINTS.values())
   for job in reversed(jobs):
-    source = str(job.get("source") or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
+    source = normalise(job.get("source") or (job.get("print_metadata") or {}).get("file"))
     if source and source in candidates:
       return job
   return None
@@ -682,10 +691,11 @@ def _queue_3mf_job(print_data, *, resume=False):
       _ensure_provisional_filament_usage(existing_source_job, print_data)
       return existing_source_job
 
-  # After STOP/FAILED the printer replays the old project_file packet. Do not
-  # turn that replay into a phantom new print attempt. A new RUNNING packet or
-  # a later retry outside the cooldown can create the next history row.
-  if not resume and str(print_data.get("gcode_state") or "").upper() != "RUNNING":
+  # After STOP/FAILED/IDLE the printer can replay the old project_file packet.
+  # Do not turn that replay into a phantom new print attempt. A genuinely
+  # active packet may still recover the existing job after an MQTT reconnect.
+  packet_state = str(print_data.get("gcode_state") or "").upper()
+  if packet_state not in {"PREPARE", "RUNNING", "PAUSE", "PAUSED"}:
     recent_abort = _recent_aborted_3mf_job_for_source(print_data)
     if recent_abort:
       print_data["_metadata_job_queued"] = True

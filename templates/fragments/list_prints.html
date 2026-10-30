@@ -41,6 +41,11 @@
                   {% endif %}
                 </div>
               </td>
+            </tr><tr class="history-cost-summary">
+              <th>{{ _('Erwartete Kosten') }}</th>
+              <td>{{ format_number(print.get('expected_cost_total', 0), 2) }} {{ history_currency_symbol|default('€') }}</td>
+              <th>{{ _('Tatsächliche Kosten') }}</th>
+              <td>{{ format_number(print.get('actual_cost_total', 0), 2) }} {{ history_currency_symbol|default('€') }}</td>
             </tr></tbody>
           </table>
           {% if tracking %}<div class="text-muted small history-timing">
@@ -54,7 +59,37 @@
                AMS slot is authoritative whenever it is available. #}
             {% set slot_number = (physical_slot|int if physical_slot is not none else (filament['ams_slot']|int if filament['ams_slot'] is not none else 16)) %}
             {% set history_ams_slot = physical_slot if physical_slot is not none else filament['ams_slot'] %}
-            {% set history_color = ((filament['spool'].filament.color_hex if filament['spool'] and filament['spool'].filament.color_hex else filament['color'] or '000000')|replace('#', ''))[0:6] %}<div class="history-filament-detail d-flex justify-content-between align-items-center"><div><div class="text-muted small">{% if 0 <= slot_number < 16 %}[{{ ['A','B','C','D'][slot_number // 4] }}{{ (slot_number % 4) + 1 }}]{% else %}[{{ _('External') }}]{% endif %}</div>{% if filament['spool'] %}<strong>#{{ filament['spool'].id }} – {{ filament['spool'].filament.vendor.name }} – {{ filament['spool'].filament.material }}</strong><div>{{ filament['spool'].filament.name }}</div>{% else %}<strong>{{ _('No spool assigned') }} – {{ filament['filament_type'] }}</strong>{% endif %}<div><span class="inventory-color-code" style="background-color:#{{ history_color }}; color:{{ '#fff' if color_is_dark(history_color) else '#111' }}; text-shadow:{{ '0 1px 1px rgba(0,0,0,.65)' if color_is_dark(history_color) else 'none' }};">#{{ history_color }}</span></div><div class="text-muted small">{{ format_number(filament['grams_used'] or 0) }}g {{ _('printed') }}{% if filament['estimated_grams'] is not none %} / {{ format_number(filament['estimated_grams']) }}g {{ _('expected') }}{% endif %}</div></div><div class="d-inline-flex align-items-center gap-2">{% if active_print_id is not defined or print['id'] != active_print_id %}{% if filament['spool'] %}<a href="{{ url_for('print_select_spool', ams_slot=history_ams_slot, print_id=print['id'], old_spool_id=filament['spool'].id, change_spool=true) }}" class="btn btn-sm btn-outline-primary" title="{{ _('Spule ändern') }}"><i class="bi bi-pencil"></i></a>{% else %}<a href="{{ url_for('print_select_spool', ams_slot=history_ams_slot, print_id=print['id']) }}" class="btn btn-sm btn-outline-primary" title="{{ _('Spule zuordnen') }}"><i class="bi bi-pencil"></i></a>{% endif %}{% endif %}</div></div>
+            {% set history_color = ((filament['spool'].filament.color_hex if filament['spool'] and filament['spool'].filament.color_hex else filament['color'] or '000000')|replace('#', ''))[0:6] %}
+            {% set used_length_mm = filament.get('length_used') %}
+            <div class="history-filament-detail d-flex justify-content-between align-items-start">
+              <div class="history-filament-main">
+                <div class="text-muted small">{% if 0 <= slot_number < 16 %}[{{ ['A','B','C','D'][slot_number // 4] }}{{ (slot_number % 4) + 1 }}]{% else %}[{{ _('External') }}]{% endif %}</div>
+                {% if filament['spool'] %}
+                <strong>#{{ filament['spool'].id }} – {{ filament['spool'].filament.vendor.name }} – {{ filament['spool'].filament.material }}</strong>
+                <div>{{ filament['spool'].filament.name }}</div>
+                {% else %}
+                <strong>{{ _('No spool assigned') }} – {{ filament['filament_type'] }}</strong>
+                {% endif %}
+                <div><span class="inventory-color-code" style="background-color:#{{ history_color }}; color:{{ '#fff' if color_is_dark(history_color) else '#111' }}; text-shadow:{{ '0 1px 1px rgba(0,0,0,.65)' if color_is_dark(history_color) else 'none' }};">#{{ history_color }}</span></div>
+                <table class="history-filament-metrics" aria-label="{{ _('Filamentverbrauch') }}">
+                  <tbody>
+                    <tr>
+                      <th>{{ _('Gedruckt') }}</th>
+                      <td>{{ format_number(filament['grams_used'] or 0) }} g</td>
+                      <th>{{ _('Erwartet') }}</th>
+                      <td>{% if filament['estimated_grams'] is not none %}{{ format_number(filament['estimated_grams']) }} g{% else %}–{% endif %}</td>
+                    </tr>
+                    <tr>
+                      <th>{{ _('Verbrauchte Länge') }}</th>
+                      <td>{% if used_length_mm is not none %}{% if used_length_mm >= 1000 %}{{ format_number(used_length_mm / 1000, 1) }} m{% else %}{{ format_number(used_length_mm, 0) }} mm{% endif %}{% else %}–{% endif %}</td>
+                      <th>{{ _('Kosten') }}</th>
+                      <td>{{ format_number(filament.get('actual_cost', 0), 2) }} {{ history_currency_symbol|default('€') }} {{ _('tatsächlich') }} / {{ format_number(filament.get('expected_cost', 0), 2) }} {{ history_currency_symbol|default('€') }} {{ _('erwartet') }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="d-inline-flex align-items-center gap-2">{% if active_print_id is not defined or print['id'] != active_print_id %}{% if filament['spool'] %}<a href="{{ url_for('print_select_spool', ams_slot=history_ams_slot, print_id=print['id'], old_spool_id=filament['spool'].id, change_spool=true) }}" class="btn btn-sm btn-outline-primary" title="{{ _('Spule ändern') }}"><i class="bi bi-pencil"></i></a>{% else %}<a href="{{ url_for('print_select_spool', ams_slot=history_ams_slot, print_id=print['id']) }}" class="btn btn-sm btn-outline-primary" title="{{ _('Spule zuordnen') }}"><i class="bi bi-pencil"></i></a>{% endif %}{% endif %}</div>
+            </div>
           {% endfor %}
         </div>
         <div class="col-lg-4 history-image"><div class="border rounded p-2 h-100 d-flex justify-content-center align-items-center">{% if print['image_file'] %}<img src="{{ url_for('print_image', filename=print['image_file']) }}" alt="{{ _('Print Image') }}" class="img-fluid">{% else %}<span class="text-muted">{{ _('No Image') }}</span>{% endif %}</div></div>

@@ -28,7 +28,8 @@
     <div class="row mb-2">
       <div class="col-6">
         <p class="mb-1"><strong>{{ _('Remaining Weight:') }}</strong> {{ format_number(current_spool.remaining_weight) }}g</p>
-        <p class="mb-1"><strong>{{ _('Remaining Length:') }}</strong> {{ format_number(current_spool.get('remaining_length'), 0) }}mm</p>
+        {% set remaining_length_mm = current_spool.get('remaining_length_mm') or 0 %}
+        <p class="mb-1"><strong>{{ _('Remaining Length:') }}</strong> {% if remaining_length_mm >= 1000 %}{{ format_number(remaining_length_mm / 1000, 1) }}m{% else %}{{ format_number(remaining_length_mm, 0) }}mm{% endif %}</p>
       </div>
       <div class="col-6">
         {% set filament_extra = current_spool.filament.get('extra', {}) if current_spool.filament else {} %}

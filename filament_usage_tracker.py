@@ -16,7 +16,7 @@ from inventory_repository import record_consumption, record_usage_marker
 from inventory_service import fetchSpools, getAMSFromTray, trayUid
 import inventory_database
 from tools_3mf import available_thumbnail_filename, download3mfFromCloud, download3mfFromFTP, download3mfFromLocalFilesystem, getMetaDataFrom3mf, getMetaDataFromLocal3mf, get_source_file_name, is_valid_gcode_content, validate_local_3mf_gcode
-from print_history import bind_filament_usage_spool, record_filament_usage_segment, claim_filament_usage_event, set_filament_usage_event_status, finalize_filament_usage_events, get_all_filament_usage_for_print, get_layer_tracking_for_prints, update_layer_tracking, update_print_image, update_print_file_name, get_print_image, get_latest_running_print_id, find_latest_print_id, printer_state_to_history_status
+from print_history import bind_filament_usage_spool, record_filament_usage_segment, claim_filament_usage_event, set_filament_usage_event_status, finalize_filament_usage_events, get_all_filament_usage_for_print, get_filament_usage_for_reconciliation, repair_filament_usage_spool_bindings, get_layer_tracking_for_prints, update_layer_tracking, update_print_image, update_print_file_name, get_print_image, get_latest_running_print_id, find_latest_print_id, printer_state_to_history_status
 
 GCODE_STATE_LABELS = {
     "IDLE": "Drucker bereit",
@@ -573,7 +573,8 @@ class FilamentUsageTracker:
         self.cumulative_length_used[slot] = usage.get("length_used") or 0.0
 
     if use_ams:
-      self.ams_mapping = ams_mapping or []
+      original_ams_mapping = list(ams_mapping or [])
+      self.ams_mapping = self._hydrate_ams_mapping_from_history(original_ams_mapping)
       self.using_ams = True
       mapping_text = ", ".join(
         f"F{index}=A{int(tray) + 1}" if tray is not None and tray != EXTERNAL_SPOOL_ID
@@ -583,7 +584,8 @@ class FilamentUsageTracker:
       )
       log(
         f"[filament-tracker][MAPPING] print_id={self.print_id} "
-        f"raw={self.ams_mapping!r} resolved=[{mapping_text}] source=3mf"
+        f"raw={self.ams_mapping!r} resolved=[{mapping_text}] "
+        f"source={'3mf+local-AMS' if self.ams_mapping != original_ams_mapping else '3mf'}"
       )
     else:
       self.using_ams = False
@@ -756,6 +758,8 @@ class FilamentUsageTracker:
   def apply_ams_mapping(self, ams_mapping: list[int] | None) -> None:
     if not ams_mapping:
       return
+    original_ams_mapping = list(ams_mapping)
+    ams_mapping = self._hydrate_ams_mapping_from_history(original_ams_mapping)
     if self.ams_mapping == ams_mapping and self.using_ams:
       return
 
@@ -767,7 +771,8 @@ class FilamentUsageTracker:
     )
     log(
       f"[filament-tracker][MAPPING] print_id={self.print_id} "
-      f"raw={ams_mapping!r} resolved=[{mapping_text}]"
+      f"raw={ams_mapping!r} resolved=[{mapping_text}] "
+      f"source={'local-AMS' if ams_mapping != original_ams_mapping else 'MQTT'}"
     )
     self.ams_mapping = ams_mapping
     self.using_ams = True
@@ -778,6 +783,116 @@ class FilamentUsageTracker:
     self._flush_all_pending_usage()
     self._maybe_update_predicted_total()
     self._update_layer_tracking_progress()
+
+  def _hydrate_ams_mapping_from_history(self, ams_mapping: list[int | None]) -> list[int | None]:
+    """Fill missing logical mappings from unique local AMS tray rows.
+
+    A validated 3MF can arrive before the first complete AMS status packet.
+    Provisional history rows already carry the physical tray assignment in
+    that short window, so use that local AMS information instead of guessing
+    from a G-code colour.  Ambiguous duplicate tray rows are left unresolved.
+    """
+    mapping = list(ams_mapping or [])
+    if not self.print_id or not any(value is None for value in mapping):
+      return mapping
+    try:
+      rows = get_filament_usage_for_reconciliation(self.print_id)
+    except Exception as exc:
+      log(f"[filament-tracker] History mapping could not be read: {exc!r}")
+      return mapping
+    spool_slots = {}
+    spool_signature_slots = {}
+    spool_signature_bindings = {}
+    try:
+      for spool in inventory_database.list_spools(include_archived=True):
+        try:
+          active = spool.get("active_tray") or (spool.get("extra") or {}).get("active_tray")
+          parts = str(active or "").strip().strip('"').rsplit("_", 2)
+          if len(parts) == 3:
+            slot = int(parts[1]) * 4 + int(parts[2])
+            if 0 <= slot < 16 and spool.get("id") is not None:
+              spool_slots[int(spool["id"])] = slot
+              filament = spool.get("filament") if isinstance(spool.get("filament"), dict) else {}
+              material = str(filament.get("material") or "").strip().upper()
+              color = str(filament.get("color_hex") or "").strip().replace("#", "").upper()[0:6]
+              if material and color:
+                spool_signature_slots.setdefault((material, color), []).append(slot)
+                spool_signature_bindings.setdefault((material, color), []).append((int(spool["id"]), slot))
+        except (TypeError, ValueError):
+          continue
+    except Exception as exc:
+      log(f"[filament-tracker] Local spool slots could not be read: {exc!r}")
+    by_physical = {}
+    for row in rows:
+      try:
+        logical = int(row.get("ams_slot"))
+        material = str(row.get("gcode_filament_type") or "").strip().upper()
+        color = str(row.get("gcode_color") or "").strip().replace("#", "").upper()[0:6]
+        signature_slots = spool_signature_slots.get((material, color), [])
+        physical = signature_slots[0] if len(signature_slots) == 1 else (
+          spool_slots.get(int(row["spool_id"])) if row.get("spool_id") is not None else row.get("physical_ams_slot")
+        )
+        physical = int(physical) if physical is not None else None
+      except (TypeError, ValueError):
+        continue
+      if physical is None or row.get("spool_id") is None:
+        continue
+      by_physical.setdefault(physical, set()).add(logical)
+    ambiguous_physical = {
+      physical for physical, logicals in by_physical.items() if len(logicals) > 1
+    }
+    unique_bindings = {
+      signature: values[0]
+      for signature, values in spool_signature_bindings.items()
+      if len(values) == 1
+    }
+    try:
+      repair_filament_usage_spool_bindings(self.print_id, unique_bindings)
+    except Exception as exc:
+      log(f"[filament-tracker] Usage-row AMS binding repair failed: {exc!r}")
+    used = {int(value) for value in mapping if value is not None}
+    changed = False
+    for row in rows:
+      try:
+        logical = int(row.get("ams_slot"))
+        material = str(row.get("gcode_filament_type") or "").strip().upper()
+        color = str(row.get("gcode_color") or "").strip().replace("#", "").upper()[0:6]
+        signature_slots = spool_signature_slots.get((material, color), [])
+        physical = signature_slots[0] if len(signature_slots) == 1 else (
+          spool_slots.get(int(row["spool_id"])) if row.get("spool_id") is not None else row.get("physical_ams_slot")
+        )
+        physical = int(physical) if physical is not None else None
+      except (TypeError, ValueError):
+        continue
+      if physical is None or logical < 0 or physical in ambiguous_physical:
+        continue
+      while len(mapping) <= logical:
+        mapping.append(None)
+      # A unique local (material, colour) signature is authoritative.  The
+      # MQTT payload can arrive with a stale logical index after a tray
+      # switch; keeping that value would swap e.g. the small green segment
+      # with the large black segment.  Replace it when the target tray is not
+      # already occupied by another logical filament.
+      signature_is_unique = len(signature_slots) == 1
+      occupied_by_other = {
+        int(value) for index, value in enumerate(mapping)
+        if index != logical and value is not None
+      }
+      if signature_is_unique and physical not in occupied_by_other:
+        if mapping[logical] != physical:
+          mapping[logical] = physical
+          changed = True
+        used.add(physical)
+      elif mapping[logical] is None and physical not in used:
+        mapping[logical] = physical
+        used.add(physical)
+        changed = True
+    if changed:
+      log(
+        f"[filament-tracker][MAPPING] print_id={self.print_id} "
+        f"AMS-Zuordnung aus lokaler History ergänzt: {mapping!r}"
+      )
+    return mapping
 
   def _retrieve_model(self, model_url: str | None) -> str | None:
     if not model_url:
@@ -946,10 +1061,15 @@ class FilamentUsageTracker:
         return False
       if mapping_value != observed_tray:
         self._pending_usage_mm[filament] = self._pending_usage_mm.get(filament, 0.0) + total_mm
+        wait_reason = (
+          "awaiting_ams_switch"
+          if observed_tray in (self.ams_mapping or [])
+          else "tray_mismatch"
+        )
         log(
           f"[filament-tracker][BOOKING-WAIT] print_id={self.print_id} "
           f"filament_index={filament} mapping_tray={mapping_value} "
-          f"observed_tray={observed_tray} reason=tray_mismatch"
+          f"observed_tray={observed_tray} reason={wait_reason}"
         )
         return False
 
@@ -1384,7 +1504,17 @@ class FilamentUsageTracker:
       if logical_index >= 0:
         active_indexes.append(logical_index)
 
-    if len(active_indexes) == 1:
+    unresolved_indexes = [
+      index for index, mapped_tray in enumerate(mapping)
+      if mapped_tray is None
+    ]
+    # A print can start with F0 on the initially observed tray and then report
+    # the next loaded tray while F1 is still unresolved.  In that case the
+    # new tray belongs to the unresolved filament; remapping F0 would swap the
+    # black/green quantities and create a false tray-mismatch booking wait.
+    if unresolved_indexes and previous_observed_tray in mapping:
+      filament_index = unresolved_indexes[0]
+    elif len(active_indexes) == 1:
       filament_index = active_indexes[0]
     else:
       # When the active layer contains multiple logical filaments, only remap
@@ -1405,6 +1535,21 @@ class FilamentUsageTracker:
       mapping.append(None)
     previous_tray = mapping[filament_index]
     mapping[filament_index] = tray
+    # If the original 3MF had several filaments and the first confirmed
+    # switch changes the initially observed tray, preserve that displaced
+    # tray for the first still-unresolved logical filament.  This produces a
+    # complete AMS mapping from the printer's physical state and avoids
+    # leaving F1/F2 unresolved just because the first MQTT packet arrived
+    # before the second filament change.
+    if previous_tray is not None:
+      for unresolved_index, unresolved_tray in enumerate(mapping):
+        if unresolved_tray is None and unresolved_index != filament_index:
+          mapping[unresolved_index] = previous_tray
+          log(
+            f"[filament-tracker] AMS mapping ergänzt: filament={unresolved_index}, "
+            f"tray={previous_tray} (vorheriger aktiver Tray)"
+          )
+          break
     log(
       f"[filament-tracker] AMS tray switch detected: filament={filament_index}, "
       f"tray={previous_tray} -> {tray}; remapping usage to the active spool"

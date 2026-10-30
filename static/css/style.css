@@ -511,12 +511,13 @@ body {
 }
 
 .home-activity-list {
-    min-height: 260px;
-    gap: 1.05rem;
+    min-height: 0;
+    gap: .75rem;
+    align-content: start;
 }
 
 .home-activity-list li {
-    min-height: 2.5rem;
+    min-height: 0;
 }
 
 .home-activity-list strong {
@@ -1116,6 +1117,34 @@ main.container {
 .history-filament-detail {
     border-top: 1px solid var(--bs-border-color);
     padding: .55rem 0;
+}
+.history-filament-main {
+    min-width: 0;
+    flex: 1 1 auto;
+}
+.history-filament-metrics {
+    width: 100%;
+    margin: .35rem 0 0;
+    border-collapse: collapse;
+    font-size: .82rem;
+    table-layout: auto;
+}
+.history-filament-metrics th,
+.history-filament-metrics td {
+    padding: .16rem .85rem .16rem 0;
+    border: 0;
+    vertical-align: baseline;
+    text-align: left;
+}
+.history-filament-metrics th {
+    color: var(--bs-secondary-color);
+    font-weight: 600;
+    white-space: nowrap;
+}
+.history-filament-metrics td {
+    color: var(--bs-body-color);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
 }
 .history-color-swatch {
     display: inline-block;
@@ -1888,7 +1917,9 @@ main.container {
 .inventory-spool-bar { display: block; height: .35rem; background: var(--bs-secondary-bg); border-radius: 1rem; overflow: hidden; }
 .inventory-spool-bar i { display: block; height: 100%; background: #b85d23; border-radius: inherit; }
 .inventory-spool-used { min-width: 0; overflow: hidden; color: var(--bs-secondary-color); font-size: .72rem; text-overflow: ellipsis; white-space: nowrap; }
-.inventory-spool-remaining { min-width: 4.8rem; text-align: right; font-size: .82rem; }
+.inventory-spool-remaining { display: grid; min-width: 6.6rem; text-align: right; font-size: .82rem; line-height: 1.15; }
+.inventory-spool-remaining small { color: var(--bs-secondary-color); font-size: .68rem; white-space: nowrap; }
+.inventory-current-length { display: flex; justify-content: space-between; gap: .75rem; margin-top: .3rem; }
 .inventory-inline-editor { position: sticky; top: 1rem; align-self: start; display: flex; flex-direction: column; height: calc(100vh - 11rem); max-height: calc(100vh - 11rem); padding: 1rem; border: 1px solid var(--bs-border-color); border-radius: .55rem; background: var(--bs-body-bg); box-shadow: 0 .2rem .8rem rgba(0,0,0,.07); overflow: hidden; }
 .inventory-editor-heading { display: flex; justify-content: space-between; gap: .75rem; align-items: start; }
 .inventory-editor-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: .5rem; }
@@ -1963,6 +1994,7 @@ main.container {
 .reference-management-editor-actions { display: flex; align-items: center; justify-content: flex-end; gap: .4rem; min-height: 2.15rem; }
 .reference-management-lock { display: inline-flex; align-items: center; gap: .3rem; }
 .reference-management-item-lock { flex: 0 0 auto; color: var(--bs-warning-text-emphasis, #8a6d1d); }
+.reference-management-item-density { color: var(--bs-secondary-color); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .reference-color-preview { display: flex; align-items: center; justify-content: center; min-height: 2.1rem; margin: .25rem 0 1rem; border: 1px solid var(--bs-border-color); border-radius: .35rem; font-family: var(--bs-font-monospace); font-size: .85rem; font-weight: 600; }
 @media (max-width: 900px) { .reference-management-layout { grid-template-columns: 1fr; } .reference-management-editor { position: static; } }
 @media (max-width: 520px) { .reference-management-heading { align-items: start; flex-direction: column; } }
@@ -2003,6 +2035,11 @@ main.container {
   border-top-color: var(--m0-brand);
   border-radius: 50%;
   animation: filament-activity-spin .8s linear infinite;
+}
+
+.home-filament-activity-spinner {
+  margin-right: 0;
+  margin-left: .4rem;
 }
 
 @keyframes filament-activity-spin {

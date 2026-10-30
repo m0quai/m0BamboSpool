@@ -258,6 +258,9 @@ UI_TRANSLATIONS = {
         "Cancelled": "Abgebrochen",
         "Failed": "Fehlgeschlagen",
         "Printing": "Druckt",
+        "Druck läuft": "Druck läuft",
+        "Druck wird vorbereitet": "Druck wird vorbereitet",
+        "Druck pausiert": "Druck pausiert",
         "Ready": "Bereit",
         "Heating bed": "Bett wird erhitzt",
         "Heating hotend": "Hotend wird erhitzt",
@@ -524,6 +527,9 @@ UI_TRANSLATIONS = {
         "Cancelled": "Cancelled",
         "Failed": "Failed",
         "Printing": "Printing",
+        "Druck läuft": "Print running",
+        "Druck wird vorbereitet": "Preparing print",
+        "Druck pausiert": "Print paused",
         "Ready": "Ready",
         "Heating bed": "Heating bed",
         "Heating hotend": "Heating hotend",
@@ -571,6 +577,13 @@ UI_TRANSLATIONS["en"].update({
     "Preis": "Price", "NFC-Tag": "NFC tag", "Der NFC-Tag kann während eines Drucks nicht geändert werden.": "The NFC tag cannot be changed while a print is running.", "Der NFC-Tag ist noch einer Spule zugeordnet.": "The NFC tag is still assigned to a spool.", "Der Tag-Wert kann bei einer zugeordneten Spule nicht geändert werden.": "The tag value cannot be changed while assigned to a spool.", "Der Tag-Wert kann nicht geändert werden, solange er einer Spule zugeordnet ist.": "The tag value cannot be changed while assigned to a spool.", "AMS-Fach": "AMS tray", "Spulennummer": "Spool number", "Abbrechen": "Cancel",
     "Bestandskorrektur": "Stock correction", "Differenz (+/- g)": "Difference (+/- g)", "Absoluter Restbestand (g)": "Absolute remaining stock (g)", "Korrekturwert": "Correction value", "Farbe auswählen": "Select color", "Farbcode": "Color code", "RGB": "RGB", "Rot": "Red", "Grün": "Green", "Blau": "Blue", "Speichern fehlgeschlagen.": "Save failed.", "Bestandskorrektur fehlgeschlagen.": "Stock correction failed.", "Filament-Standard": "Filament default", "Leergewicht Spule (g)": "Empty spool weight (g)", "Düsentemperatur (°C)": "Nozzle temperature (°C)", "Bett-Temperatur (°C)": "Bed temperature (°C)", "Extruder-Temperatur (°C)": "Extruder temperature (°C)", "Kalibrierungsindex": "Calibration index", "Bambu Filament-ID": "Bambu filament ID", "Bambu Setting-ID": "Bambu setting ID",
 })
+
+# Remaining filament length is shown in inventory and history using a
+# locale-aware label while the unit remains mm/m in both languages.
+UI_TRANSLATIONS["de"].update({"Restlänge": "Restlänge"})
+UI_TRANSLATIONS["en"].update({"Restlänge": "Remaining length"})
+UI_TRANSLATIONS["de"].update({"Verbrauchte Länge": "Verbrauchte Länge"})
+UI_TRANSLATIONS["en"].update({"Verbrauchte Länge": "Consumed length"})
 
 UI_TRANSLATIONS["de"].update({
     "Löschen gesperrt": "Löschen gesperrt",
@@ -817,6 +830,14 @@ UI_TRANSLATIONS["de"].update({
     "Schicht": "Schicht",
     "Restlaufzeit": "Restlaufzeit",
     "Verbleibend": "verbleibend",
+    "Erwartete Kosten": "Erwartete Kosten",
+    "Tatsächliche Kosten": "Tatsächliche Kosten",
+    "Kosten": "Kosten",
+    "tatsächlich": "tatsächlich",
+    "Dichte (g/cm³)": "Dichte (g/cm³)",
+    "Gedruckt": "Gedruckt",
+    "Erwartet": "Erwartet",
+    "Filamentverbrauch": "Filamentverbrauch",
 })
 
 UI_TRANSLATIONS["en"].update({
@@ -844,4 +865,12 @@ UI_TRANSLATIONS["en"].update({
     "Schicht": "Layer",
     "Restlaufzeit": "Remaining",
     "Verbleibend": "remaining",
+    "Erwartete Kosten": "Expected cost",
+    "Tatsächliche Kosten": "Actual cost",
+    "Kosten": "Cost",
+    "tatsächlich": "actual",
+    "Dichte (g/cm³)": "Density (g/cm³)",
+    "Gedruckt": "Printed",
+    "Erwartet": "Expected",
+    "Filamentverbrauch": "Filament consumption",
 })

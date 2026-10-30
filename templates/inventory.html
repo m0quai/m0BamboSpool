@@ -60,6 +60,7 @@
       <div id="inventory-current-weight" class="inventory-current-weight" hidden>
         <div class="inventory-current-weight-heading"><span>{{ _('Aktuelles Gewicht (g)') }}</span><strong id="inventory-current-weight-value"></strong></div>
         <div class="inventory-current-weight-bar" role="progressbar" aria-label="{{ _('Aktuelles Spulengewicht') }}"><i id="inventory-current-weight-fill"></i></div>
+        <div class="inventory-current-length text-muted small"><span>{{ _('Restlänge') }}</span><strong id="inventory-current-length-value"></strong></div>
       </div>
       <div id="inventory-stock-adjustment" class="inventory-stock-adjustment" hidden>
         <div class="inventory-stock-correction"><span>{{ _('Gewichtskorrektur (g)') }}</span><strong id="inventory-stock-correction-value">0,00 g</strong></div>
@@ -121,6 +122,7 @@ document.addEventListener('DOMContentLoaded', () => {
     print: {{ _('Druck')|tojson }},
     minutes: {{ _('Min.')|tojson }},
     completed: {{ _('COMPLETED')|tojson }},
+    remainingLength: {{ _('Restlänge')|tojson }},
     noFilaments: {{ _('Keine Filamente gefunden.')|tojson }},
     manufacturerGroup: {{ _('Herstellergruppe')|tojson }},
     materialGroup: {{ _('Materialgruppe')|tojson }},
@@ -200,6 +202,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const currentWeight = document.getElementById('inventory-current-weight');
   const currentWeightValue = document.getElementById('inventory-current-weight-value');
   const currentWeightFill = document.getElementById('inventory-current-weight-fill');
+  const currentLengthValue = document.getElementById('inventory-current-length-value');
   const stockCorrectionValue = document.getElementById('inventory-stock-correction-value');
   const spoolPrints = document.getElementById('inventory-spool-prints');
   const spoolPrintsList = document.getElementById('inventory-spool-prints-list');
@@ -284,6 +287,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const numberLocale = document.documentElement.lang.startsWith('de') ? 'de-DE' : 'en-US';
   const formatDecimal = value => Number(value).toLocaleString(numberLocale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const formatWeight = grams => { const value = Number(grams || 0); if (value < 1000) return `${formatDecimal(value)} g`; return `${formatDecimal(value / 1000)} kg`; };
+  const formatLength = millimeters => {
+    const value = Math.max(0, Number(millimeters || 0));
+    if (value >= 1000) {
+      return `${(value / 1000).toLocaleString(numberLocale, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} m`;
+    }
+    return `${Math.round(value).toLocaleString(numberLocale)} mm`;
+  };
   const relativeDate = value => {
     if (!value) return inventoryText.unused;
     const date = new Date(value.replace(' ', 'T'));
@@ -659,6 +669,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const liveSpool = liveEntry?.spool || record;
       const liveRemaining = Number(liveSpool.remaining_weight ?? record.remaining_weight ?? 0);
       currentWeightValue.textContent = formatWeight(liveRemaining);
+      currentLengthValue.textContent = formatLength(liveSpool.remaining_length_mm);
       const maximum = Number(liveSpool.initial_weight || record.initial_weight || record.filament?.weight || liveRemaining || 1);
       const percent = Math.max(0, Math.min(100, liveRemaining / maximum * 100));
       currentWeightFill.style.width = `${percent}%`;
@@ -1024,7 +1035,12 @@ document.addEventListener('DOMContentLoaded', () => {
     bar.append(fill);
     const progress = make('span', 'inventory-spool-progress');
     progress.append(bar, make('small', 'inventory-spool-used', relativeDate(entry.last_used)));
-    button.append(left, progress, make('span', 'inventory-spool-remaining', formatWeight(entry.spool.remaining_weight)));
+    const remaining = make('span', 'inventory-spool-remaining');
+    remaining.append(
+      make('strong', '', formatWeight(entry.spool.remaining_weight)),
+      make('small', 'inventory-spool-length', formatLength(entry.spool.remaining_length_mm)),
+    );
+    button.append(left, progress, remaining);
     if (selectedEditor?.kind === 'spool' && selectedEditor.id === String(entry.spool.id)) button.classList.add('is-selected');
     button.addEventListener('click', () => selectEditor('spool', entry.spool.id));
     return button;
