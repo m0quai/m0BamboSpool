@@ -2,6 +2,8 @@
 
 > Einstieg: [START.md](../START.md) · Entscheidungen: [Design](../../DESIGN.md)
 
+Den ausführlichen [Ablauf- und Klassenplan](ablauf-und-klassenplan.md) mit Druck-, AMS-, NFC- und Inventarabläufen sowie ihren Abhängigkeiten findest du hier.
+
 m0BamboSpool wird als eigenständiger Fork mit Bambu-Lab-Erweiterungen gepflegt.
 
 ## Modulgrenzen
