@@ -127,6 +127,5 @@ class InventoryDatabaseTests(unittest.TestCase):
         inventory_database.update_spool_fields(spool_id, {"archived": False})
         self.assertFalse(inventory_database.get_spool(spool_id)["archived"])
 
-
 if __name__ == "__main__":
     unittest.main()

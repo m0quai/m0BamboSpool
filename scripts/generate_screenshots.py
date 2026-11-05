@@ -195,7 +195,7 @@ def start_server(
     print_history_db: str | None = None,
 ) -> subprocess.Popen:
     env = os.environ.copy()
-    env.setdefault("FLASK_APP", "app_custom")
+    env.setdefault("FLASK_APP", "app")
     env["FLASK_RUN_PORT"] = str(port)
     if live_read_only:
         env["M0BAMBOSPOOL_LIVE_READONLY"] = "1"

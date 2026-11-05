@@ -236,7 +236,7 @@ body {
 
 .home-dashboard-grid {
     display: grid;
-    grid-template-columns: minmax(260px, 1fr) minmax(360px, 1.45fr) minmax(220px, .85fr);
+    grid-template-columns: minmax(300px, .85fr) minmax(520px, 1.7fr);
     gap: 1rem;
     align-items: stretch;
 }
@@ -435,6 +435,15 @@ body {
     text-align: center;
 }
 
+.home-download-status {
+    margin: 0 0 .65rem;
+    padding: .55rem .8rem;
+    border: 1px solid var(--m0-line);
+    border-radius: .55rem;
+    background: var(--m0-surface);
+    color: var(--m0-muted);
+}
+
 /* Home dashboard: keep the three sample cards aligned and give each card its
    own compact content flow. */
 .home-dashboard-grid > .home-dashboard-card > .card-body {
@@ -462,6 +471,17 @@ body {
 
 .home-status-card .home-metric-list > div {
     min-height: 45px;
+}
+
+.home-inline-activity {
+    margin-top: .9rem;
+    padding-top: .8rem;
+    border-top: 1px solid var(--m0-line);
+}
+
+.home-inline-activity h2 {
+    color: var(--m0-muted);
+    font-weight: 600;
 }
 
 .home-last-print-card .card-body {
@@ -506,10 +526,6 @@ body {
     z-index: 1;
 }
 
-.home-activity-card .card-body {
-    padding-top: 1.15rem;
-}
-
 .home-activity-list {
     min-height: 0;
     gap: .75rem;
@@ -531,11 +547,7 @@ body {
 
 @media (max-width: 1050px) {
     .home-dashboard-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .home-activity-card {
-        grid-column: span 2;
+        grid-template-columns: 1fr;
     }
 }
 
@@ -544,7 +556,6 @@ body {
         grid-template-columns: 1fr;
     }
 
-    .home-activity-card,
     .home-refresh-row {
         grid-column: auto;
     }
@@ -1097,6 +1108,10 @@ main.container {
 .history-master-table th:nth-child(2) { width: 175px; }
 .history-master-table th:nth-child(3) { width: 125px; }
 .history-master-table th:last-child { width: 90px; }
+.history-master-table tbody > tr.history-row > td {
+    padding-top: .45rem;
+    padding-bottom: .45rem;
+}
 .history-filament-summary {
     display: flex;
     flex-wrap: wrap;
@@ -1104,23 +1119,372 @@ main.container {
     gap: .35rem;
 }
 .history-detail-row > td {
-    background: var(--bs-tertiary-bg);
+    background: var(--bs-body-bg);
 }
 .history-detail {
-    border-top: 1px solid var(--bs-border-color);
+    border-top: 0;
 }
 .history-detail-table th {
     width: 1%;
     white-space: nowrap;
     color: var(--bs-secondary-color);
 }
+.history-summary-table {
+    width: 100%;
+    margin-bottom: .2rem !important;
+    font-size: .78rem;
+    table-layout: fixed;
+    border-collapse: separate;
+    border-spacing: 0;
+    border: 0;
+    border-radius: 0;
+    overflow: hidden;
+}
+.history-summary-table th,
+.history-summary-table td {
+    padding: .18rem .45rem;
+    border: 0;
+    line-height: 1.2;
+    vertical-align: middle;
+    background: var(--bs-body-bg);
+}
+.history-summary-table .history-label-col {
+    width: 29%;
+}
+.history-summary-table .history-value-col {
+    width: 18%;
+}
+.history-summary-table .history-actual-label-col {
+    width: 25%;
+}
+.history-summary-table .history-diff-col {
+    width: 15%;
+}
+.history-summary-table .history-actual-value-col {
+    width: 13%;
+}
+.history-summary-table th {
+    font-weight: 400;
+}
+.history-summary-table td {
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+.history-summary-table td:nth-child(2),
+.history-summary-table td:nth-child(4),
+.history-summary-table td:nth-child(5) {
+    text-align: right;
+}
+.history-summary-table .history-diff-cell {
+    color: var(--bs-secondary-color);
+    font-weight: 400;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    white-space: nowrap;
+}
+.history-summary-table .history-actual-value-cell {
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    white-space: nowrap;
+}
+.history-summary-table .expected-remaining,
+.history-summary-table .expected-end-time {
+    display: inline-block;
+    white-space: nowrap;
+}
+.history-metric-value-group {
+    display: grid;
+    /* Keep the parenthesized delta and the actual value in stable,
+       content-sized columns.  The widest delta defines one shared right
+       edge for every row, so values never form a ragged/"flat" alignment. */
+    grid-template-columns: 5.5rem max-content;
+    align-items: baseline;
+    gap: .35rem;
+    width: 100%;
+    white-space: nowrap;
+    justify-content: end;
+}
+.history-metric-diff {
+    color: var(--bs-secondary-color);
+    font-weight: 400;
+    font-variant-numeric: tabular-nums;
+    justify-self: end;
+    text-align: right;
+}
+.history-metric-value-group > span:last-child {
+    justify-self: end;
+    text-align: right;
+}
+.history-metric-value-group > span:only-child {
+    grid-column: 2;
+}
+.history-price-warning {
+    margin-left: .3rem;
+    vertical-align: -.05em;
+    cursor: help;
+}
+.history-summary-table .history-consumption-row th {
+    padding-top: .28rem;
+}
+.history-summary-table .history-consumption-row:first-of-type th,
+.history-summary-table .history-consumption-row:first-of-type td {
+    border-top: 1px solid var(--bs-border-color-translucent);
+}
+.history-summary-table .history-filament-last-row th,
+.history-summary-table .history-filament-last-row td {
+    border-bottom: 1px solid var(--bs-border-color);
+}
+.history-summary-table .history-filament-metric-label th {
+    padding-top: .5rem;
+    padding-bottom: .12rem;
+    color: var(--bs-secondary-color);
+    font-weight: 600;
+    border-top: 1px solid var(--bs-border-color-translucent);
+}
+.history-summary-table .history-filament-metric-label:first-child th {
+    border-top: 0;
+    padding-top: .2rem;
+}
+.history-filament-color-line {
+    display: flex;
+    align-items: center;
+    gap: .45rem;
+    min-height: 1.7rem;
+}
+.history-summary-table .history-progress-value {
+    font-size: .78rem;
+    font-weight: 700;
+    color: var(--bs-body-color);
+}
+.history-progress-track {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-width: 8rem;
+    height: 1.35rem;
+    overflow: hidden;
+    border-radius: 999px;
+    background: #e7eef5;
+    box-shadow: inset 0 0 0 1px rgba(38, 71, 99, .08);
+}
+.history-progress-fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    border-radius: inherit;
+    background: color-mix(in srgb, var(--m0-brand) 68%, #fff);
+    transition: width .25s ease;
+}
+.history-progress-track span {
+    position: relative;
+    z-index: 1;
+    color: var(--bs-body-color);
+    font-weight: 700;
+    line-height: 1;
+    text-shadow: 0 1px 2px rgba(255, 255, 255, .8);
+}
+.history-progress-track[data-status="COMPLETED"] .history-progress-fill {
+    background: color-mix(in srgb, var(--m0-success) 68%, #fff);
+}
+.history-progress-track[data-status="ABORTED"] .history-progress-fill,
+.history-progress-track[data-status="FAILED"] .history-progress-fill,
+.history-progress-track[data-status="CANCELLED"] .history-progress-fill {
+    background: color-mix(in srgb, #dc3545 62%, #fff);
+}
+.history-summary-table .history-timing-row td {
+    padding-top: .35rem;
+    color: var(--bs-body-color);
+    font-size: inherit;
+}
+.history-summary-table .history-timing-row th {
+    font-weight: 400;
+}
+.history-summary-table .history-cost-summary tr:first-child th,
+.history-summary-table .history-cost-summary tr:first-child td {
+    border-top: 3px solid color-mix(in srgb, var(--bs-secondary-color) 65%, var(--bs-border-color));
+    padding-top: .45rem;
+    font-weight: 700;
+}
+.history-summary-footer {
+    min-height: 1.8rem;
+    font-size: .75rem;
+    color: var(--bs-secondary-color);
+}
+.history-toolbar {
+    min-height: 2.25rem;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
+    gap: .75rem !important;
+}
+.history-toolbar-pagination {
+    margin: 0;
+    justify-self: center;
+}
+.history-toolbar-pagination .pagination {
+    margin-bottom: 0;
+}
+.history-page-size-control {
+    color: var(--bs-secondary-color);
+    justify-self: start;
+}
+.history-show-deleted-control {
+    justify-self: end;
+}
+.history-show-deleted-control .form-select {
+    width: auto;
+    min-width: 9rem;
+}
+.history-page-size-control .form-select {
+    width: auto;
+    min-width: 5.25rem;
+}
+@media (max-width: 720px) {
+    .history-toolbar {
+        display: flex !important;
+        flex-wrap: wrap;
+    }
+    .history-toolbar-pagination,
+    .history-page-size-control {
+        justify-self: auto;
+    }
+    .history-toolbar-pagination {
+        order: 3;
+        width: 100%;
+    }
+    .history-show-deleted-control {
+        order: 2;
+        margin-left: auto;
+    }
+}
 .history-filament-detail {
     border-top: 1px solid var(--bs-border-color);
     padding: .55rem 0;
 }
+.history-data-panel {
+    align-self: flex-start;
+    padding: 0;
+    border: 1px solid var(--bs-border-color);
+    border-radius: .55rem;
+    background: var(--bs-body-bg);
+    overflow: hidden;
+}
+.history-data-panel-row {
+    margin: 0;
+}
+.history-filament-column,
+.history-metrics-column {
+    min-width: 0;
+}
+@media (min-width: 992px) {
+    .history-data-panel-row > .history-filament-column {
+        flex: 0 0 30%;
+        max-width: 30%;
+    }
+    .history-data-panel-row > .history-metrics-column {
+        flex: 0 0 70%;
+        max-width: 70%;
+    }
+}
+.history-filament-column {
+    font-size: .78rem;
+    padding: .55rem .75rem;
+}
+.history-metrics-column {
+    padding: .55rem .75rem;
+}
+.history-data-panel .history-filament-detail {
+    margin-left: -.75rem;
+    margin-right: -.75rem;
+    padding-left: 1.25rem;
+    padding-right: 1.25rem;
+}
+.history-data-panel .history-summary-table {
+    width: calc(100% + 1.5rem);
+    margin-left: -.75rem;
+    margin-right: -.75rem;
+}
+.history-data-panel .history-filament-detail:first-child {
+    border-top: 1px solid var(--bs-border-color);
+}
+.history-data-panel .history-filament-detail {
+    display: grid !important;
+    grid-template-columns: 3rem minmax(0, 1fr) auto;
+    column-gap: .45rem;
+    align-items: start;
+}
+.history-filament-slot {
+    padding-top: .1rem;
+    white-space: nowrap;
+    text-align: left;
+    font-weight: 700;
+}
+.history-filament-column::after {
+    display: none;
+}
+.history-data-panel .history-filament-first-row th,
+.history-data-panel .history-filament-first-row td {
+    border-top: 1px solid var(--bs-border-color-translucent);
+}
+.history-filament-column.history-filament-aligned {
+    position: relative;
+}
+.history-filament-column.history-filament-aligned .history-filament-detail {
+    position: absolute;
+    left: 0;
+    right: 0;
+}
+.history-filament-column strong {
+    font-size: .84rem;
+}
+.history-filament-column .history-filament-detail:first-child {
+    border-top: 1px solid var(--bs-border-color);
+    padding-top: .55rem;
+}
+.history-metric-filament-label {
+    margin-top: .55rem;
+    padding-top: .35rem;
+    border-top: 1px solid var(--bs-border-color);
+}
+.history-metrics-column .history-filament-metrics-column {
+    margin-top: .1rem;
+    margin-bottom: .55rem;
+}
 .history-filament-main {
     min-width: 0;
     flex: 1 1 auto;
+}
+.history-archived-icon {
+    color: var(--bs-secondary-color);
+    font-size: .78em;
+    margin-left: .35rem;
+    vertical-align: middle;
+}
+.history-filament-actions-buttons {
+    flex: 0 0 auto;
+    width: auto;
+    white-space: nowrap;
+}
+.history-row-actions {
+    white-space: nowrap;
+    flex-wrap: nowrap;
+    vertical-align: middle;
+}
+.history-row-actions form {
+    display: inline-flex;
+    flex: 0 0 auto;
+}
+.history-filament-actions-buttons .btn,
+.history-entry-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.85rem;
+    height: 1.85rem;
+    padding: 0;
 }
 .history-filament-metrics {
     width: 100%;
@@ -1249,8 +1613,23 @@ main.container {
     border-top: 0;
 }
 .history-image img {
-    max-height: 260px;
+    max-height: 100%;
     object-fit: contain;
+}
+.history-image {
+    align-self: flex-start;
+}
+.history-image-panel {
+    width: 100%;
+    min-height: 0;
+}
+.history-image-panel.image-size-pending {
+    visibility: hidden;
+}
+/* Keep the detail content visible while its image height is measured.  The
+   metrics must never disappear when a history row is opened. */
+.history-detail.history-size-pending {
+    visibility: visible;
 }
 @media (max-width: 768px) {
     .history-master-table {

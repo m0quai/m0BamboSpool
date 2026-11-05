@@ -5,17 +5,136 @@ const expectedEndLabel = {{ _('Erwartetes Ende:')|tojson }};
 const actualEndLabel = {{ _('Tatsächliches Ende:')|tojson }};
 const remainingLabel = {{ _('Restlaufzeit:')|tojson }};
 const durationLabel = {{ _('Druckdauer:')|tojson }};
-const estimatedLabel = {{ _('(geschätzt)')|tojson }};
 const historyStatusLabels = {
   finished: {{ _('Finished')|tojson }},
   cancelled: {{ _('Cancelled')|tojson }},
-  failed: {{ _('Failed')|tojson }},
+  failed: {{ _('Cancelled')|tojson }},
   printing: {{ _('Printing')|tojson }},
   running: {{ _('Printing')|tojson }},
 };
+const historyAllStatusesLabel = {{ (_('Alle') ~ ' ' ~ _('Status'))|tojson }};
 const historyFilterOptions = {{ {'dates': history_filter_dates|default([]), 'statuses': history_filter_statuses|default([])}|tojson }};
+const historyDeletedMode = {{ request.args.get('deleted_mode', 'with' if show_deleted else 'without')|tojson }};
+const historyHasActivePrint = {{ (prints|selectattr('is_running')|list|length > 0)|tojson }};
+function initHistoryMappingRefresh() {
+  // A resolved AMS mapping does not mean the print is finished. Continue
+  // watching the active print so layers, consumption, progress and status
+  // remain current in History after the initial spool assignment is complete.
+  if (!historyHasActivePrint) return;
+  let previousSignature = null;
+  let timer = null;
+  const poll = async () => {
+    try {
+      const response = await fetch(`/home/state?_=${Date.now()}`, {
+        cache: 'no-store', headers: { 'Accept': 'application/json' }
+      });
+      if (!response.ok) return;
+      const data = await response.json();
+      const print = data.last_print || {};
+      const active = Boolean(data.print_id) && ['PREPARING', 'RUNNING', 'PAUSED'].includes(String(print.status || '').toUpperCase());
+      const activity = data.filament_activity || {};
+      const signature = JSON.stringify([
+        data.print_id || null,
+        print.status || null,
+        print.layers_printed || 0,
+        print.last_usage_event_at || null,
+        print.filament_grams_billed || 0,
+        activity.spool_id || null,
+        activity.tray || null,
+      ]);
+      if (previousSignature !== null && signature !== previousSignature) {
+        window.location.reload();
+        return;
+      }
+      previousSignature = signature;
+      if (!active && timer) {
+        window.clearInterval(timer);
+        timer = null;
+      }
+    } catch (_) {
+      // A short MQTT/web interruption must not disturb the open history page.
+    }
+  };
+  poll();
+  timer = window.setInterval(poll, 4000);
+}
+document.addEventListener('DOMContentLoaded', initHistoryMappingRefresh);
+function alignHistoryFilaments() {
+  document.querySelectorAll('.history-data-panel-row').forEach(row => {
+    const left = row.querySelector('.history-filament-column');
+    const metrics = row.querySelector('.history-metrics-column');
+    const table = metrics?.querySelector('.history-summary-table');
+    const details = left ? Array.from(left.querySelectorAll('[data-history-filament-index]')) : [];
+    const labels = table ? Array.from(table.querySelectorAll('.history-filament-first-row[data-history-filament-index]')) : [];
+    if (!left || !table || details.length !== labels.length) return;
+    if (window.innerWidth < 992) {
+      left.classList.remove('history-filament-aligned');
+      left.style.minHeight = '';
+      left.style.removeProperty('--history-cost-divider-top');
+      details.forEach(detail => { detail.style.position = ''; detail.style.top = ''; detail.style.left = ''; detail.style.right = ''; });
+      return;
+    }
+    const leftTop = left.getBoundingClientRect().top;
+    const tableHeight = table.getBoundingClientRect().height;
+    left.classList.add('history-filament-aligned');
+    left.style.minHeight = `${Math.max(tableHeight, metrics.getBoundingClientRect().height)}px`;
+    const costSummary = table.querySelector('.history-cost-summary');
+    if (costSummary) {
+      const leftRect = left.getBoundingClientRect();
+      const costRect = costSummary.getBoundingClientRect();
+      left.style.setProperty('--history-cost-divider-top', `${Math.max(0, costRect.top - leftRect.top)}px`);
+    } else {
+      left.style.removeProperty('--history-cost-divider-top');
+    }
+    details.forEach((detail, index) => {
+      const labelRect = labels[index].getBoundingClientRect();
+      detail.style.top = `${Math.max(0, labelRect.top - leftTop)}px`;
+    });
+  });
+}
+function primeHistoryDetail(panel) {
+  const detail = panel?.querySelector('.history-detail');
+  const metrics = panel?.querySelector('.history-metrics-column');
+  const summaryTable = metrics?.querySelector('.history-summary-table');
+  const imagePanel = panel?.querySelector('.history-image-panel');
+  if (!detail || !metrics || !summaryTable || !imagePanel) return;
+  const isShown = panel.classList.contains('show');
+  const previous = {
+    display: panel.style.display,
+    position: panel.style.position,
+    visibility: panel.style.visibility,
+    width: panel.style.width,
+  };
+  if (!isShown) {
+    const parentWidth = panel.parentElement?.getBoundingClientRect().width;
+    panel.style.display = 'block';
+    panel.style.position = 'absolute';
+    panel.style.visibility = 'hidden';
+    if (parentWidth > 0) panel.style.width = `${parentWidth}px`;
+  }
+  detail.classList.remove('history-size-pending');
+  const height = summaryTable.getBoundingClientRect().height;
+  if (height > 0) {
+    imagePanel.style.height = `${height}px`;
+    imagePanel.classList.remove('image-size-pending');
+    const image = imagePanel.querySelector('img');
+    if (image) {
+      image.style.maxHeight = `${Math.max(16, height - 16)}px`;
+      image.style.maxWidth = '100%';
+      image.style.objectFit = 'contain';
+    }
+  }
+  alignHistoryFilaments();
+  if (!isShown) {
+    panel.style.display = previous.display;
+    panel.style.position = previous.position;
+    panel.style.visibility = previous.visibility;
+    panel.style.width = previous.width;
+  }
+}
 function adjustPrintImages() {
   let referenceHeight = 0;
+  alignHistoryFilaments();
   document.querySelectorAll('.print-grid').forEach(grid => {
     const printInfo = grid.querySelector('.printinfo');
     const printImageContainer = grid.querySelector('.print-image');
@@ -28,8 +147,30 @@ function adjustPrintImages() {
       if (image) { image.style.height = '100%'; image.style.width = 'auto'; image.style.objectFit = 'contain'; }
     }
   });
+  document.querySelectorAll('.history-detail > .row').forEach(row => {
+    const metrics = row.querySelector('.history-metrics-column');
+    const summaryTable = metrics?.querySelector('.history-summary-table');
+    const panel = row.querySelector('.history-image-panel');
+    const image = panel?.querySelector('img');
+    if (!metrics || !panel) return;
+    const height = (summaryTable || metrics).getBoundingClientRect().height;
+    panel.style.height = height > 0 ? `${height}px` : 'auto';
+    if (height > 0) panel.classList.remove('image-size-pending');
+    if (image) {
+      image.style.maxHeight = height > 16 ? `${height - 16}px` : '100%';
+      image.style.maxWidth = '100%';
+      image.style.objectFit = 'contain';
+    }
+  });
+  document.querySelectorAll('.history-detail.history-size-pending').forEach(detail => {
+    const metrics = detail.querySelector('.history-metrics-column');
+    if (metrics && metrics.getBoundingClientRect().height > 0) detail.classList.remove('history-size-pending');
+  });
 }
-setTimeout(adjustPrintImages, 10);
+setTimeout(() => {
+  document.querySelectorAll('.print-history .collapse').forEach(primeHistoryDetail);
+  adjustPrintImages();
+}, 10);
 window.addEventListener('resize', adjustPrintImages);
 function initThumbnailHover() {
   const thumbnails = document.querySelectorAll('.thumbnail');
@@ -48,40 +189,59 @@ function initThumbnailHover() {
   overlayImage.addEventListener('click', closeThumbnailOverlay);
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeThumbnailOverlay(); });
 }
-function initPrintHistoryRefresh() {
-  const forceButton = document.getElementById('print-history-refresh-now');
-  const refresh = async () => {
-    if (window.historyRefreshInFlight) return;
-    window.historyRefreshInFlight = true;
-    try {
-      const url = new URL(window.location.href);
-      url.searchParams.set('_', Date.now());
-      const response = await fetch(url, { cache: 'no-store', headers: { 'Accept': 'text/html' } });
-      if (!response.ok) return;
-      const documentText = await response.text();
-      const parsed = new DOMParser().parseFromString(documentText, 'text/html');
-      const current = document.getElementById('history-live-content');
-      const incoming = parsed.getElementById('history-live-content');
-      if (!current || !incoming) return;
-      current.replaceWith(incoming);
-      window.m0InitHistoryPagination?.();
-      document.getElementById('print-history-refresh-now')?.addEventListener('click', refresh);
-      initThumbnailHover();
-      initHistoryCollapsePersistence();
-      initHistoryTableControls();
-      formatExpectedEnd();
-      formatActualEnd();
-      formatPrintDurations();
-      formatEstimatedPrintDurations();
-      adjustPrintImages();
-    } finally {
-      window.historyRefreshInFlight = false;
-    }
+function initHistoryPageControls() {
+  const closeHistoryEntries = () => {
+    document.querySelectorAll('.print-history .collapse.show').forEach(panel => {
+      if (window.bootstrap?.Collapse) window.bootstrap.Collapse.getOrCreateInstance(panel, { toggle: false }).hide();
+      else panel.classList.remove('show');
+    });
   };
-  forceButton?.addEventListener('click', refresh);
-  window.setInterval(() => {
-    if (document.visibilityState === 'visible') refresh();
-  }, 5000);
+  const lockControls = () => {
+    closeHistoryEntries();
+  document.querySelectorAll('.print-history-pagination a, #history-deleted-filter, #history-page-size').forEach(control => {
+      control.classList.add('disabled');
+      control.setAttribute('aria-disabled', 'true');
+      control.setAttribute('tabindex', '-1');
+      control.disabled = true;
+    });
+  };
+  const navigate = (mutate) => {
+    lockControls();
+    const url = new URL(window.location.href);
+    ['page', 'print_id', 'ams_slot', 'spool_id', 'old_spool_id'].forEach(key => url.searchParams.delete(key));
+    mutate(url);
+    window.location.assign(url.toString());
+  };
+  const deletedFilter = document.getElementById('history-deleted-filter');
+  deletedFilter?.addEventListener('change', () => navigate(url => {
+    const mode = deletedFilter.value || 'without';
+    if (mode === 'without') {
+      url.searchParams.delete('show_deleted');
+      url.searchParams.delete('deleted_mode');
+    } else {
+      // The existing route loads deleted rows with show_deleted=1.  The
+      // "only" mode is then narrowed to deleted rows in the rendered list.
+      url.searchParams.set('show_deleted', '1');
+      if (mode === 'only') {
+        url.searchParams.set('deleted_mode', 'only');
+        url.searchParams.set('per_page', 'all');
+      } else {
+        url.searchParams.delete('deleted_mode');
+      }
+    }
+  }));
+  const pageSize = document.getElementById('history-page-size');
+  pageSize?.addEventListener('change', () => navigate(url => {
+    url.searchParams.set('per_page', pageSize.value);
+  }));
+  document.querySelectorAll('.print-history-pagination a').forEach(link => {
+    link.addEventListener('click', event => {
+      if (link.closest('.page-item.disabled')) return;
+      event.preventDefault();
+      lockControls();
+      window.location.assign(link.href);
+    });
+  });
 }
 function initHistoryCollapsePersistence() {
   const key = 'm0bambospool-history-open';
@@ -112,8 +272,13 @@ function initHistoryCollapsePersistence() {
         toggleRow(event);
       });
     }
+    panel.addEventListener('show.bs.collapse', () => {
+      setIcon(true);
+      primeHistoryDetail(panel);
+    });
     panel.addEventListener('shown.bs.collapse', () => { localStorage.setItem(key + ':' + id, '1'); setIcon(true); });
     panel.addEventListener('shown.bs.collapse', adjustPrintImages);
+    panel.addEventListener('hide.bs.collapse', () => setIcon(false));
     panel.addEventListener('hidden.bs.collapse', () => {
       localStorage.removeItem(key + ':' + id);
       setIcon(false);
@@ -161,6 +326,10 @@ function initHistoryTableControls() {
   const statusOptions = Array.isArray(serverFilterOptions?.statuses) && serverFilterOptions.statuses.length
     ? serverFilterOptions.statuses
     : [...new Set(rows.map(row => row.dataset.historyStatus))].sort().map(value => ({ value, label: historyStatusLabels[value] || value.charAt(0).toUpperCase() + value.slice(1) }));
+  const allStatusWrapper = document.createElement('label');
+  allStatusWrapper.className = 'filter-choice filter-choice-all border-bottom pb-2 mb-2';
+  allStatusWrapper.innerHTML = `<input class="filter-choice-input history-status-all" type="checkbox" value="__all__"><span>${historyAllStatusesLabel}</span>`;
+  statusMenu.appendChild(allStatusWrapper);
   statusOptions.forEach(option => {
     const value = typeof option === 'string' ? option : option.value;
     const label = typeof option === 'string' ? (historyStatusLabels[value] || value.charAt(0).toUpperCase() + value.slice(1)) : option.label;
@@ -184,8 +353,19 @@ function initHistoryTableControls() {
   idFilter.value = savedState.id || '';
   dateFilter.value = savedState.date || '';
   nameFilter.value = savedState.name || '';
-  const savedStatuses = Array.isArray(savedState.status) ? savedState.status : (savedState.status ? [savedState.status] : []);
-  statusMenu.querySelectorAll('.history-status-check').forEach(check => { check.checked = savedStatuses.includes(check.value); });
+  // Status filter is an exclusion filter: all known statuses are visible by
+  // default and the user unchecks only the statuses to hide.
+  const savedExcludedStatuses = savedState.statusFilterMode === 'exclude'
+    ? (Array.isArray(savedState.excludedStatus) ? savedState.excludedStatus : [])
+    : [];
+  statusMenu.querySelectorAll('.history-status-check').forEach(check => {
+    check.checked = !savedExcludedStatuses.includes(check.value);
+  });
+  const allStatusCheck = statusMenu.querySelector('.history-status-all');
+  if (allStatusCheck) {
+    const statusChecks = Array.from(statusMenu.querySelectorAll('.history-status-check'));
+    allStatusCheck.checked = statusChecks.length === 0 || statusChecks.every(check => check.checked);
+  }
   let sortField = 'date';
   let sortDirection = 'desc';
   if (['id', 'date', 'status', 'name'].includes(savedState.sortField)) sortField = savedState.sortField;
@@ -194,10 +374,13 @@ function initHistoryTableControls() {
     const idNeedle = idFilter.value.trim().toLowerCase();
     const selectedDate = dateFilter.value;
     const nameNeedle = nameFilter.value.trim().toLowerCase();
-    const wantedStatuses = new Set(Array.from(statusMenu.querySelectorAll('.history-status-check:checked')).map(check => check.value));
-    statusButton.textContent = wantedStatuses.size ? `${wantedStatuses.size} ${statusButton.dataset.selectedLabel}` : statusButton.dataset.allLabel;
-    try { localStorage.setItem(storageKey, JSON.stringify({ id: idFilter.value, date: dateFilter.value, name: nameFilter.value, status: Array.from(wantedStatuses), sortField, sortDirection })); } catch (_) {}
-    const visible = rows.filter(row => (!idNeedle || row.dataset.historyId.includes(idNeedle)) && (!selectedDate || row.dataset.historyDate.startsWith(selectedDate)) && (!nameNeedle || row.dataset.historyName.includes(nameNeedle)) && (!wantedStatuses.size || wantedStatuses.has(row.dataset.historyStatus)));
+    const checkedStatuses = new Set(Array.from(statusMenu.querySelectorAll('.history-status-check:checked')).map(check => check.value));
+    const excludedStatuses = new Set(Array.from(statusMenu.querySelectorAll('.history-status-check:not(:checked)')).map(check => check.value));
+    statusButton.textContent = excludedStatuses.size
+      ? `${checkedStatuses.size} ${statusButton.dataset.selectedLabel}`
+      : statusButton.dataset.allLabel;
+    try { localStorage.setItem(storageKey, JSON.stringify({ id: idFilter.value, date: dateFilter.value, name: nameFilter.value, statusFilterMode: 'exclude', excludedStatus: Array.from(excludedStatuses), sortField, sortDirection })); } catch (_) {}
+    const visible = rows.filter(row => (!idNeedle || row.dataset.historyId.includes(idNeedle)) && (!selectedDate || row.dataset.historyDate.startsWith(selectedDate)) && (!nameNeedle || row.dataset.historyName.includes(nameNeedle)) && !excludedStatuses.has(row.dataset.historyStatus) && (historyDeletedMode !== 'only' || row.dataset.historyDeleted === '1'));
     visible.sort((a, b) => {
       let left = sortField === 'date' ? a.dataset.historyDate : sortField === 'id' ? Number(a.dataset.historyId) : sortField === 'name' ? a.dataset.historyName : a.dataset.historyStatus;
       let right = sortField === 'date' ? b.dataset.historyDate : sortField === 'id' ? Number(b.dataset.historyId) : sortField === 'name' ? b.dataset.historyName : b.dataset.historyStatus;
@@ -215,9 +398,19 @@ function initHistoryTableControls() {
       const detail = details.get(row.dataset.historyId);
       if (detail) body.appendChild(detail);
     });
+    const deletedEmpty = document.getElementById('history-deleted-empty');
+    if (deletedEmpty) deletedEmpty.hidden = historyDeletedMode !== 'only' || visible.length > 0;
   };
   [idFilter, dateFilter, nameFilter].forEach(input => input.addEventListener('input', apply));
-  statusMenu.addEventListener('change', apply);
+  statusMenu.addEventListener('change', event => {
+    const statusChecks = Array.from(statusMenu.querySelectorAll('.history-status-check'));
+    if (event.target.matches('.history-status-all')) {
+      statusChecks.forEach(check => { check.checked = event.target.checked; });
+    } else if (event.target.matches('.history-status-check') && allStatusCheck) {
+      allStatusCheck.checked = statusChecks.length === 0 || statusChecks.every(check => check.checked);
+    }
+    apply();
+  });
   const positionStatusMenu = () => {
     const rect = statusButton.getBoundingClientRect();
     statusMenu.style.setProperty('position', 'fixed', 'important');
@@ -248,7 +441,7 @@ function initHistoryTableControls() {
   apply();
 }
 function formatExpectedEnd() {
-  document.querySelectorAll('.expected-end').forEach(el => {
+  document.querySelectorAll('.expected-end, .expected-end-time, .expected-remaining').forEach(el => {
     let end = el.dataset.end ? new Date(el.dataset.end.replace(' ', 'T')) : null;
     if (!end || Number.isNaN(end.getTime())) {
       const minutes = Number(el.dataset.minutes || 0);
@@ -270,7 +463,13 @@ function formatExpectedEnd() {
     const hours = Math.floor(remainingSeconds / 3600);
     const minutes = Math.floor((remainingSeconds % 3600) / 60);
     const remaining = hours > 0 ? `${hours} h ${minutes} min` : `${minutes} min`;
-    el.textContent = `${expectedEndLabel} ${time}${sameDay ? '' : ', ' + date} · ${remainingLabel} ${remaining}`;
+    if (el.classList.contains('expected-end-time')) {
+      el.textContent = `${time}${sameDay ? '' : ', ' + date}`;
+    } else if (el.classList.contains('expected-remaining')) {
+      el.textContent = `(${remaining})`;
+    } else {
+      el.textContent = `${time}${sameDay ? '' : ', ' + date} (${remaining})`;
+    }
   });
 }
 function formatActualEnd() {
@@ -280,22 +479,41 @@ function formatActualEnd() {
     const locale = {{ current_language|tojson }} === 'de' ? 'de-DE' : 'en-US';
     const time = new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit' }).format(end);
     const date = new Intl.DateTimeFormat(locale, { day: '2-digit', month: '2-digit', year: 'numeric' }).format(end);
-    el.textContent = `${actualEndLabel} ${time}, ${date}`;
+    const sameDay = end.toDateString() === new Date().toDateString();
+    el.textContent = sameDay ? time : `${time}, ${date}`;
   });
 }
 function formatPrintDurations() {
+  const formatDuration = minutes => minutes >= 60
+    ? `${Math.floor(minutes / 60)} h ${minutes % 60} min`
+    : `${minutes} min`;
   document.querySelectorAll('.print-duration').forEach(el => {
     const start = new Date((el.dataset.start || '').replace(' ', 'T'));
     const end = new Date((el.dataset.end || '').replace(' ', 'T'));
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return;
     const minutes = Math.max(0, Math.round((end - start) / 60000));
-    el.textContent = `${durationLabel} ${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+    el.textContent = formatDuration(minutes);
+    const diff = el.closest('tr')?.querySelector('.history-duration-diff');
+    if (diff) {
+      const expected = Number(diff.dataset.expectedMinutes);
+      if (Number.isFinite(expected)) {
+        const delta = minutes - Math.round(expected);
+        diff.textContent = delta === 0
+          ? ''
+          : `(${delta >= 0 ? '+' : ''}${formatDuration(Math.abs(delta))})`;
+      } else {
+        diff.textContent = '';
+      }
+    }
   });
 }
 function formatEstimatedPrintDurations() {
+  const formatDuration = minutes => minutes >= 60
+    ? `${Math.floor(minutes / 60)} h ${minutes % 60} min`
+    : `${minutes} min`;
   document.querySelectorAll('.estimated-print-duration').forEach(el => {
     const minutes = Math.max(0, Math.round(Number(el.dataset.minutes || 0)));
-    el.textContent = `${durationLabel} ${Math.floor(minutes / 60)} h ${minutes % 60} min ${estimatedLabel}`;
+    el.textContent = formatDuration(minutes);
   });
 }
 function closeThumbnailOverlay() {
@@ -306,9 +524,15 @@ function closeThumbnailOverlay() {
   document.body.classList.remove('modal-open');
 }
 window.addEventListener('load', initThumbnailHover);
-window.addEventListener('load', initPrintHistoryRefresh);
+window.addEventListener('load', initHistoryPageControls);
 window.addEventListener('load', cleanOneTimeHistoryParameters);
 window.addEventListener('load', () => { initHistoryCollapsePersistence(); initHistoryTableControls(); });
+window.addEventListener('load', () => {
+  window.requestAnimationFrame(() => {
+    document.querySelectorAll('.print-history .collapse').forEach(primeHistoryDetail);
+    adjustPrintImages();
+  });
+});
 window.addEventListener('load', formatExpectedEnd);
 window.addEventListener('load', formatActualEnd);
 window.addEventListener('load', formatPrintDurations);
@@ -316,29 +540,40 @@ window.addEventListener('load', formatEstimatedPrintDurations);
 </script>
 <div id="history-live-content">
 <script type="application/json" data-history-filter-options>{{ {'dates': history_filter_dates|default([]), 'statuses': history_filter_statuses|default([])}|tojson }}</script>
-<div class="d-flex justify-content-center align-items-center gap-3 mb-3">
-  <button id="print-history-refresh-now" type="button" class="btn btn-sm btn-primary rounded-pill px-2 py-1">
-    <i class="bi bi-arrow-clockwise me-1"></i><span id="print-history-refresh-label">{{ _('Jetzt aktualisieren') }}</span>
-  </button>
-  {% if has_deleted_prints %}<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('print_history', show_deleted=0 if show_deleted else 1) }}">{{ _('Aktive anzeigen') if show_deleted else _('Gelöschte anzeigen') }}</a>{% endif %}
+<div class="history-toolbar d-flex flex-wrap align-items-center gap-3 mb-3">
+  {% set history_deleted_mode = request.args.get('deleted_mode', 'with' if show_deleted else 'without') %}
+  <label class="history-page-size-control d-inline-flex align-items-center gap-2 mb-0">
+    <span>{{ _('Einträge pro Seite') }}</span>
+    <select id="history-page-size" class="form-select form-select-sm" aria-label="{{ _('Einträge pro Seite') }}">
+      {% for option in history_page_size_options|default((10, 20, 50, 100)) %}
+      <option value="{{ option }}" {% if history_page_size|default(20) == option %}selected{% endif %}>{{ option }}</option>
+      {% endfor %}
+      <option value="all" {% if history_page_size is defined and history_page_size is none %}selected{% endif %}>{{ _('Alle') }}</option>
+    </select>
+  </label>
+  <nav aria-label="{{ _('Print history pagination') }}" class="print-history-pagination history-toolbar-pagination"><ul class="pagination pagination-sm mb-0 justify-content-center">
+    <li class="page-item {% if page <= 1 %}disabled{% endif %}"><a class="page-link" href="{{ url_for('print_history', page=page-1, per_page=('all' if history_page_size is none else history_page_size), show_deleted=1 if show_deleted else none, deleted_mode=history_deleted_mode if history_deleted_mode != 'without' else none) }}">{{ _('Previous') }}</a></li>
+    <li class="page-item disabled"><span class="page-link">{{ _('Page') }} {{ page }} {{ _('of') }} {{ total_pages }}</span></li>
+    <li class="page-item {% if page >= total_pages %}disabled{% endif %}"><a class="page-link" href="{{ url_for('print_history', page=page+1, per_page=('all' if history_page_size is none else history_page_size), show_deleted=1 if show_deleted else none, deleted_mode=history_deleted_mode if history_deleted_mode != 'without' else none) }}">{{ _('Next') }}</a></li>
+  </ul></nav>
+  <label class="history-show-deleted-control d-inline-flex align-items-center gap-2 mb-0">
+    <span>{{ _('Anzeige') }}</span>
+    <select id="history-deleted-filter" class="form-select form-select-sm" aria-label="{{ _('Gelöschte anzeigen') }}">
+      <option value="without" {% if history_deleted_mode == 'without' %}selected{% endif %}>{{ _('ohne Gelöschte') }}</option>
+      <option value="with" {% if history_deleted_mode == 'with' %}selected{% endif %}>{{ _('mit Gelöschte') }}</option>
+      <option value="only" {% if history_deleted_mode == 'only' %}selected{% endif %}>{{ _('nur Gelöschte') }}</option>
+    </select>
+  </label>
 </div>
 {% if prints %}
-  {% if total_pages > 1 %}
-  <nav aria-label="{{ _('Print history pagination') }}" class="print-history-pagination mb-3"><ul class="pagination justify-content-center">
-    <li class="page-item {% if page <= 1 %}disabled{% endif %}"><a class="page-link" href="{{ url_for('print_history', page=page-1) }}">{{ _('Previous') }}</a></li>
-    <li class="page-item disabled"><span class="page-link">{{ _('Page') }} {{ page }} {{ _('of') }} {{ total_pages }}</span></li>
-    <li class="page-item {% if page >= total_pages %}disabled{% endif %}"><a class="page-link" href="{{ url_for('print_history', page=page+1) }}">{{ _('Next') }}</a></li>
-  </ul></nav>
-  {% endif %}
   {% with action_assign=True %}{% include 'fragments/list_prints.html' %}{% endwith %}
-  {% if total_pages > 1 %}
   <nav aria-label="{{ _('Print history pagination') }}" class="print-history-pagination mt-3"><ul class="pagination justify-content-center">
-    <li class="page-item {% if page <= 1 %}disabled{% endif %}"><a class="page-link" href="{{ url_for('print_history', page=page-1) }}">{{ _('Previous') }}</a></li>
+    <li class="page-item {% if page <= 1 %}disabled{% endif %}"><a class="page-link" href="{{ url_for('print_history', page=page-1, per_page=('all' if history_page_size is none else history_page_size), show_deleted=1 if show_deleted else none, deleted_mode=history_deleted_mode if history_deleted_mode != 'without' else none) }}">{{ _('Previous') }}</a></li>
     <li class="page-item disabled"><span class="page-link">{{ _('Page') }} {{ page }} {{ _('of') }} {{ total_pages }}</span></li>
-    <li class="page-item {% if page >= total_pages %}disabled{% endif %}"><a class="page-link" href="{{ url_for('print_history', page=page+1) }}">{{ _('Next') }}</a></li>
+    <li class="page-item {% if page >= total_pages %}disabled{% endif %}"><a class="page-link" href="{{ url_for('print_history', page=page+1, per_page=('all' if history_page_size is none else history_page_size), show_deleted=1 if show_deleted else none, deleted_mode=history_deleted_mode if history_deleted_mode != 'without' else none) }}">{{ _('Next') }}</a></li>
   </ul></nav>
-  {% endif %}
   <div id="image-overlay" class="image-overlay hidden"><div class="overlay-backdrop"></div><div class="overlay-content bg-body p-3 rounded"><img class="overlay-image" style="width:100%;height:100%;"/></div></div>
+  <div id="history-deleted-empty" class="text-center text-body-secondary py-5" hidden><p class="mb-0 fs-5">{{ _('Keine gelöschten Einträge.') }}</p></div>
 {% else %}
   <div class="text-center text-body-secondary py-5"><p class="mb-0 fs-5">{{ _('Keine Historie vorhanden.') }}</p></div>
 {% endif %}

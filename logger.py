@@ -101,9 +101,11 @@ def _remaining_text(spool) -> str:
     if full_weight is None or full_weight <= 0:
         return f" | Rest: {remaining_g} g"
 
-    full_g = int(round(full_weight))
     percent = int(round(max(0.0, min(100.0, remaining / full_weight * 100.0))))
-    return f" | Rest: {remaining_g} g / {full_g} g ({percent} %)"
+    # Keep AMS status lines compact: the nominal spool weight is not useful
+    # there because the local catalog already provides the authoritative
+    # remaining amount.  Show only the remaining grams and percentage.
+    return f" | Rest: {remaining_g} g / {percent} %"
 
 
 def _uid_suffix(uid) -> str:
@@ -119,7 +121,7 @@ def _format_ams_console_message(text):
     #     displayed.
     global _pending_ams_tray, _pending_ams_uid
 
-    # app_custom currently translates the raw Bambu humidity into one of these
+    # The application translates the raw Bambu humidity into one of these
     # human-readable variants before forwarding it to this logger. Normalize all
     # variants to the explicit Bambu humidity index wording.
     match = re.match(
@@ -149,7 +151,7 @@ def _format_ams_console_message(text):
         _pending_ams_uid = None
         return f"AMS [{match.group(1)}] (humidity_index: {match.group(2)}, temp: {match.group(3)})"
 
-    # Raw tray header. app_custom may already have removed (-01%) and a zero
+    # Raw tray header. The application may already have removed (-01%) and a zero
     # UUID, so accept both the original and cleaned forms. Suppress this line;
     # the following local-catalog result is emitted as the single authoritative row.
     tray_match = re.match(r"^\s*- \[([A-Z]\d+)\](.*)$", text)

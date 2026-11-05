@@ -27,8 +27,7 @@ Bei Widersprüchen gilt: aktuelle Nutzeranweisung → `DESIGN.md` → aktueller 
 
 ## Bambu Lab
 
-- [Authentifizierung](bambu/authentifizierung.md)
-- [MQTT und Signierung](bambu/mqtt-signierung.md)
+- [Lokale MQTT-Verbindung](bambu/lokale-mqtt-verbindung.md)
 
 ## Referenz
 

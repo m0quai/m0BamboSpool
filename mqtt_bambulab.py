@@ -8,7 +8,7 @@ from threading import Thread
 from typing import Any, Iterable
 
 import paho.mqtt.client as mqtt
-import bambu_mqtt_signing
+import tools_3mf
 
 from config import (
     PRINTER_ID,
@@ -55,6 +55,7 @@ from print_history import (
   _normalise_print_name,
   get_completed_remote_3mf_cleanup_path,
   find_recent_aborted_print,
+  find_recent_terminal_print_for_source,
   find_previous_metadata_print_name,
   get_filament_usage_for_reconciliation,
   mark_print_reconciled,
@@ -87,6 +88,10 @@ FORCE_AMS_STATUS_LOG = False
 # push_status tray objects whose material fields are empty. Keep the confirmed
 # values locally so the UI does not immediately fall back to "No AMS material selected".
 LAST_CONFIRMED_AMS_FILAMENT_SETTINGS = {}
+# Serialise the source lookup and history-row creation.  MQTT reconnects and
+# project_file/RUNNING packets can be delivered on adjacent worker callbacks;
+# both must observe the same active row before either inserts a new one.
+_QUEUE_3MF_LOCK = threading.RLock()
 PENDING_AMS_FILAMENT_SETTINGS = {}
 FORCE_CLEAR_AMS_TRAYS = set()
 PROFILE_RESPONSE_SAMPLES = {}
@@ -223,6 +228,11 @@ _AMS_STATUS_FIELDS = (
 PRINTER_STATE = {}
 PRINTER_STATE_LAST = {}
 PRINTER_STATE_LAST_UPDATE_AT = None
+# The printer does not publish a reliable build-plate Z coordinate in every
+# status packet. Track the two safety-relevant outcomes locally and refine
+# them from subsequent MQTT reports when the printer exposes tray_now.
+BED_PARKED_STATE = None
+FILAMENT_UNLOADED_STATE = None
 
 PENDING_PRINT_METADATA = {}
 ACTIVE_3MF_PRINTS = {}
@@ -230,6 +240,8 @@ FILAMENT_TRACKER = FilamentUsageTracker()
 _COMPLETION_RECONCILE_LOCK = threading.Lock()
 _ACTIVE_3MF_PRINTS_LOCK = threading.RLock()
 LOG_FILE = application_log_file("mqtt.log")
+
+
 def getPrinterModel():
     global PRINTER_ID
     model_code = PRINTER_ID[:3]
@@ -465,6 +477,64 @@ def _metadata_filament_entries(metadata: dict) -> dict[int, dict]:
   return entries
 
 
+def _unique_local_ams_mapping(metadata: dict, mapping: list[int | None]) -> list[int | None]:
+  """Validate a complete mapping against the local AMS catalog when unambiguous.
+
+  Bambu's project mapping can arrive with the logical filament indices reversed
+  during a reconnect.  The local AMS tray/spool assignment is authoritative in
+  that case.  We only repair a mapping when every logical filament has a unique
+  material+colour match to exactly one local AMS tray; duplicate colours remain
+  unresolved instead of being guessed.
+  """
+  entries = _metadata_filament_entries(metadata)
+  if len(entries) < 2 or not mapping:
+    return mapping
+
+  def _signature(material, color):
+    material = str(material or "").strip().upper().replace("+", "").replace("-", "")
+    color = str(color or "").strip().replace("#", "").upper()
+    color = color[:6]
+    return (material, color) if material and len(color) == 6 else None
+
+  logical_signatures = {
+    int(index): _signature(item.get("type"), item.get("color"))
+    for index, item in entries.items()
+  }
+  if any(signature is None for signature in logical_signatures.values()):
+    return mapping
+  if len(set(logical_signatures.values())) != len(logical_signatures):
+    return mapping
+
+  tray_signatures: dict[int, tuple[str, str]] = {}
+  for tray in range(16):
+    spool = _spool_for_mapping(tray)
+    if not spool:
+      continue
+    filament = spool.get("filament") if isinstance(spool.get("filament"), dict) else {}
+    signature = _signature(
+      filament.get("material") or spool.get("material"),
+      filament.get("color_hex") or spool.get("color_hex"),
+    )
+    if signature is not None:
+      tray_signatures[tray] = signature
+
+  by_signature: dict[tuple[str, str], list[int]] = {}
+  for tray, signature in tray_signatures.items():
+    by_signature.setdefault(signature, []).append(tray)
+
+  resolved = list(mapping)
+  while len(resolved) <= max(logical_signatures):
+    resolved.append(None)
+  for logical, signature in logical_signatures.items():
+    trays = by_signature.get(signature, [])
+    if len(trays) != 1:
+      return mapping
+    resolved[logical] = trays[0]
+  if len({value for value in resolved if value is not None}) != len(logical_signatures):
+    return mapping
+  return resolved
+
+
 def _normalize_3mf_ams_mapping(metadata: dict) -> None:
   """Map zero-based M620 indices to observed physical AMS trays.
 
@@ -478,6 +548,33 @@ def _normalize_3mf_ams_mapping(metadata: dict) -> None:
   if not entries:
     return
   logical_ids = sorted(entries)
+
+  # The printer's project_file packet is authoritative when it contains a
+  # complete logical-filament -> physical-tray mapping.  Do not replace that
+  # mapping with the first currently active tray: the 3MF may start with a
+  # different logical filament and the two colours can be swapped physically.
+  explicit_mapping = list(metadata.get("ams_mapping") or [])
+  valid_mapping_values = {EXTERNAL_SPOOL_ID} | set(range(16))
+  def _valid_explicit_mapping(value):
+    try:
+      return value is not None and int(value) in valid_mapping_values
+    except (TypeError, ValueError):
+      return False
+  if (
+    len(explicit_mapping) > max(logical_ids)
+    and all(_valid_explicit_mapping(value) for value in explicit_mapping[: max(logical_ids) + 1])
+  ):
+    explicit_resolved = _unique_local_ams_mapping(
+      metadata, [int(value) for value in explicit_mapping]
+    )
+    metadata["ams_mapping"] = explicit_resolved
+    metadata["use_ams"] = any(value != EXTERNAL_SPOOL_ID for value in metadata["ams_mapping"])
+    log(
+      f"[3MF] Vollständiges AMS-Mapping aus project_file übernommen: "
+      f"G-Code-Filamente={logical_ids}, Mapping={metadata['ams_mapping']}"
+    )
+    return
+
   mapping = [None] * (max(logical_ids) + 1)
   ams_trays = []
   for ams in (LAST_AMS_CONFIG.get("ams") or []):
@@ -508,6 +605,17 @@ def _normalize_3mf_ams_mapping(metadata: dict) -> None:
   live_tray = _active_tray_mapping(PRINTER_STATE.get("print", {}) or {})
   if mapping[first_id] is None and isinstance(live_tray, int) and 0 <= live_tray < 16:
     mapping[first_id] = live_tray
+  # A partial project_file/3MF mapping must not freeze the remaining filament
+  # as unresolved or inherit the active tray by position. Resolve the whole
+  # logical set from the local AMS catalog only when every material+colour
+  # signature has exactly one matching local tray.
+  resolved_mapping = _unique_local_ams_mapping(metadata, mapping)
+  if resolved_mapping != mapping:
+    log(
+      f"[3MF] Unvollständiges AMS-Mapping anhand eindeutiger lokaler AMS-Filamente "
+      f"aufgelöst: vorher={mapping}, nachher={resolved_mapping}"
+    )
+    mapping = resolved_mapping
   metadata["ams_mapping"] = mapping
   metadata["use_ams"] = any(value is not None for value in mapping)
   log(f"[3MF] AMS-Mapping normalisiert: G-Code-Filamente={logical_ids}, zuerst={first_id}, Mapping={mapping}")
@@ -572,6 +680,32 @@ def _ensure_provisional_filament_usage(job, print_data):
   job["provisional_signature"] = signature
 
 
+def _schedule_stale_printer_cleanup(remote_path: str, *, print_id: int | None = None,
+                                    preserve_current_assets: bool = True,
+                                    reason: str = "") -> None:
+  """Run non-essential printer FTP cleanup outside the transfer/MQTT worker."""
+  def worker():
+    try:
+      cleanup = tools_3mf.cleanup_stale_printer_3mf_files(
+        remote_path,
+        preserve_current_assets=preserve_current_assets,
+      )
+      suffix = f", print_id={print_id}" if print_id is not None else ""
+      log(
+        f"[3MF][FTP] Altdatei-Bereinigung abgeschlossen{suffix}: "
+        f"grund={reason or 'unbekannt'}, gelöscht={cleanup.get('deleted', 0)}, "
+        f"fehler={cleanup.get('failed', 0)}"
+      )
+    except Exception as exc:
+      log(f"[3MF][FTP] Altdatei-Bereinigung übersprungen: {exc!r}")
+
+  Thread(target=worker, name="3mf-stale-cleanup", daemon=True).start()
+  log(
+    f"[3MF][FTP] Altdatei-Bereinigung eingeplant: "
+    f"pfad={remote_path}, grund={reason or 'unbekannt'}"
+  )
+
+
 def _on_3mf_job_complete(transfer_key, local_path, metadata, error):
   global PENDING_PRINT_METADATA
   with _ACTIVE_3MF_PRINTS_LOCK:
@@ -596,12 +730,33 @@ def _on_3mf_job_complete(transfer_key, local_path, metadata, error):
 
   parsed_metadata = dict(metadata or {})
   metadata = dict(job.get("print_metadata") or {})
+  # The project_file packet carries the printer's complete logical-filament
+  # -> physical-tray mapping.  The 3MF parser may derive a partial mapping
+  # from M620/profile data (for example [None, 0]); that partial result must
+  # never overwrite the explicit [0, 1] mapping received from the printer.
+  project_mapping = list(metadata.get("ams_mapping") or [])
+  parsed_mapping = parsed_metadata.get("ams_mapping")
   metadata.update(parsed_metadata)
+  if project_mapping and isinstance(parsed_mapping, (list, tuple)):
+    try:
+      parsed_is_complete = len(parsed_mapping) >= len(project_mapping) and all(
+        value is not None for value in parsed_mapping[:len(project_mapping)]
+      )
+    except TypeError:
+      parsed_is_complete = False
+    if not parsed_is_complete:
+      metadata["ams_mapping"] = project_mapping
   _normalize_3mf_ams_mapping(metadata)
   metadata["print_id"] = job["print_id"]
   remote_3mf_path = metadata.get("_remote_3mf_path")
   if remote_3mf_path:
     update_layer_tracking(job["print_id"], remote_3mf_path=remote_3mf_path)
+    _schedule_stale_printer_cleanup(
+      remote_3mf_path,
+      print_id=job["print_id"],
+      preserve_current_assets=True,
+      reason="nach validiertem Transfer",
+    )
   with _ACTIVE_3MF_PRINTS_LOCK:
     job["metadata_ready"] = True
   metadata["local_model_path"] = local_path
@@ -680,15 +835,36 @@ def _on_3mf_job_complete(transfer_key, local_path, metadata, error):
   log(f"[3MF] Transfer bereit: {transfer_key}, print_id={job['print_id']}, local={local_path!r}")
 
 
-def _queue_3mf_job(print_data, *, resume=False):
+def _queue_3mf_job_locked(print_data, *, resume=False):
   existing_source_job = _active_3mf_job_for_source(print_data)
   if existing_source_job:
     tracking = get_layer_tracking_for_prints([existing_source_job["print_id"]]).get(
       existing_source_job["print_id"], {}
     )
-    if tracking.get("status") in {"PREPARING", "RUNNING", "PAUSED"}:
+    transfer_state = (
+      JOBS_3MF.get(_transfer_key(existing_source_job["print_id"])) or {}
+    ).get("state")
+    # A stale FINISH/IDLE report can mark the history row terminal while the
+    # central 3MF worker is still downloading.  The worker is authoritative
+    # for deduplication: the printer has only one physical job, so a second
+    # local/cloud project_file packet must reuse this transfer even when the
+    # persisted tracking status is already COMPLETED/ABORTED.
+    if (
+      tracking.get("status") in {"PREPARING", "RUNNING", "PAUSED"}
+      or transfer_state in {"queued", "resolving", "downloading", "processing"}
+    ):
+      if tracking.get("status") not in {"PREPARING", "RUNNING", "PAUSED"}:
+        ensure_layer_tracking(existing_source_job["print_id"], "PREPARING")
+        log(
+          f"[History] Terminalen Zwischenstatus für Print "
+          f"{existing_source_job['print_id']} während aktivem 3MF-Transfer ignoriert."
+        )
       print_data["_metadata_job_queued"] = True
       _ensure_provisional_filament_usage(existing_source_job, print_data)
+      log(
+        f"[History] Aktiven 3MF-Transfer wiederverwendet: "
+        f"Print {existing_source_job['print_id']}; doppeltes project_file ignoriert."
+      )
       return existing_source_job
 
   # After STOP/FAILED/IDLE the printer can replay the old project_file packet.
@@ -706,11 +882,73 @@ def _queue_3mf_job(print_data, *, resume=False):
       return recent_abort
 
   file_name = print_data.get("subtask_name") or print_data.get("gcode_file") or print_data.get("url") or "unbekannte-3mf"
+  # A completed source can be replayed as a stale PREPARE/project_file packet
+  # after the printer changes state or MOS reconnects. Do not create a second
+  # history row for that replay; a genuine reprint will be accepted once it
+  # reaches RUNNING and carries fresh progress.
+  if packet_state == "PREPARE":
+    terminal_replay = find_recent_terminal_print_for_source(file_name)
+    if terminal_replay:
+      print_data["_metadata_job_queued"] = True
+      log(
+        f"[History] Stale project_file nach terminalem Druck "
+        f"ignoriert: Print {terminal_replay['id']} / Quelle {file_name!r}; "
+        "neuer Druck wird erst bei RUNNING angelegt."
+      )
+      return None
+  elif packet_state in {"RUNNING", "PAUSE", "PAUSED"}:
+    # A reconnect can replay RUNNING after a provisional row was already
+    # incorrectly marked completed, while the real active row is created a
+    # few seconds later with the same printer-side 3MF path. Only suppress
+    # this unmistakable ghost shape (missing end/layer totals); a normal
+    # completed print with complete tracking remains eligible for a genuine
+    # reprint.
+    terminal_replay = find_recent_terminal_print_for_source(file_name)
+    if (
+      terminal_replay
+      and terminal_replay.get("status") == "COMPLETED"
+      and terminal_replay.get("completion_source") == "mqtt"
+      and not terminal_replay.get("actual_end_time")
+      and terminal_replay.get("total_layers") is None
+      and terminal_replay.get("layers_printed") is not None
+      and float(terminal_replay.get("layers_printed") or 0) > 0
+      and str(print_data.get("print_type") or "").lower() != "idle"
+    ):
+      # A stale FINISH packet may have closed the provisional row between the
+      # project_file and the first RUNNING packet.  This is the same physical
+      # print, not a second attempt: reopen that unmistakable ghost row and
+      # let the live RUNNING packet continue it.
+      update_layer_tracking(
+        int(terminal_replay["id"]),
+        status="PREPARING",
+        total_layers=None,
+        layers_printed=0,
+        printer_percent=0.0,
+        actual_end_time=None,
+        completion_source=None,
+        last_status_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+      )
+      print_data["_metadata_job_queued"] = True
+      log(
+        f"[History] Terminale Zwischenmarkierung {terminal_replay['id']} "
+        f"für Quelle {file_name!r} reaktiviert; RUNNING wird fortgesetzt."
+      )
+      return terminal_replay
+  # A second RUNNING/project_file packet can arrive while the first 3MF is
+  # still downloading.  The printer has only one physical job, so always
+  # reuse a matching active history row, not only during reconnect recovery.
+  # Restricting this lookup to ``resume=True`` created phantom rows such as
+  # #147/#148 for one physical print and caused the older row to be marked
+  # ABORTED by ``abort_active_prints_for_new_printer_job``.
   recovered = find_active_print_for_printer_source(
     print_data.get("subtask_name"), print_data.get("gcode_file"), print_data.get("url"),
-  ) if resume else None
+  )
   if recovered:
     print_id = int(recovered["id"])
+    log(
+      f"[History] Aktiven Druck wiederverwendet: Print {print_id}; "
+      "doppeltes project_file/RUNNING-Ereignis ignoriert."
+    )
   else:
     aborted_count = abort_active_prints_for_new_printer_job(
       datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -733,12 +971,15 @@ def _queue_3mf_job(print_data, *, resume=False):
       return existing
 
     mapping_value = _active_tray_mapping(print_data)
+    project_mapping = print_data.get("ams_mapping")
+    if not isinstance(project_mapping, (list, tuple)) or not project_mapping:
+      project_mapping = [_active_tray_mapping(print_data)]
     metadata = {
       "print_type": print_data.get("print_type"),
       "snapshot_name": print_data.get("snapshot_name") or print_data.get("subtask_name"),
       "subtask_name": print_data.get("subtask_name"),
-      "ams_mapping": [mapping_value],
-      "use_ams": mapping_value != EXTERNAL_SPOOL_ID,
+      "ams_mapping": list(project_mapping),
+      "use_ams": any(value not in (None, EXTERNAL_SPOOL_ID, -1) for value in project_mapping),
       "file": os.path.basename(str(print_data.get("gcode_file") or print_data.get("url") or file_name).replace("\\", "/")),
       "print_id": print_id,
     }
@@ -756,6 +997,17 @@ def _queue_3mf_job(print_data, *, resume=False):
   action = "wiederaufgenommen" if recovered else "sofort angelegt"
   log(f"[3MF] Print-ID {print_id} {action}, Metadaten laufen im Hintergrund: {transfer_key}")
   return job
+
+
+def _queue_3mf_job(print_data, *, resume=False):
+  """Create/reuse exactly one history row per active printer source.
+
+  The source lookup and insert must be one critical section.  Without this,
+  a reconnect can deliver project_file and RUNNING callbacks close enough
+  together that both callbacks observe no active row and create two jobs.
+  """
+  with _QUEUE_3MF_LOCK:
+    return _queue_3mf_job_locked(print_data, resume=resume)
 
 
 def _recover_active_print_after_mqtt_reconnect(print_data: dict) -> None:
@@ -863,6 +1115,23 @@ def _reconcile_completed_printer_job(print_data: dict) -> None:
       )
       return
     usage_rows = get_filament_usage_for_reconciliation(print_id)
+    tracking = get_layer_tracking_for_prints([print_id]).get(print_id, {})
+    # A FINISH packet is not consumption evidence.  If the validated 3MF
+    # predicts material but every usage row is still zero and no layer event
+    # exists, leave the row open for the tracker instead of permanently
+    # recording a fabricated zero-gram completion.
+    expected_total = float(tracking.get("filament_grams_total") or 0.0)
+    has_confirmed_usage = any(
+      float(row.get("grams_used") or 0.0) > 0.0
+      or float(row.get("length_used") or 0.0) > 0.0
+      for row in usage_rows
+    )
+    if expected_total > 0.0 and not has_confirmed_usage:
+      log(
+        f"[filament-tracker] Abschluss-Recovery ausgelassen: Print {print_id} "
+        "hat noch keine bestätigte Verbrauchsbuchung"
+      )
+      return
     updates = []
     for row in usage_rows:
       current_grams = float(row.get("grams_used") or 0.0)
@@ -896,6 +1165,12 @@ def _cleanup_completed_remote_3mf(print_id: int) -> None:
   # is gone; the path remains available in older history only until cleanup.
   update_layer_tracking(print_id, remote_3mf_path=None)
   log(f"[3MF][FTP] Abgeschlossene Druckdatei entfernt: print_id={print_id}, pfad={remote_path}")
+  _schedule_stale_printer_cleanup(
+    remote_path,
+    print_id=print_id,
+    preserve_current_assets=False,
+    reason="nach Druckende",
+  )
 
 
 def _mask_serial(serial: str | None, keep_chars: int = 3) -> str:
@@ -988,7 +1263,7 @@ def map_filament(tray_tar):
   return False
   
 def processMessage(data):
-  global LAST_AMS_CONFIG, PRINTER_STATE, PRINTER_STATE_LAST, PENDING_PRINT_METADATA, PRINTER_STATE_LAST_UPDATE_AT
+  global LAST_AMS_CONFIG, PRINTER_STATE, PRINTER_STATE_LAST, PENDING_PRINT_METADATA, PRINTER_STATE_LAST_UPDATE_AT, BED_PARKED_STATE, FILAMENT_UNLOADED_STATE
 
    # Prepare AMS spending estimation
   if "print" in data:
@@ -1000,6 +1275,36 @@ def processMessage(data):
       log("[History] Bambu bestätigt command=stop; Druck und zugehöriger 3MF-Download werden abgebrochen.")
     current_print = PRINTER_STATE.get("print", {}) or incoming_print
     current_state = str(current_print.get("gcode_state") or "").upper()
+    # ``project_file`` packets usually carry the next job's source but no
+    # complete printer state.  Prefer an active state from that packet over a
+    # stale FINISH/IDLE state retained from the previous job; otherwise the
+    # provisional row can be closed immediately and RUNNING creates a ghost.
+    project_file_packet = incoming_print.get("command") == "project_file"
+    project_file_state = str(
+      incoming_print.get("gcode_state") or current_print.get("gcode_state") or ""
+    ).upper()
+    project_file_is_active = project_file_state in {"PREPARE", "RUNNING", "PAUSE", "PAUSED"}
+    if project_file_packet and project_file_is_active:
+      current_state = project_file_state
+    elif project_file_packet and not incoming_print.get("gcode_state") and current_state in {
+      "FINISH", "FAILED", "STOP", "IDLE", "CANCEL", "CANCELED", "CANCELLED", "ABORT", "ABORTED"
+    }:
+      # project_file does not carry gcode_state.  PRINTER_STATE still contains
+      # the previous job's terminal state at that moment; treating it as the
+      # new job's FINISH creates a completed ghost row before PREPARE/RUNNING.
+      current_print = dict(current_print)
+      current_print["gcode_state"] = "PREPARE"
+      current_state = "PREPARE"
+      PRINTER_STATE["print"] = dict(current_print)
+    if current_state in {"PREPARE", "RUNNING", "PAUSE", "PAUSED", "SLICING"}:
+      BED_PARKED_STATE = False
+      FILAMENT_UNLOADED_STATE = False
+    tray_now = (current_print.get("ams", {}) or {}).get("tray_now")
+    if tray_now not in (None, ""):
+      try:
+        FILAMENT_UNLOADED_STATE = int(tray_now) == 255
+      except (TypeError, ValueError):
+        pass
     history_status = printer_state_to_history_status(current_state, current_print.get("print_error"))
     previous_state = str((PRINTER_STATE_LAST.get("print") or {}).get("gcode_state") or "").upper()
     if (
@@ -1017,10 +1322,6 @@ def processMessage(data):
       )
 
     active_job = _active_3mf_job_for_source(current_print)
-    project_file_state = str(
-      incoming_print.get("gcode_state") or current_print.get("gcode_state") or ""
-    ).upper()
-    project_file_is_active = project_file_state in {"PREPARE", "RUNNING", "PAUSE", "PAUSED"}
     if incoming_print.get("command") == "project_file" and project_file_is_active and (
         incoming_print.get("url") or current_print.get("gcode_file")
     ):
@@ -1086,6 +1387,8 @@ def processMessage(data):
         if status == "COMPLETED":
           _reconcile_completed_printer_job(current_print)
         status_fields = {"status": status}
+        if status == "COMPLETED":
+          status_fields["completion_source"] = "mqtt"
         if status in {"FAILED", "ABORTED"}:
           status_fields["actual_end_time"] = status_at
         update_layer_tracking(active_job["print_id"], **status_fields)
@@ -1124,6 +1427,8 @@ def processMessage(data):
             "actual_end_time": status_at,
             "last_status_at": status_at,
           }
+          if terminal_status == "COMPLETED":
+            status_fields["completion_source"] = "mqtt"
           if terminal_percent is not None:
             status_fields["printer_percent"] = terminal_percent
           update_layer_tracking(candidate["id"], **status_fields)
@@ -1140,6 +1445,28 @@ def processMessage(data):
     
     #TODO: What happens when printed from external spool, is ams and tray_tar set?
     if PRINTER_STATE.get("print", {}).get("print_type") == "local" and PRINTER_STATE_LAST.get("print"):
+
+      # Metadata can survive a reconnect longer than the printer's current
+      # task.  Never attach it to a different source, otherwise the legacy
+      # local-print path creates a provisional ghost row before the central
+      # 3MF queue sees the real RUNNING job.
+      if PENDING_PRINT_METADATA and not PENDING_PRINT_METADATA.get("print_id"):
+        pending_source = _normalise_print_name(
+          PENDING_PRINT_METADATA.get("file")
+          or PENDING_PRINT_METADATA.get("source_file_name")
+          or PENDING_PRINT_METADATA.get("snapshot_name")
+        )
+        current_source = _normalise_print_name(
+          PRINTER_STATE["print"].get("gcode_file")
+          or PRINTER_STATE["print"].get("url")
+          or PRINTER_STATE["print"].get("subtask_name")
+        )
+        if pending_source and current_source and pending_source != current_source:
+          log(
+            f"[3MF] Veraltete lokale Metadaten verworfen: "
+            f"Quelle {pending_source!r} != {current_source!r}"
+          )
+          PENDING_PRINT_METADATA = {}
 
       if (
           PRINTER_STATE["print"].get("gcode_state") == "RUNNING" and
@@ -1158,7 +1485,23 @@ def processMessage(data):
           PENDING_PRINT_METADATA["print_type"] = PRINTER_STATE["print"].get("print_type")
 
           if not PENDING_PRINT_METADATA.get("tracking_started"):
-            print_id = insert_print(PENDING_PRINT_METADATA["file"], PRINTER_STATE["print"]["print_type"], PENDING_PRINT_METADATA["image"])
+            existing_local = find_active_print_for_printer_source(
+              PRINTER_STATE["print"].get("subtask_name"),
+              PRINTER_STATE["print"].get("gcode_file"),
+              PRINTER_STATE["print"].get("url"),
+            )
+            if existing_local:
+              print_id = int(existing_local["id"])
+              log(
+                f"[History] Lokale Metadaten an aktiven Druck {print_id} gebunden; "
+                "kein zweiter Historieneintrag."
+              )
+            else:
+              print_id = insert_print(
+                PENDING_PRINT_METADATA["file"],
+                PRINTER_STATE["print"]["print_type"],
+                PENDING_PRINT_METADATA["image"],
+              )
 
             PENDING_PRINT_METADATA["ams_mapping"] = []
             PENDING_PRINT_METADATA["filamentChanges"] = []
@@ -1286,21 +1629,10 @@ def publish(client, msg):
         "message": message_to_send,
     }
 
-  try:
-    if (
-      isinstance(message_to_send, dict)
-      and "print" in message_to_send
-      and bambu_mqtt_signing.certificate_is_valid()
-    ):
-      wire_payload = bambu_mqtt_signing.sign_message_json(message_to_send)
-    else:
-      wire_payload = json.dumps(message_to_send, ensure_ascii=False, separators=(",", ":"))
-  except Exception as exc:
-    # Protected print commands must not silently fall back to unsigned transmission.
-    if isinstance(message_to_send, dict) and "print" in message_to_send:
-      log(f"MQTT signing failed: {exc}. Protected print command NOT sent.")
-      return False
-    wire_payload = json.dumps(message_to_send, ensure_ascii=False, separators=(",", ":"))
+  # LAN MQTT uses the printer's local access code and sends the command as
+  # ordinary JSON.  Cloud certificate signing is deliberately not part of the
+  # local-only application workflow.
+  wire_payload = json.dumps(message_to_send, ensure_ascii=False, separators=(",", ":"))
 
   result = client.publish(f"device/{PRINTER_ID}/request", wire_payload)
   status = result[0]
@@ -1883,7 +2215,10 @@ def on_message(client, userdata, msg):
       }
 
     if "print" in data:
-      append_to_rotating_file(LOG_FILE, _mask_mqtt_payload(msg.payload.decode()))
+      raw_payload = _mask_mqtt_payload(msg.payload.decode())
+      # Keep one complete MQTT log. AMS/RFID packets and regular printer
+      # telemetry belong together so a print can be audited chronologically.
+      append_to_rotating_file(LOG_FILE, raw_payload)
 
     #print(data)
 
@@ -2306,6 +2641,7 @@ def isMqttClientConnected():
 
 
 def unload_filament():
+  global FILAMENT_UNLOADED_STATE
   # Request the printer's own unload workflow for the currently selected tray.
   if not MQTT_CLIENT or not MQTT_CLIENT_CONNECTED:
     return False
@@ -2342,11 +2678,13 @@ def unload_filament():
   }
   sent = publish(MQTT_CLIENT, command)
   if sent:
+    FILAMENT_UNLOADED_STATE = True
     log(f"Filament unload requested for AMS {ams_id}.")
   return sent
 
 
 def park_printer():
+  global BED_PARKED_STATE
   # Lower the P1S build plate and move the toolhead to a safe parked position.
   if not MQTT_CLIENT or not MQTT_CLIENT_CONNECTED:
     return False
@@ -2354,6 +2692,12 @@ def park_printer():
   state = str(print_data.get("gcode_state") or "").upper()
   if state in {"PREPARING", "RUNNING", "PAUSED", "SLICING"}:
     log(f"Printer park rejected while printer state is {state}.")
+    return False
+  if is_bed_parked():
+    log("Printer park rejected: build plate is already lowered.")
+    return False
+  if is_filament_unloaded() is True:
+    log("Printer park rejected: filament is already unloaded.")
     return False
   command = {
     "print": {
@@ -2364,12 +2708,40 @@ def park_printer():
   }
   sent = publish(MQTT_CLIENT, command)
   if sent:
+    BED_PARKED_STATE = True
     log("Printer park requested: build plate lowered and toolhead moved to X230 Y15.")
   return sent
 
 
+def is_bed_parked() -> bool:
+  """Return whether the last known printer state has the bed parked down."""
+  if BED_PARKED_STATE is not None:
+    return bool(BED_PARKED_STATE)
+  print_data = PRINTER_STATE.get("print", {}) or {}
+  for key in ("z_height", "z_pos", "live_z", "bed_position"):
+    try:
+      value = float(print_data.get(key))
+    except (TypeError, ValueError):
+      continue
+    return value >= 245.0
+  return False
+
+
+def is_filament_unloaded() -> bool | None:
+  """Return the known filament state; None means no explicit signal."""
+  if FILAMENT_UNLOADED_STATE is not None:
+    return bool(FILAMENT_UNLOADED_STATE)
+  tray_now = (PRINTER_STATE.get("print", {}) or {}).get("ams", {}).get("tray_now")
+  if tray_now in (None, ""):
+    return None
+  try:
+    return int(tray_now) == 255
+  except (TypeError, ValueError):
+    return None
+
+
 def reconfigure_printer(printer_id, access_code, printer_ip, wait_seconds=12):
-  # Apply a selected cloud printer and reconnect MQTT immediately.
+  # Apply the selected local printer and reconnect MQTT immediately.
   #
   #   Returns True when the new MQTT session is connected within wait_seconds.
   global PRINTER_ID, PRINTER_CODE, PRINTER_IP, MQTT_CLIENT, MQTT_CLIENT_CONNECTED

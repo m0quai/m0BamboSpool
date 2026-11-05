@@ -11,6 +11,7 @@ from typing import Any
 from config import DATABASE_PATH, DATABASE_TYPE
 from filament_color_catalog import SUNLU_COLOR_OPTIONS
 from ui_formatting import LOCAL_TIMEZONE
+from sqlite_retry import RetryingConnectionMixin, retry_sqlite_operation
 
 DEFAULT_MATERIALS = (
     "PLA", "PLA+", "PETG", "ABS", "ASA", "TPU", "PA", "PC", "PVA", "HIPS",
@@ -45,7 +46,7 @@ def _synchronized_initialize(function):
     return wrapper
 
 
-class _ClosingConnection(sqlite3.Connection):
+class _ClosingConnection(RetryingConnectionMixin, sqlite3.Connection):
     # sqlite's context manager commits or rolls back but does not close the
     # connection; close it here so temporary databases can be removed safely.
     def __exit__(self, exc_type, exc_value, traceback):
@@ -60,7 +61,10 @@ def _connect() -> sqlite3.Connection:
         raise RuntimeError(f"Unsupported inventory database type: {DATABASE_TYPE}")
     path = DATABASE_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, timeout=15, factory=_ClosingConnection)
+    conn = retry_sqlite_operation(
+        lambda: sqlite3.connect(path, timeout=15, factory=_ClosingConnection),
+        operation_name="sqlite3.connect",
+    )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 15000")
@@ -1106,9 +1110,11 @@ def _spool_is_in_active_print(conn: sqlite3.Connection, spool_id: int) -> bool:
         """SELECT 1
            FROM spool_usage u
            JOIN print_layer_tracking t ON t.print_id = u.print_id
+           JOIN spools s ON s.id = u.spool_id
           WHERE u.spool_id = ?
             AND u.deleted = 0 AND t.deleted = 0
             AND t.status IN ('PREPARING', 'RUNNING', 'PAUSED')
+            AND trim(COALESCE(s.active_tray, '')) <> ''
           LIMIT 1""",
         (int(spool_id),),
     ).fetchone())
@@ -1214,7 +1220,9 @@ def update_spool_fields(spool_id: int, values: dict[str, Any]) -> dict[str, Any]
         if _spool_is_nfc_bound(conn, spool_id) and {"filament_id", "nfc_tag_id", "tag", "active_tray", "archived"}.intersection(updates):
             raise ValueError(_spool_lock_message(conn, spool_id))
         if _spool_is_in_active_print(conn, spool_id) or _spool_is_in_active_ams(conn, spool_id):
-            raise ValueError(_spool_lock_message(conn, spool_id))
+            editable_while_bound = {"price", "initial_weight", "spool_weight", "purchase_date", "comment"}
+            if set(updates).difference(editable_while_bound):
+                raise ValueError(_spool_lock_message(conn, spool_id))
         old_nfc_id = int(current["nfc_tag_id"]) if current["nfc_tag_id"] else None
         if desired_archived and not bool(current["archived"]):
             # Freeze inherited filament defaults when the spool is archived.
@@ -1282,7 +1290,7 @@ def adjust_spool_stock(spool_id: int | str, mode: str, amount: Any) -> dict[str,
     """Apply an absolute measured remaining weight or a relative stock change."""
     initialize()
     mode = str(mode or '').strip().lower()
-    if mode not in {'absolute', 'delta'}:
+    if mode not in {'absolute', 'delta', 'zero'}:
         raise ValueError('Unknown stock adjustment mode')
     value = _number(amount)
     if mode == 'absolute' and value < 0:
@@ -1302,14 +1310,18 @@ def adjust_spool_stock(spool_id: int | str, mode: str, amount: Any) -> dict[str,
         if _spool_is_in_active_print(conn, spool_id) or _spool_is_in_active_ams(conn, spool_id):
             raise ValueError(_spool_lock_message(conn, spool_id))
         used = float(conn.execute(
-            'SELECT COALESCE(SUM(grams_used), 0) FROM spool_usage WHERE spool_id = ?',
+            'SELECT COALESCE(SUM(grams_used), 0) FROM spool_usage WHERE spool_id = ? AND deleted = 0',
             (int(spool_id),),
         ).fetchone()[0] or 0)
         initial = float(spool['initial_weight'] or 0)
         maximum = initial or float(spool['filament_weight'] or 0)
         tare = float(spool['spool_weight'] or spool['filament_spool_weight'] or 0)
         correction = float(spool['weight_correction'] or 0)
-        if mode == 'absolute':
+        if mode == 'zero':
+            # Set the remaining filament (not the gross scale reading) to
+            # exactly zero while preserving all already booked consumption.
+            correction = used - maximum
+        elif mode == 'absolute':
             if value < tare - 0.000001:
                 raise ValueError(f'Das Gesamtgewicht darf nicht kleiner als das Leergewicht {tare:g} g sein')
             if maximum > 0 and value > maximum + tare + 0.000001:
@@ -1395,8 +1407,10 @@ def save_spool(values: dict[str, Any], spool_id: int | None = None) -> int:
             ):
                 if row[field] in (None, "", 0, 0.0) and existing[default_field] is not None:
                     row[field] = existing[default_field]
-        if existing and _spool_is_in_active_print(conn, spool_id):
-            raise ValueError("Die Spule ist im aktuell laufenden Druck gebunden und gesperrt")
+        if existing and _spool_is_in_active_ams(conn, spool_id):
+            editable_while_bound = {"price", "initial_weight", "spool_weight", "purchase_date", "comment"}
+            if set(values).difference(editable_while_bound):
+                raise ValueError(_spool_lock_message(conn, spool_id))
         if existing and _spool_is_nfc_bound(conn, spool_id):
             changed = (
                 ("filament_id" in values and str(values.get("filament_id") or "") != str(existing["filament_id"] or ""))
@@ -1568,6 +1582,7 @@ def list_spools(include_archived: bool = False) -> list[dict[str, Any]]:
                          WHERE au.spool_id = s.id
                            AND au.deleted = 0 AND at.deleted = 0
                            AND at.status IN ('PREPARING', 'RUNNING', 'PAUSED')
+                           AND trim(COALESCE(s.active_tray, '')) <> ''
                        ) THEN 1 ELSE 0 END""" if has_usage_table else "0"
         active_ams_select = "CASE WHEN trim(COALESCE(s.active_tray, '')) <> '' THEN 1 ELSE 0 END"
         sql = f"""SELECT s.*, nt.tag_value AS nfc_tag_value,

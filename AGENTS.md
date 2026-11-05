@@ -47,10 +47,10 @@ Keine Force-Pushes und keine History-Rewrites ohne ausdrücklichen Auftrag.
 
 - m0BamboSpool wird als eigener Fork gepflegt; Upstream ist `drndos/openspoolman`.
 - Änderungen möglichst updatefreundlich halten.
-- `app.py` nicht ändern, sofern es nicht ausdrücklich erforderlich und beauftragt
-  ist. Eigene Erweiterungen gehören bevorzugt in `app_custom.py` sowie getrennte
-  Module oder Blueprints.
-- Bestehende Trennung für Bambu-Authentifizierung (z. B. `bambu_auth.py`) achten.
+- `app.py` ist der alleinige Anwendungseinstieg des Forks. Eigene Erweiterungen
+  werden dort beziehungsweise in getrennten Modulen oder Blueprints gepflegt.
+- Die Anwendung arbeitet ausschließlich lokal; Online-/Cloud-Authentifizierung
+  gehört nicht mehr zum Projekt.
 - Inventarzugriffe laufen über die allgemeine Repository-/Datenzugriffsschicht
   (`inventory_repository.py`); direkte API-Aufrufe in UI- oder Fachlogik vermeiden.
 - Die Spool-/UID-Zuordnung bleibt auf m0BamboSpool-Seite; AMSHelper löst keine UID

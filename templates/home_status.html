@@ -2,6 +2,7 @@
 {% from 'fragments/ams_metrics.html' import humidity_index_icon %}
 {% block content %}
 <div class="home-page">
+  <div id="home-3mf-status" class="home-download-status small text-body-secondary d-none" role="status" aria-live="polite"></div>
   <div class="home-dashboard-grid" id="printer-status-page">
     <section class="card home-dashboard-card home-status-card">
       <div class="card-header d-flex justify-content-between align-items-center">
@@ -24,17 +25,19 @@
         <a id="home-last-print-link" class="home-print-link" href="{% if last_print %}{{ url_for('print_history', print_id=last_print.id, _anchor='print_' ~ last_print.id) }}{% else %}#{% endif %}">{% if last_print %}#{{ last_print.id }}{% else %}–{% endif %}</a>
       </div>
       <div class="card-body">
-        <div class="home-last-print-name" id="home-last-print-name">{% if last_print %}{{ last_print.file_name }}{% else %}–{% endif %}</div>
         <div class="home-print-detail-grid">
           {% set last_print_status = last_print.status if last_print else '' %}
           {% set last_print_layer_progress = ((last_print.layers_printed or 0) * 100 / last_print.total_layers) if last_print and last_print.total_layers else none %}
           {% set last_print_display_progress = last_print_layer_progress if last_print and last_print_status in ['ABORTED', 'FAILED', 'CANCELLED'] and last_print_layer_progress is not none else (last_print.printer_percent if last_print and last_print.printer_percent is not none else last_print_layer_progress) %}
           <div class="home-progress-ring" id="home-progress-ring" data-status="{{ last_print.status if last_print else '' }}" aria-label="{{ _('Progress') }}" style="--home-progress: {{ last_print_display_progress if last_print_display_progress is not none else 0 }}%"><span id="home-last-print-progress">{% if last_print_display_progress is not none %}{{ '%.0f'|format(last_print_display_progress) }}%{% else %}–{% endif %}</span><small id="home-last-print-progress-label">{% if last_print and last_print.status == 'COMPLETED' %}{{ _('OK') }}{% elif last_print and last_print.status in ['ABORTED', 'FAILED', 'CANCELLED'] %}{{ _('Aborted') }}{% else %}{{ _('Progress') }}{% endif %}</small></div>
           <dl class="home-metric-list home-print-metrics mb-0">
+            <div><dt><i class="bi bi-file-earmark me-2" aria-hidden="true"></i>{{ _('File') }}</dt><dd id="home-last-print-name">{% if last_print %}{{ last_print.file_name }}{% else %}–{% endif %}</dd></div>
             <div><dt><i class="bi bi-layers me-2" aria-hidden="true"></i>{{ _('Layers') }}</dt><dd id="home-last-print-layers">{% if last_print and last_print.total_layers %}{{ last_print.layers_printed or 0 }} / {{ last_print.total_layers }}{% else %}–{% endif %}</dd></div>
-            <div><dt><i class="bi bi-clock me-2" aria-hidden="true"></i>{{ _('Erwartetes Ende:') }}</dt><dd id="home-last-print-expected-end">{% if last_print and last_print.predicted_end_time %}{{ format_datetime(last_print.predicted_end_time) }}{% else %}–{% endif %}</dd></div>
-            <div><dt><i class="bi bi-hourglass-split me-2" aria-hidden="true"></i>{{ _('Restlaufzeit:') }}</dt><dd id="home-last-print-remaining">–</dd></div>
-            <div><dt><i class="bi bi-database me-2" aria-hidden="true"></i>{{ _('Consumed') }}</dt><dd id="home-last-print-consumed">{% if last_print and last_print.filament_grams_billed is not none %}{{ format_number(last_print.filament_grams_billed) }} g{% else %}–{% endif %}</dd></div>
+            <div><dt id="home-last-print-end-label"><i class="bi bi-clock me-2" aria-hidden="true"></i>{% if last_print and last_print.status in ['PREPARING', 'RUNNING', 'PAUSED'] %}{{ _('Erwartetes Ende') }}{% else %}{{ _('Ende des Druckjobs') }}{% endif %}</dt><dd id="home-last-print-expected-end">{% if last_print and last_print.status in ['PREPARING', 'RUNNING', 'PAUSED'] and last_print.predicted_end_time %}{{ format_datetime(last_print.predicted_end_time) }}{% elif last_print and last_print.actual_end_time %}{{ format_datetime(last_print.actual_end_time) }}{% else %}–{% endif %}</dd></div>
+            <div><dt><i class="bi bi-database me-2" aria-hidden="true"></i>{{ _('Verbrauch') }}</dt><dd id="home-last-print-consumed">{% if last_print and last_print.filament_grams_billed is not none %}{{ format_number(last_print.filament_grams_billed) }} g{% if last_print.status != 'COMPLETED' and last_print.filament_grams_total is not none %} <span class="text-body-secondary">{{ _('of') }} {{ format_number(last_print.filament_grams_total) }} g</span>{% endif %}{% else %}–{% endif %}</dd></div>
+            <div><dt><i class="bi bi-currency-euro me-2" aria-hidden="true"></i>{{ _('Kosten') }}</dt><dd id="home-last-print-cost">{% if last_print and last_print.actual_cost_total is not none %}{{ format_number(last_print.actual_cost_total) }} €{% if last_print.status != 'COMPLETED' and last_print.expected_cost_total is not none %} <span class="text-body-secondary">{{ _('of') }} {{ format_number(last_print.expected_cost_total) }} €</span>{% endif %}{% else %}–{% endif %}</dd></div>
+            <div><dt><i class="bi bi-calculator me-2" aria-hidden="true"></i>{{ _('Gesamtkosten') }}</dt><dd id="home-last-print-gross-cost">{% if last_print and last_print.actual_gross_cost_total is not none %}{{ format_number(last_print.actual_gross_cost_total) }} €{% if last_print.status != 'COMPLETED' and last_print.expected_gross_cost_total is not none %} <span class="text-body-secondary">{{ _('of') }} {{ format_number(last_print.expected_gross_cost_total) }} €</span>{% endif %}{% else %}–{% endif %}</dd></div>
+            <div id="home-last-print-activity-row"{% if not printer_preparation_status and (not last_print or last_print.status not in ['PREPARING', 'RUNNING', 'PAUSED']) %} hidden{% endif %}><dt><i class="bi bi-activity me-2" aria-hidden="true"></i>{{ _('Activity') }}</dt><dd id="home-last-print-activity">{% if printer_preparation_status %}{{ printer_preparation_status }}{% elif last_print and last_print.status in ['PREPARING', 'RUNNING', 'PAUSED'] %}{{ _('Druck läuft') }}{% else %}–{% endif %}</dd></div>
           </dl>
         </div>
         <div class="home-print-actions">
@@ -42,30 +45,11 @@
             <button type="button" id="home-unload-filament" class="btn btn-outline-primary btn-sm"{% if not mqtt_connected|default(false) %} disabled{% endif %}><i class="bi bi-arrow-down-circle me-1" aria-hidden="true"></i>{{ _('Filament entladen') }}</button>
             <div id="home-unload-filament-feedback" class="small text-body-secondary mt-2" hidden></div>
           </div>
-          <div id="home-park-printer-action" class="home-unload-filament-action"{% if not last_print or last_print.status in ['PREPARING', 'RUNNING', 'PAUSED'] %} hidden{% endif %}>
+          <div id="home-park-printer-action" class="home-unload-filament-action"{% if not park_printer_available|default(false) %} hidden{% endif %}>
             <button type="button" id="home-park-printer" class="btn btn-outline-secondary btn-sm"{% if not mqtt_connected|default(false) %} disabled{% endif %}><i class="bi bi-arrow-down-square me-1" aria-hidden="true"></i>{{ _('Druckbett absenken') }}</button>
             <div id="home-park-printer-feedback" class="small text-body-secondary mt-2" hidden></div>
           </div>
         </div>
-        <div id="home-3mf-status" class="small text-body-secondary mt-3 d-none"></div>
-      </div>
-    </section>
-
-    <section class="card home-dashboard-card home-activity-card">
-      <div class="card-header"><h2 class="h5 mb-0"><i class="bi bi-activity me-2" aria-hidden="true"></i>{{ _('Activity') }}</h2></div>
-      <div class="card-body">
-        <ol class="home-activity-list mb-0" id="home-activity-list">
-          <li class="active"><span class="home-activity-dot"></span><strong>{{ printer_status }}</strong></li>
-          {% if printer_preparation_status %}
-          <li class="active"><span class="home-activity-dot"></span><strong>{{ printer_preparation_status }}</strong></li>
-          {% endif %}
-          {% if last_print %}
-          {% if last_print.last_usage_event_at %}<li><span class="home-activity-dot"></span><strong>{{ _('Last booking') }}</strong><small>{{ format_datetime(last_print.last_usage_event_at) }}</small></li>{% endif %}
-          {% if last_print.actual_end_time %}<li><span class="home-activity-dot"></span><strong>{{ _('Finished') }}</strong><small>{{ format_datetime(last_print.actual_end_time) }}</small></li>{% endif %}
-          {% else %}
-          <li class="active"><span class="home-activity-dot"></span><strong>{{ _('No print history') }}</strong></li>
-          {% endif %}
-        </ol>
       </div>
     </section>
 
@@ -138,10 +122,13 @@
   const progressRing = document.getElementById('home-progress-ring');
   const lastPrintLayers = document.getElementById('home-last-print-layers');
   const lastPrintExpectedEndLabel = document.getElementById('home-last-print-expected-end-label');
+  const lastPrintEndLabel = document.getElementById('home-last-print-end-label');
   const lastPrintExpectedEnd = document.getElementById('home-last-print-expected-end');
-  const lastPrintRemainingLabel = document.getElementById('home-last-print-remaining-label');
-  const lastPrintRemaining = document.getElementById('home-last-print-remaining');
   const lastPrintConsumed = document.getElementById('home-last-print-consumed');
+  const lastPrintCost = document.getElementById('home-last-print-cost');
+  const lastPrintGrossCost = document.getElementById('home-last-print-gross-cost');
+  const lastPrintActivityRow = document.getElementById('home-last-print-activity-row');
+  const lastPrintActivity = document.getElementById('home-last-print-activity');
     const lastPrintStatusAtLabel = document.getElementById('home-last-print-status-at-label');
     const lastPrintStatusAt = document.getElementById('home-last-print-status-at');
   const downloadStatus = document.getElementById('home-3mf-status');
@@ -150,7 +137,7 @@
   const errorLabel = {{ _('3MF konnte nicht geladen werden')|tojson }};
   const remainingLabel = {{ _('Verbleibend')|tojson }};
   const estimatedLabel = {{ _('(geschätzt)')|tojson }};
-  const activityList = document.getElementById('home-activity-list');
+  const ofLabel = {{ _('of')|tojson }};
   const activityLabels = {
     activity: {{ _('Activity')|tojson }},
     printRunning: {{ _('Druck läuft')|tojson }},
@@ -160,7 +147,6 @@
     status: {{ _('Status')|tojson }},
     printing: {{ _('Printing')|tojson }},
     expectedEnd: {{ _('Expected end:')|tojson }},
-    lastBooking: {{ _('Last booking')|tojson }},
     printId: {{ _('Print ID')|tojson }},
     finished: {{ _('Finished')|tojson }},
     unknown: {{ _('Unknown')|tojson }}
@@ -201,30 +187,22 @@
     return `<span class="humidity-droplet-wrapper humidity-droplet-home" title="${letter}" aria-label="${letter}"><svg class="humidity-droplet" viewBox="-0.5 -0.5 17 17" aria-hidden="true" focusable="false"><defs><clipPath id="${clipId}"><path d="M8 16a6 6 0 0 0 6-6c0-1.655-1.122-2.904-2.432-4.362C10.254 4.176 8.75 2.503 8 0c0 0-6 5.686-6 10a6 6 0 0 0 6 6M6.646 4.646l.708.708c-.29.29-1.128 1.311-1.907 2.87l-.894-.448c.82-1.641-1.717-2.753-2.093-3.13" /></clipPath></defs><rect width="100%" height="100%" class="droplet-base" clip-path="url(#${clipId})" /><rect width="100%" height="${fill}%" y="${top}%" class="droplet-fill" clip-path="url(#${clipId})" /><path class="droplet-outline" d="M8 16a6 6 0 0 0 6-6c0-1.655-1.122-2.904-2.432-4.362C10.254 4.176 8.75 2.503 8 0c0 0-6 5.686-6 10a6 6 0 0 0 6 6" /></svg><span class="humidity-level-number">${letter}</span></span>`;
   }
 
-  function printerActivityText(printerStatus, printerState) {
-    const state = String(printerState || '').toUpperCase();
-    if (state === 'RUNNING') return activityLabels.printRunning;
-    if (state === 'PREPARE') return activityLabels.printPreparing;
-    if (state === 'PAUSE') return activityLabels.printPaused;
-    return printerStatus || activityLabels.unknown;
-  }
-
   function renderActivities(item, printerStatus, preparationStatus, filamentStatus, printerState) {
-    if (!activityList) return;
-    const preparationEntries = preparationStatus
-      ? [{ label: preparationStatus, active: true }]
-      : [];
-    const filamentEntries = filamentStatus ? [{ label: filamentActivityText(filamentStatus), active: true, icon: true }] : [];
-    const entries = [
-      { label: printerActivityText(printerStatus, printerState), active: true },
-      ...filamentEntries,
-      ...preparationEntries,
-      ...(item ? [
-        { label: activityLabels.lastBooking, time: item.last_usage_event_at, showTime: true },
-        { label: activityLabels.finished, time: item.actual_end_time, showTime: true }
-      ] : preparationEntries)
-    ].filter(entry => !entry.showTime || entry.time);
-    activityList.innerHTML = entries.map(entry => `<li class="${entry.active ? 'active' : ''}"><span class="home-activity-dot"></span><strong>${entry.label}${entry.icon ? '<span class="filament-activity-spinner home-filament-activity-spinner" aria-hidden="true"></span>' : ''}</strong>${entry.showTime && entry.time ? `<small>${formatUiDateTime(entry.time)}</small>` : ''}</li>`).join('');
+    const activePrint = item && ['PREPARING', 'RUNNING', 'PAUSED'].includes(String(item.status || '').toUpperCase());
+    const showActivity = Boolean(filamentStatus || preparationStatus || activePrint);
+    if (lastPrintActivityRow) lastPrintActivityRow.hidden = !showActivity;
+    const activityText = filamentStatus
+      ? filamentActivityText(filamentStatus)
+      : (preparationStatus || (activePrint ? activityLabels.printRunning : ''));
+    if (lastPrintActivity) {
+      lastPrintActivity.textContent = activityText || '–';
+      if (filamentStatus && filamentStatus.state) {
+        const spinner = document.createElement('span');
+        spinner.className = 'filament-activity-spinner home-filament-activity-spinner';
+        spinner.setAttribute('aria-hidden', 'true');
+        lastPrintActivity.appendChild(spinner);
+      }
+    }
   }
 
   function update(data) {
@@ -259,8 +237,9 @@
       if (unloadFilamentAction) unloadFilamentAction.hidden = item.status !== 'ABORTED';
       if (unloadFilamentButton && item.status !== 'ABORTED') unloadFilamentButton.disabled = true;
       const printerIsActive = ['PREPARING', 'RUNNING', 'PAUSED', 'SLICING'].includes(String(data.printer_state || '').toUpperCase()) || ['PREPARING', 'RUNNING', 'PAUSED'].includes(item.status);
-      if (parkPrinterAction) parkPrinterAction.hidden = printerIsActive;
-      if (parkPrinterButton && printerIsActive) parkPrinterButton.disabled = true;
+      const parkAvailable = data.park_printer_available === true && !printerIsActive;
+      if (parkPrinterAction) parkPrinterAction.hidden = !parkAvailable;
+      if (parkPrinterButton) parkPrinterButton.disabled = !parkAvailable || !data.mqtt_connected;
       if (lastPrintName) lastPrintName.textContent = item.file_name || '';
       const liveLayers = Number(item.layers_printed);
       const liveTotalLayers = Number(item.total_layers);
@@ -285,13 +264,42 @@
       }
       if (progressRing && progress !== null) progressRing.style.setProperty('--home-progress', `${Math.max(0, Math.min(100, progress))}%`);
       if (lastPrintLayers) lastPrintLayers.textContent = Number.isFinite(liveTotalLayers) && liveTotalLayers > 0 && Number.isFinite(liveLayers) ? `${liveLayers} / ${liveTotalLayers}` : '–';
-      const showTiming = ['PREPARING', 'RUNNING', 'PAUSED'].includes(item.status);
-      [lastPrintExpectedEndLabel, lastPrintExpectedEnd, lastPrintRemainingLabel, lastPrintRemaining].forEach(element => {
-        if (element) element.hidden = !showTiming;
-      });
-      if (lastPrintExpectedEnd) lastPrintExpectedEnd.textContent = item.predicted_end_time ? formatUiDateTime(item.predicted_end_time) : '–';
-      if (lastPrintRemaining) lastPrintRemaining.textContent = formatRemaining(item.predicted_end_time);
-      if (lastPrintConsumed) lastPrintConsumed.textContent = item.filament_grams_billed != null ? `${new Intl.NumberFormat({{ ('de-DE' if current_language == 'de' else 'en-US')|tojson }}, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(item.filament_grams_billed))} g` : '–';
+      const showTiming = ['PREPARING', 'RUNNING', 'PAUSED'].includes(status);
+      if (lastPrintEndLabel) {
+        lastPrintEndLabel.lastChild.textContent = showTiming
+          ? {{ _('Erwartetes Ende')|tojson }}
+          : {{ _('Ende des Druckjobs')|tojson }};
+      }
+      if (lastPrintExpectedEnd) {
+        const endTime = showTiming ? item.predicted_end_time : (item.actual_end_time || item.predicted_end_time);
+        if (!endTime) {
+          lastPrintExpectedEnd.textContent = '–';
+        } else {
+          const remaining = showTiming ? formatRemaining(endTime) : '';
+          lastPrintExpectedEnd.textContent = `${formatUiDateTime(endTime)}${remaining && remaining !== '–' ? ` (${remaining})` : ''}`;
+        }
+      }
+      if (lastPrintConsumed) {
+        const formatWeight = value => new Intl.NumberFormat({{ ('de-DE' if current_language == 'de' else 'en-US')|tojson }}, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(value));
+        const isCompleted = String(item.status || '').toUpperCase() === 'COMPLETED';
+        lastPrintConsumed.textContent = item.filament_grams_billed != null
+          ? `${formatWeight(item.filament_grams_billed)} g${!isCompleted && item.filament_grams_total != null ? ` ${ofLabel} ${formatWeight(item.filament_grams_total)} g` : ''}`
+          : '–';
+      }
+      if (lastPrintCost) {
+        const formatCost = value => new Intl.NumberFormat({{ ('de-DE' if current_language == 'de' else 'en-US')|tojson }}, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(value));
+        const isCompleted = String(item.status || '').toUpperCase() === 'COMPLETED';
+        lastPrintCost.textContent = item.actual_cost_total != null
+          ? `${formatCost(item.actual_cost_total)} €${!isCompleted && item.expected_cost_total != null ? ` ${ofLabel} ${formatCost(item.expected_cost_total)} €` : ''}`
+          : '–';
+      }
+      if (lastPrintGrossCost) {
+        const formatGrossCost = value => new Intl.NumberFormat({{ ('de-DE' if current_language == 'de' else 'en-US')|tojson }}, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(value));
+        const isCompleted = String(item.status || '').toUpperCase() === 'COMPLETED';
+        lastPrintGrossCost.textContent = item.actual_gross_cost_total != null
+          ? `${formatGrossCost(item.actual_gross_cost_total)} €${!isCompleted && item.expected_gross_cost_total != null ? ` ${ofLabel} ${formatGrossCost(item.expected_gross_cost_total)} €` : ''}`
+          : '–';
+      }
       const hasActiveJob = ['PREPARING', 'RUNNING', 'PAUSED'].includes(item.status);
       if (lastPrintStatusAtLabel) lastPrintStatusAtLabel.hidden = !hasActiveJob;
       if (lastPrintStatusAt) {
@@ -307,15 +315,12 @@
     if (['queued', 'resolving', 'downloading', 'processing'].includes(download.state)) {
       const label = download.state === 'processing' ? processingLabel : loadingLabel;
       const parts = [label];
-      const downloaded = formatTransferBytes(download.bytes_downloaded);
-      const total = formatTransferBytes(download.bytes_total);
-      if (downloaded && total) parts.push(`${downloaded} / ${total}`);
-      else if (downloaded) parts.push(downloaded);
-      const speed = formatTransferBytes(download.speed_bytes_per_second);
-      if (speed && Number(download.speed_bytes_per_second) > 0) parts.push(`${speed}/s`);
-      const remaining = Number(download.bytes_total) - Number(download.bytes_downloaded);
-      const remainingText = formatTransferBytes(remaining);
-      if (remainingText && Number.isFinite(remaining) && remaining > 0) parts.push(`${remainingText} ${remainingLabel}`);
+      const totalBytes = Number(download.bytes_total);
+      const downloadedBytes = Number(download.bytes_downloaded);
+      const percent = totalBytes > 0 && Number.isFinite(downloadedBytes)
+        ? Math.max(0, Math.min(100, Math.round(downloadedBytes * 100 / totalBytes)))
+        : null;
+      if (percent !== null) parts.push(`${percent}%`);
       downloadStatus.textContent = parts.join(' · ');
       downloadStatus.classList.remove('d-none');
     } else if (download.state === 'error') {
@@ -362,6 +367,7 @@
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || !payload.ok) throw new Error(payload.error || 'park failed');
       if (parkPrinterFeedback) parkPrinterFeedback.textContent = {{ _('Druckbett- und Parkbefehl an den Drucker gesendet.')|tojson }};
+      if (parkPrinterAction) parkPrinterAction.hidden = true;
     } catch (error) {
       parkPrinterButton.disabled = false;
       if (parkPrinterFeedback) parkPrinterFeedback.textContent = error.message || {{ _('Druckbett konnte nicht abgesenkt werden.')|tojson }};

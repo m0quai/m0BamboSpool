@@ -22,6 +22,6 @@ services:
       - waitress-serve
       - --host=0.0.0.0
       - --port=8000
-      - app_custom:app
+      - app:app
     environment:
       - TZ=Europe/Berlin

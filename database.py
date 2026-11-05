@@ -11,6 +11,7 @@ from datetime import datetime
 
 from config import DATABASE_NAME, DATABASE_PATH, DATABASE_PATH_OVERRIDE, DATABASE_TYPE
 from ui_formatting import LOCAL_TIMEZONE
+from sqlite_retry import RetryingConnectionMixin, retry_sqlite_operation
 
 
 LEGACY_DATABASE_NAME = "3d_printer_logs.db"
@@ -31,7 +32,7 @@ _SCHEMA_READY: set[str] = set()
 _SCHEMA_READY_LOCK = threading.RLock()
 
 
-class _ClosingConnection(sqlite3.Connection):
+class _ClosingConnection(RetryingConnectionMixin, sqlite3.Connection):
     """SQLite context manager that also releases the file handle.
 
     ``sqlite3.Connection`` commits or rolls back when used with ``with``,
@@ -92,7 +93,10 @@ def connect_database(path: str | Path | None = None) -> sqlite3.Connection:
     target_path = Path(path).expanduser() if path is not None else DATABASE_PATH
     target_path.parent.mkdir(parents=True, exist_ok=True)
     _migrate_legacy_database_file(target_path)
-    connection = sqlite3.connect(str(target_path), timeout=15, factory=_ClosingConnection)
+    connection = retry_sqlite_operation(
+        lambda: sqlite3.connect(str(target_path), timeout=15, factory=_ClosingConnection),
+        operation_name="sqlite3.connect",
+    )
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA busy_timeout = 15000")
 

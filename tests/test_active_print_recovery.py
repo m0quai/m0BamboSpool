@@ -36,6 +36,20 @@ class ActivePrintRecoveryTests(unittest.TestCase):
         history.ensure_layer_tracking(print_id, status)
         return print_id
 
+    def test_completion_without_progress_does_not_close_provisional_row(self):
+        print_id = self.add_print("PREPARING")
+
+        history.update_layer_tracking(
+            print_id, status="COMPLETED", actual_end_time="2026-10-01 10:00:00"
+        )
+        tracking = history.get_layer_tracking_for_prints([print_id])[print_id]
+        self.assertEqual(tracking["status"], "PREPARING")
+
+        history.update_layer_tracking(print_id, total_layers=10, layers_printed=10)
+        history.update_layer_tracking(print_id, status="COMPLETED")
+        tracking = history.get_layer_tracking_for_prints([print_id])[print_id]
+        self.assertEqual(tracking["status"], "COMPLETED")
+
     def test_running_report_after_restart_creates_history_before_download(self):
         previous = self.add_print("ABORTED")
         mqtt.processMessage({"print": dict(self.report)})

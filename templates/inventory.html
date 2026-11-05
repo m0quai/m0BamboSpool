@@ -67,6 +67,7 @@
         <div class="inventory-stock-tabs" role="tablist" aria-label="{{ _('Bestandskorrektur') }}">
           <button type="button" class="btn btn-sm btn-primary" data-stock-mode="delta">{{ _('Gewicht') }}</button>
           <button type="button" class="btn btn-sm btn-outline-secondary" data-stock-mode="absolute">{{ _('Gemessenes Gewicht') }}</button>
+          <button id="inventory-stock-zero" class="btn btn-sm btn-outline-secondary" type="button" hidden>{{ _('Spule leeren') }}</button>
         </div>
         <div class="inventory-stock-entry">
           <label id="inventory-stock-label" class="form-label small mb-0" for="inventory-stock-value">{{ _('Neues Gesamtgewicht') }}</label>
@@ -166,6 +167,7 @@ document.addEventListener('DOMContentLoaded', () => {
     material: {{ _('Material')|tojson }},
     manufacturer: {{ _('Hersteller')|tojson }},
     stockCorrectionFailed: {{ _('Bestandskorrektur fehlgeschlagen.')|tojson }},
+     zeroWeight: {{ _('Spule leeren')|tojson }},
     boundDelete: {{ _('Gebundene Spulen können nicht gelöscht werden.')|tojson }},
     boundChange: {{ _('Gebundene Spulen können nicht verändert werden.')|tojson }},
     archivedLocked: {{ _('Die Spule ist archiviert und gesperrt.')|tojson }},
@@ -199,6 +201,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const stockLabel = document.getElementById('inventory-stock-label');
   const stockHelp = document.getElementById('inventory-stock-help');
   const stockApply = document.getElementById('inventory-stock-apply');
+  const stockZeroButton = document.getElementById('inventory-stock-zero');
   const currentWeight = document.getElementById('inventory-current-weight');
   const currentWeightValue = document.getElementById('inventory-current-weight-value');
   const currentWeightFill = document.getElementById('inventory-current-weight-fill');
@@ -688,6 +691,8 @@ document.addEventListener('DOMContentLoaded', () => {
     stockModeButtons.forEach(button => { button.disabled = spoolLocked || spoolArchived; });
     stockValue.disabled = spoolLocked || spoolArchived;
     stockApply.disabled = spoolLocked || spoolArchived;
+    stockZeroButton.hidden = kind !== 'spool' || spoolLocked || spoolArchived;
+    stockZeroButton.disabled = spoolLocked || spoolArchived;
     createSpoolButton.onclick = () => createSpoolForFilament(record);
     duplicateFilamentButton.onclick = () => duplicateFilament(record);
     deleteFilamentButton.onclick = () => deleteFilament(record);
@@ -741,6 +746,30 @@ document.addEventListener('DOMContentLoaded', () => {
       } catch (error) {
         editorState.textContent = error.message || inventoryText.stockCorrectionFailed;
       } finally { stockApply.disabled = false; }
+    };
+    stockZeroButton.onclick = async () => {
+      if (spoolLocked || spoolArchived) return;
+      stockZeroButton.disabled = true;
+      editorState.textContent = inventoryText.saving;
+      try {
+        const response = await fetch(`/inventory/local-spools/${id}/stock-adjustment`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: 'zero', value: 0 }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || inventoryText.stockCorrectionFailed);
+        localSpools.set(String(id), result.spool);
+        const entry = inventory.find(item => String(item.spool?.id) === String(id));
+        if (entry) entry.spool = result.spool;
+        selectEditor('spool', id);
+        stockAdjustment.hidden = false;
+        setStockMode('absolute');
+        render();
+      } catch (error) {
+        editorState.textContent = error.message || inventoryText.stockCorrectionFailed;
+      } finally {
+        stockZeroButton.disabled = spoolLocked || spoolArchived;
+      }
     };
     editorTitle.textContent = kind === 'vendor' ? record.name : kind === 'spool' ? `#${record.id} \u00b7 ${record.filament?.name || inventoryText.spool}` : `${record.vendor_name || inventoryText.unknown} \u00b7 ${record.name}`;
     editorState.textContent = spoolArchived ? inventoryText.archivedLocked : '';
@@ -812,8 +841,13 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
     if (spoolLocked) {
+      // AMS/print locks protect identity and assignment, not ordinary local
+      // master data. Keep weight, tare, price, purchase date and comment
+      // editable while filament, NFC, tray and archive remain locked.
+      const editableWhileBound = new Set(['initial_weight', 'spool_weight', 'price', 'purchase_date', 'comment']);
       editorFields.querySelectorAll('input, select, textarea, button').forEach(field => {
-        if (field !== openFilamentButton) field.disabled = true;
+        if (field === openFilamentButton) return;
+        if (!editableWhileBound.has(field.dataset.fieldName)) field.disabled = true;
       });
       editorState.textContent = inventoryText.boundLocked;
     }
@@ -1134,13 +1168,20 @@ document.addEventListener('DOMContentLoaded', () => {
     sessionStorage.removeItem('m0bambospool-inventory-refresh-selection');
   } catch (_) {}
   if (requestedSpoolId && localSpools.has(String(requestedSpoolId))) {
+    // A history jump targets one concrete spool.  Always switch to the
+    // ungrouped selection view so the row is visible and can be highlighted,
+    // regardless of the grouping used during the previous inventory visit.
+    groupSelect.value = 'none';
+    savedState.group = 'none';
+    savedState.openGroups = {};
+    storeView();
     const requestedIsArchived = Boolean(localSpools.get(String(requestedSpoolId)).archived);
     if ((requestedIsArchived && showArchived.value === 'without') || (!requestedIsArchived && showArchived.value === 'only')) {
       showArchived.value = 'with';
       savedState.archiveFilter = 'with';
       savedState.showArchived = true;
       render();
-    }
+    } else render();
     selectEditor('spool', requestedSpoolId);
     editor.scrollIntoView({ behavior: 'smooth', block: 'start' });
   } else if (refreshSelection && ['spool', 'filament', 'vendor'].includes(refreshSelection.kind)) {

@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container py-4">
+  <div class="card mb-4"><div class="card-body">
+    <h5>{{ _('Lokale Druckerverbindung') }}</h5>
+    <p class="text-muted mb-3">{{ _('Direkte Verbindung zum Drucker im lokalen Netzwerk.') }}</p>
+    <form id="local-settings-form" method="post" action="{{ url_for('settings.save') }}" class="row g-3">
+      <div class="col-md-6">
+        <label class="form-label">{{ _('Drucker-IP') }}</label>
+        <input class="form-control" type="text" name="printer_ip"
+               value="{{ config.printer_ip or '' }}" placeholder="{{ _('z.B. 192.168.1.50') }}" required>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">{{ _('Seriennummer') }}</label>
+        <input class="form-control" type="text" name="printer_id"
+               value="{{ config.printer_id or '' }}" required>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">{{ _('Druckername') }}</label>
+        <input class="form-control" type="text" name="printer_name"
+               value="{{ config.printer_name or '' }}">
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">{{ _('Printer Access LAN') }}</label>
+        <input class="form-control" type="password" name="printer_access_lan" autocomplete="off"
+               placeholder="{% if config.lan_access_code_present %}{{ _('Gespeicherter LAN Access-Code bleibt erhalten') }}{% else %}{{ _('Lokalen Access-Code eingeben') }}{% endif %}">
+        {% if config.lan_access_code_present %}
+        <div class="form-text">{{ _('Ein LAN Access-Code ist gespeichert. Leer lassen, um ihn beizubehalten.') }}</div>
+        {% endif %}
+      </div>
+      <div class="col-12 d-flex align-items-center gap-3">
+        <button class="btn btn-primary" type="submit">{{ _('Lokale Konfiguration speichern') }}</button>
+        <span class="text-muted">{% if connected %}{{ _('Verbunden') }}{% else %}{{ _('Nicht verbunden') }}{% endif %}</span>
+      </div>
+    </form>
+  </div></div>
+
+  <div class="card mb-4"><div class="card-body">
+    <h5 class="mb-1">{{ _('Stammdateneinstellungen') }}</h5>
+    <p class="text-muted">{{ _('Materialien, NFC-Tags und Farben werden auf eigenen Verwaltungsseiten bearbeitet.') }}</p>
+    <div class="d-flex gap-2 flex-wrap">
+      <a class="btn btn-outline-primary" href="{{ url_for('inventory_management', entity='materials') }}">{{ _('Materialien') }} ({{ local_materials|length }})</a>
+      <a class="btn btn-outline-primary" href="{{ url_for('inventory_management', entity='nfc-tags') }}">{{ _('NFC-Tags') }} ({{ local_nfc_tags|length }})</a>
+      <a class="btn btn-outline-primary" href="{{ url_for('inventory_management', entity='colors') }}">{{ _('Farben') }} ({{ local_colors|length }})</a>
+    </div>
+  </div></div>
+
+  <div class="card mb-4"><div class="card-body">
+    <h5 class="mb-1">{{ _('Druckkostenberechnung') }}</h5>
+    <p class="text-muted">{{ _('Stromkosten und Abschreibung werden aus realistischen Zeit- und Gerätewerten automatisch pro Minute berechnet.') }}</p>
+    <div class="row g-3">
+      <div class="col-md-6">
+        <label class="form-label">{{ _('Strompreis (EUR/kWh)') }}</label>
+        <input class="form-control" type="number" min="0" step="0.01" name="electricity_price_eur_per_kwh" form="local-settings-form" value="{{ '%.2f'|format(printer_cost_settings.electricity_price_eur_per_kwh) }}">
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">{{ _('Durchschnittliche Druckleistung (W)') }}</label>
+        <input class="form-control" type="number" min="0" step="1" name="printer_power_w" form="local-settings-form" value="{{ '%.0f'|format(printer_cost_settings.printer_power_w) }}">
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">{{ _('Anschaffungspreis Drucker (EUR)') }}</label>
+        <input class="form-control" type="number" min="0" step="1" name="printer_purchase_price_eur" form="local-settings-form" value="{{ '%.2f'|format(printer_cost_settings.printer_purchase_price_eur) }}">
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">{{ _('Angenommene Lebensdauer (Stunden)') }}</label>
+        <input class="form-control" type="number" min="1" step="100" name="printer_lifetime_hours" form="local-settings-form" value="{{ '%.0f'|format(printer_cost_settings.printer_lifetime_hours) }}">
+      </div>
+      <div class="col-md-4"><label class="form-label">{{ _('Stromkosten pro Minute') }}</label><input class="form-control" value="{{ '%.5f'|format(printer_cost_settings.energy_cost_per_minute) }} €" readonly></div>
+      <div class="col-md-4"><label class="form-label">{{ _('Abschreibung pro Minute') }}</label><input class="form-control" value="{{ '%.5f'|format(printer_cost_settings.depreciation_per_minute) }} €" readonly></div>
+      <div class="col-md-4"><label class="form-label">{{ _('Druckerkosten pro Minute') }}</label><input class="form-control" value="{{ '%.5f'|format(printer_cost_settings.printer_cost_per_minute) }} €" readonly></div>
+    </div>
+    <div class="form-text mt-2">{{ _('Voreinstellungen: 35 ct/kWh, 100 W Durchschnittsleistung, 599 EUR Anschaffung und 5.000 Betriebsstunden. Alle Werte sind änderbar.') }}</div>
+    <div class="form-text">{{ _('Gesamtkosten = Materialkosten + Stromkosten + Abschreibung; keine Umsatzsteuerberechnung.') }}</div>
+  </div></div>
+</div>
+{% endblock %}

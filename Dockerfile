@@ -38,11 +38,11 @@ ENV VIRTUAL_ENV=/home/app/venv
 # python setup
 RUN python -m venv $VIRTUAL_ENV
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
-ENV FLASK_APP=app_custom
+ENV FLASK_APP=app
 RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir -r requirements.txt
 
 # define the port number the container should expose
 EXPOSE 8000
 
-CMD ["waitress-serve", "--host=0.0.0.0", "--port=8000", "app_custom:app"]
+CMD ["waitress-serve", "--host=0.0.0.0", "--port=8000", "app:app"]

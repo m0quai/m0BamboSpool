@@ -11,88 +11,153 @@
       {% set status_badge = tracking['status_badge'] if tracking else 'success' %}
       {% set target_expanded_print_id = expanded_print_id if expanded_print_id is defined else active_print_id %}
       {% set expanded = print['id'] == target_expanded_print_id %}
-      <tr class="history-row" id="print_{{ print['id'] }}" data-history-row data-history-id="{{ print['id'] }}" data-history-date="{{ print['print_date'] }}" data-history-name="{{ print['file_name']|lower }}" data-history-status="{{ status_label|lower }}">
+      <tr class="history-row" id="print_{{ print['id'] }}" data-history-row data-history-id="{{ print['id'] }}" data-history-date="{{ print['print_date'] }}" data-history-name="{{ print['file_name']|lower }}" data-history-status="{{ status_label|lower }}" data-history-deleted="{{ '1' if print.get('is_deleted') else '0' }}">
         <td class="text-nowrap"><strong>#{{ print['id'] }}</strong></td>
         <td class="text-nowrap">{{ format_datetime(print['print_date']) }}</td>
       <td><span class="badge bg-{{ status_badge }}">{{ _(status_label) }}</span></td>
         <td class="history-print-name" title="{{ print['file_name'] }}">{{ print['file_name'] }}{% if print.get('file_name_source') == 'provisional' %} <span class="text-muted small">({{ _('vorläufig') }})</span>{% endif %}</td>
-        <td class="text-end"><button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#print-body-{{ print['id'] }}" aria-expanded="{{ 'true' if expanded else 'false' }}" aria-controls="print-body-{{ print['id'] }}"><i class="bi bi-chevron-{{ 'up' if expanded else 'down' }}"></i></button></td>
+        <td class="text-end">
+          <div class="history-row-actions d-inline-flex align-items-center justify-content-end gap-1">
+            {% if print['id'] != active_print_id %}
+              {% if print.get('is_deleted') %}<form method="post" action="{{ url_for('restore_print_history_entry', print_id=print['id']) }}" class="m-0"><button type="submit" class="btn btn-sm btn-outline-success history-entry-action" title="{{ _('Restore') }}" aria-label="{{ _('Restore') }}"><i class="bi bi-arrow-counterclockwise"></i></button></form>
+              {% else %}<form method="post" action="{{ url_for('delete_print_history_entry', print_id=print['id']) }}" class="m-0"><button type="submit" class="btn btn-sm btn-outline-danger history-entry-action" title="{{ _('Eintrag aus der History ausblenden') }}" aria-label="{{ _('Eintrag löschen') }}"><i class="bi bi-trash"></i></button></form>{% endif %}
+            {% endif %}
+            <button class="btn btn-sm btn-outline-secondary history-entry-action" type="button" data-bs-toggle="collapse" data-bs-target="#print-body-{{ print['id'] }}" aria-expanded="{{ 'true' if expanded else 'false' }}" aria-controls="print-body-{{ print['id'] }}"><i class="bi bi-chevron-{{ 'up' if expanded else 'down' }}"></i></button>
+          </div>
+        </td>
       </tr>
-      <tr class="history-detail-row" data-history-detail="{{ print['id'] }}"><td colspan="5" class="p-0"><div id="print-body-{{ print['id'] }}" class="collapse{% if expanded %} show{% endif %}"><div class="history-detail p-3"><div class="row g-3">
-        <div class="col-lg-8">
-          <table class="table table-sm history-detail-table mb-2">
-            <tbody><tr>
-              <th>{{ _('Layers') }}</th>
-              <td>{{ tracking['layers_printed'] if tracking else '-' }} / {{ tracking['total_layers'] if tracking else '-' }}</td>
-              <th>{{ _('Consumed') }}</th>
-              <td>{{ format_number(tracking['filament_grams_billed'] or 0) if tracking else format_number(0) }}g</td>
-              <th>{{ _('Progress') }}</th>
-              <td>
-                <div class="d-flex align-items-center justify-content-between gap-2">
-                  <span>{{ tracking['progress_percent'] if tracking and tracking['progress_percent'] is not none else '-' }}%</span>
-                  {% if print.get('is_deleted') %}
-                  <form method="post" action="{{ url_for('restore_print_history_entry', print_id=print['id']) }}">
-                    <button type="submit" class="btn btn-sm btn-outline-success text-nowrap" title="{{ _('Restore') }}"><i class="bi bi-arrow-counterclockwise me-1"></i>{{ _('Restore') }}</button>
-                  </form>
-                  {% elif print['id'] != active_print_id %}
-                  <form method="post" action="{{ url_for('delete_print_history_entry', print_id=print['id']) }}">
-                    <button type="submit" class="btn btn-sm btn-outline-danger text-nowrap" title="{{ _('Eintrag aus der History ausblenden') }}"><i class="bi bi-trash me-1"></i>{{ _('Eintrag löschen') }}</button>
-                  </form>
-                  {% endif %}
-                </div>
-              </td>
-            </tr><tr class="history-cost-summary">
-              <th>{{ _('Erwartete Kosten') }}</th>
-              <td>{{ format_number(print.get('expected_cost_total', 0), 2) }} {{ history_currency_symbol|default('€') }}</td>
-              <th>{{ _('Tatsächliche Kosten') }}</th>
-              <td>{{ format_number(print.get('actual_cost_total', 0), 2) }} {{ history_currency_symbol|default('€') }}</td>
-            </tr></tbody>
-          </table>
-          {% if tracking %}<div class="text-muted small history-timing">
-            {% if tracking['estimated_duration_minutes'] %}<span class="estimated-print-duration" data-minutes="{{ tracking['estimated_duration_minutes'] }}"></span>{% endif %}
-            {% if tracking['predicted_end_time'] %}<span class="expected-end d-block" data-end="{{ tracking['predicted_end_time'] }}"></span>{% elif tracking['estimated_duration_minutes'] and tracking['status'] in ['PREPARING', 'RUNNING', 'PAUSED'] %}<span class="expected-end d-block" data-start="{{ print['print_date'] }}" data-minutes="{{ tracking['estimated_duration_minutes'] }}" data-percent="{{ tracking['printer_percent'] if tracking['printer_percent'] is not none else '' }}"></span>{% endif %}
-            {% if tracking['actual_end_time'] %}<span class="actual-end d-block" data-end="{{ tracking['actual_end_time'] }}"></span><span class="print-duration d-block" data-start="{{ print['print_date'] }}" data-end="{{ tracking['actual_end_time'] }}"></span>{% endif %}
-          </div>{% endif %}
+      <tr class="history-detail-row" data-history-detail="{{ print['id'] }}"><td colspan="5" class="p-0"><div id="print-body-{{ print['id'] }}" class="collapse{% if expanded %} show{% endif %}"><div class="history-detail history-size-pending p-3"><div class="row g-3">
+        <div class="col-lg-10 history-data-panel">
+          <div class="row g-0 history-data-panel-row">
+        <div class="col-lg-4 history-filament-column">
           {% for filament in print['filament_usage'] %}
             {% set physical_slot = filament['physical_ams_slot'] if filament['physical_ams_slot'] is not none else none %}
-            {# ams_slot and physical_ams_slot are zero-based; the physical
-               AMS slot is authoritative whenever it is available. #}
             {% set slot_number = (physical_slot|int if physical_slot is not none else (filament['ams_slot']|int if filament['ams_slot'] is not none else 16)) %}
             {% set history_ams_slot = physical_slot if physical_slot is not none else filament['ams_slot'] %}
             {% set history_color = ((filament['spool'].filament.color_hex if filament['spool'] and filament['spool'].filament.color_hex else filament['color'] or '000000')|replace('#', ''))[0:6] %}
-            {% set used_length_mm = filament.get('length_used') %}
-            <div class="history-filament-detail d-flex justify-content-between align-items-start">
+            <div class="history-filament-detail d-flex justify-content-between align-items-start" data-history-filament-index="{{ loop.index0 }}">
+              <div class="history-filament-slot text-muted small">{% if 0 <= slot_number < 16 %}[{{ ['A','B','C','D'][slot_number // 4] }}{{ (slot_number % 4) + 1 }}]{% else %}[{{ _('External') }}]{% endif %}</div>
               <div class="history-filament-main">
-                <div class="text-muted small">{% if 0 <= slot_number < 16 %}[{{ ['A','B','C','D'][slot_number // 4] }}{{ (slot_number % 4) + 1 }}]{% else %}[{{ _('External') }}]{% endif %}</div>
                 {% if filament['spool'] %}
                 <strong>#{{ filament['spool'].id }} – {{ filament['spool'].filament.vendor.name }} – {{ filament['spool'].filament.material }}</strong>
-                <div>{{ filament['spool'].filament.name }}</div>
+                <div class="history-filament-color-line"><span class="inventory-color-code" style="background-color:#{{ history_color }}; color:{{ '#fff' if color_is_dark(history_color) else '#111' }}; text-shadow:{{ '0 1px 1px rgba(0,0,0,.65)' if color_is_dark(history_color) else 'none' }};">#{{ history_color }}</span><span class="history-filament-color-name">{{ filament['spool'].filament.name }}</span>{% if filament['spool'].archived %}<i class="bi bi-archive-fill history-archived-icon" title="{{ _('Archiviert') }}" aria-label="{{ _('Archiviert') }}"></i>{% endif %}</div>
                 {% else %}
                 <strong>{{ _('No spool assigned') }} – {{ filament['filament_type'] }}</strong>
                 {% endif %}
-                <div><span class="inventory-color-code" style="background-color:#{{ history_color }}; color:{{ '#fff' if color_is_dark(history_color) else '#111' }}; text-shadow:{{ '0 1px 1px rgba(0,0,0,.65)' if color_is_dark(history_color) else 'none' }};">#{{ history_color }}</span></div>
-                <table class="history-filament-metrics" aria-label="{{ _('Filamentverbrauch') }}">
-                  <tbody>
-                    <tr>
-                      <th>{{ _('Gedruckt') }}</th>
-                      <td>{{ format_number(filament['grams_used'] or 0) }} g</td>
-                      <th>{{ _('Erwartet') }}</th>
-                      <td>{% if filament['estimated_grams'] is not none %}{{ format_number(filament['estimated_grams']) }} g{% else %}–{% endif %}</td>
-                    </tr>
-                    <tr>
-                      <th>{{ _('Verbrauchte Länge') }}</th>
-                      <td>{% if used_length_mm is not none %}{% if used_length_mm >= 1000 %}{{ format_number(used_length_mm / 1000, 1) }} m{% else %}{{ format_number(used_length_mm, 0) }} mm{% endif %}{% else %}–{% endif %}</td>
-                      <th>{{ _('Kosten') }}</th>
-                      <td>{{ format_number(filament.get('actual_cost', 0), 2) }} {{ history_currency_symbol|default('€') }} {{ _('tatsächlich') }} / {{ format_number(filament.get('expected_cost', 0), 2) }} {{ history_currency_symbol|default('€') }} {{ _('erwartet') }}</td>
-                    </tr>
-                  </tbody>
-                </table>
+                {% if not filament['spool'] %}<div class="history-filament-color-line"><span class="inventory-color-code" style="background-color:#{{ history_color }}; color:{{ '#fff' if color_is_dark(history_color) else '#111' }}; text-shadow:{{ '0 1px 1px rgba(0,0,0,.65)' if color_is_dark(history_color) else 'none' }};">#{{ history_color }}</span></div>{% endif %}
               </div>
-              <div class="d-inline-flex align-items-center gap-2">{% if active_print_id is not defined or print['id'] != active_print_id %}{% if filament['spool'] %}<a href="{{ url_for('print_select_spool', ams_slot=history_ams_slot, print_id=print['id'], old_spool_id=filament['spool'].id, change_spool=true) }}" class="btn btn-sm btn-outline-primary" title="{{ _('Spule ändern') }}"><i class="bi bi-pencil"></i></a>{% else %}<a href="{{ url_for('print_select_spool', ams_slot=history_ams_slot, print_id=print['id']) }}" class="btn btn-sm btn-outline-primary" title="{{ _('Spule zuordnen') }}"><i class="bi bi-pencil"></i></a>{% endif %}{% endif %}</div>
+              <div class="history-filament-actions-buttons d-flex align-items-center gap-1">
+                {% set is_active_history_print = active_print_id is defined and print['id'] == active_print_id %}
+                {% if not is_active_history_print %}
+                  {% if filament['spool'] %}
+                    <a href="{{ url_for('print_select_spool', ams_slot=history_ams_slot, print_id=print['id'], old_spool_id=filament['spool'].id, change_spool=true) }}" class="btn btn-sm btn-outline-primary" title="{{ _('Spule ändern') }}" aria-label="{{ _('Spule ändern') }}"><i class="bi bi-pencil"></i></a>
+                  {% else %}
+                    <a href="{{ url_for('print_select_spool', ams_slot=history_ams_slot, print_id=print['id']) }}" class="btn btn-sm btn-outline-primary" title="{{ _('Spule zuordnen') }}" aria-label="{{ _('Spule zuordnen') }}"><i class="bi bi-pencil"></i></a>
+                  {% endif %}
+                {% endif %}
+                {% if filament['spool'] %}
+                  <a href="{{ url_for('inventory', spool_id=filament['spool'].id) }}" class="btn btn-sm btn-outline-secondary" title="{{ _('Spule im Inventar öffnen') }}" aria-label="{{ _('Spule im Inventar öffnen') }}"><i class="bi bi-box-arrow-up-right"></i></a>
+                {% endif %}
+              </div>
             </div>
           {% endfor %}
         </div>
-        <div class="col-lg-4 history-image"><div class="border rounded p-2 h-100 d-flex justify-content-center align-items-center">{% if print['image_file'] %}<img src="{{ url_for('print_image', filename=print['image_file']) }}" alt="{{ _('Print Image') }}" class="img-fluid">{% else %}<span class="text-muted">{{ _('No Image') }}</span>{% endif %}</div></div>
+        <div class="col-lg-8 history-metrics-column">
+          <table class="table table-sm history-detail-table history-summary-table mb-1">
+            <colgroup>
+              <col class="history-label-col">
+              <col class="history-value-col">
+              <col class="history-actual-label-col">
+              <col class="history-diff-col">
+              <col class="history-actual-value-col">
+            </colgroup>
+            {% set progress_value = tracking['progress_percent'] if tracking and tracking['progress_percent'] is not none else none %}
+            <tbody><tr class="history-summary-overview-row">
+              <th>{{ _('Layers') }}</th>
+              <td>{{ tracking['layers_printed'] if tracking else '-' }} / {{ tracking['total_layers'] if tracking else '-' }}</td>
+              <th>{{ _('Fortschritt') }}</th>
+              <td class="history-progress-value" colspan="2">
+                {% if progress_value is not none %}
+                <div class="history-progress-track" data-status="{{ tracking['status'] if tracking else '' }}" style="--history-progress: {{ progress_value|float }}%;" role="progressbar" aria-valuenow="{{ progress_value|float }}" aria-valuemin="0" aria-valuemax="100" aria-label="{{ _('Fortschritt') }}">
+                  <div class="history-progress-fill" style="width: {{ progress_value|float }}%;"></div>
+                  <span>{{ progress_value|float|round(0)|int }}%</span>
+                </div>
+                {% else %}–{% endif %}
+              </td>
+            </tr>
+            {% if tracking %}<tr class="history-timing-row">
+              <th>{{ _('Geschätzte Druckdauer') }}</th>
+              <td>{% if tracking['estimated_duration_minutes'] %}<span class="estimated-print-duration d-block" data-minutes="{{ tracking['estimated_duration_minutes'] }}"></span>{% endif %}</td>
+              <th>{% if tracking['actual_end_time'] %}{{ _('Tatsächliche Druckdauer') }}{% else %}{{ _('Erwartetes Ende') }}{% endif %}</th>
+              <td class="history-diff-cell history-duration-value-group">{% if tracking['actual_end_time'] %}<span class="history-metric-diff history-duration-diff" data-start="{{ print['print_date'] }}" data-end="{{ tracking['actual_end_time'] }}" data-expected-minutes="{{ tracking['estimated_duration_minutes'] if tracking['estimated_duration_minutes'] is not none else '' }}"></span>{% elif tracking['predicted_end_time'] %}<span class="expected-remaining" data-end="{{ tracking['predicted_end_time'] }}"></span>{% elif tracking['estimated_duration_minutes'] %}<span class="expected-remaining" data-start="{{ print['print_date'] }}" data-minutes="{{ tracking['estimated_duration_minutes'] }}" data-percent="{{ tracking['printer_percent'] if tracking['printer_percent'] is not none else '' }}"></span>{% endif %}</td>
+              <td class="history-actual-value-cell">{% if tracking['actual_end_time'] %}<span class="print-duration" data-start="{{ print['print_date'] }}" data-end="{{ tracking['actual_end_time'] }}"></span>{% elif tracking['predicted_end_time'] %}<span class="expected-end-time" data-end="{{ tracking['predicted_end_time'] }}"></span>{% elif tracking['estimated_duration_minutes'] %}<span class="expected-end-time" data-start="{{ print['print_date'] }}" data-minutes="{{ tracking['estimated_duration_minutes'] }}" data-percent="{{ tracking['printer_percent'] if tracking['printer_percent'] is not none else '' }}"></span>{% endif %}</td>
+            </tr>{% endif %}
+            {% for filament in print['filament_usage'] %}
+              {% set used_length_mm = filament.get('length_used') %}
+              {% set expected_length_mm = filament.get('estimated_length') %}
+              {% set actual_grams = filament.get('grams_used') or 0 %}
+              {% set expected_grams = filament.get('estimated_grams') %}
+              {% set grams_delta = (actual_grams - expected_grams) if expected_grams is not none else none %}
+              {% set length_delta_mm = (used_length_mm - expected_length_mm) if used_length_mm is not none and expected_length_mm is not none else none %}
+              {% set actual_filament_cost = filament.get('actual_cost', 0) or 0 %}
+              {% set expected_filament_cost = filament.get('expected_cost', 0) or 0 %}
+              {% set cost_delta = (actual_filament_cost|round(2)) - (expected_filament_cost|round(2)) %}
+              {% set expected_price_missing = expected_grams is not none and (expected_grams|float) > 0 and (expected_filament_cost|round(2)) == 0 %}
+              {% set metric_physical_slot = filament['physical_ams_slot'] if filament['physical_ams_slot'] is not none else none %}
+              {% set metric_slot_number = (metric_physical_slot|int if metric_physical_slot is not none else (filament['ams_slot']|int if filament['ams_slot'] is not none else 16)) %}
+              <tr class="history-consumption-row history-filament-first-row" data-history-filament-index="{{ loop.index0 }}">
+                {% if tracking and tracking['actual_end_time'] %}
+                  <th>{{ _('Erwartetes Gewicht') }}</th>
+                  <td>{% if filament['estimated_grams'] is not none %}{{ format_number(filament['estimated_grams']) }} g{% else %}–{% endif %}</td>
+                  <th>{{ _('Tatsächliches Gewicht') }}</th>
+                  <td class="history-diff-cell">{% if grams_delta is not none and (grams_delta|abs) >= 0.005 %}<span class="history-metric-diff">({% if grams_delta >= 0 %}+{% endif %}{{ format_number(grams_delta) }} g)</span>{% endif %}</td>
+                  <td class="history-actual-value-cell">{{ format_number(actual_grams) }} g</td>
+                {% else %}
+                  <th>{{ _('Erwartetes Gewicht') }}</th>
+                  <td>{% if filament['estimated_grams'] is not none %}{{ format_number(filament['estimated_grams']) }} g{% else %}–{% endif %}</td>
+                  <th>{{ _('Gedrucktes Gewicht') }}</th>
+                  <td class="history-diff-cell"></td>
+                  <td class="history-actual-value-cell">{{ format_number(filament['grams_used'] or 0) }} g</td>
+                {% endif %}
+              </tr>
+              <tr class="history-consumption-row">
+                {% if tracking and tracking['actual_end_time'] %}
+                  <th>{{ _('Erwartete Länge') }}</th>
+                  <td>{% if expected_length_mm is not none %}{% if expected_length_mm >= 1000 %}{{ format_number(expected_length_mm / 1000, 1) }} m{% else %}{{ format_number(expected_length_mm, 0) }} mm{% endif %}{% else %}–{% endif %}</td>
+                  <th>{{ _('Tatsächliche Länge') }}</th>
+                  <td class="history-diff-cell">{% if length_delta_mm is not none and (length_delta_mm|abs) >= 0.5 %}<span class="history-metric-diff">({% if length_delta_mm >= 0 %}+{% endif %}{% if (length_delta_mm|abs) >= 1000 %}{{ format_number(length_delta_mm / 1000, 1) }} m{% else %}{{ format_number(length_delta_mm, 0) }} mm{% endif %})</span>{% endif %}</td>
+                  <td class="history-actual-value-cell">{% if used_length_mm is not none %}{% if used_length_mm >= 1000 %}{{ format_number(used_length_mm / 1000, 1) }} m{% else %}{{ format_number(used_length_mm, 0) }} mm{% endif %}{% else %}–{% endif %}</td>
+                {% else %}
+                  <th>{{ _('Erwartete Länge') }}</th>
+                  <td>{% if expected_length_mm is not none %}{% if expected_length_mm >= 1000 %}{{ format_number(expected_length_mm / 1000, 1) }} m{% else %}{{ format_number(expected_length_mm, 0) }} mm{% endif %}{% else %}–{% endif %}</td>
+                  <th>{{ _('Gedruckte Länge') }}</th>
+                  <td class="history-diff-cell"></td>
+                  <td class="history-actual-value-cell">{% if used_length_mm is not none %}{% if used_length_mm >= 1000 %}{{ format_number(used_length_mm / 1000, 1) }} m{% else %}{{ format_number(used_length_mm, 0) }} mm{% endif %}{% else %}–{% endif %}</td>
+                {% endif %}
+              </tr>
+              <tr class="history-consumption-row history-filament-cost-row{% if loop.last %} history-filament-last-row{% endif %}">
+                <th>{{ _('Erwartete Druckkosten') }}{% if expected_price_missing %}<i class="bi bi-exclamation-triangle-fill text-danger history-price-warning" title="{{ _('Kein Preis für diese Spule hinterlegt') }}" aria-label="{{ _('Kein Preis für diese Spule hinterlegt') }}"></i>{% endif %}</th>
+                <td>{{ format_number(filament.get('expected_cost', 0), 2) }} {{ history_currency_symbol|default('€') }}</td>
+                <th>{% if tracking and tracking['actual_end_time'] %}{{ _('Tatsächliche Druckkosten') }}{% else %}{{ _('Bisherige Druckkosten') }}{% endif %}</th>
+                <td class="history-diff-cell">{% if tracking and tracking['actual_end_time'] and (cost_delta|abs) >= 0.005 %}<span class="history-metric-diff">({% if cost_delta >= 0 %}+{% endif %}{{ format_number(cost_delta, 2) }} {{ history_currency_symbol|default('€') }})</span>{% endif %}</td>
+                <td class="history-actual-value-cell">{% if tracking and tracking['actual_end_time'] %}{{ format_number(actual_filament_cost, 2) }} {{ history_currency_symbol|default('€') }}{% else %}{{ format_number(actual_filament_cost, 2) }} {{ history_currency_symbol|default('€') }}{% endif %}</td>
+              </tr>
+            {% endfor %}</tbody>
+            {% set expected_gross_cost = print.get('expected_gross_cost_total', 0) or 0 %}
+            {% set actual_gross_cost = print.get('actual_gross_cost_total', 0) or 0 %}
+            {% set gross_cost_delta = (actual_gross_cost|round(2)) - (expected_gross_cost|round(2)) %}
+            <tbody class="history-cost-summary"><tr>
+              <th>{{ _('Erwartete Gesamtkosten') }}</th>
+              <td>{{ format_number(expected_gross_cost, 2) }} {{ history_currency_symbol|default('€') }}</td>
+              <th>{% if tracking and tracking['actual_end_time'] %}{{ _('Tatsächliche Gesamtkosten') }}{% else %}{{ _('Bisherige Gesamtkosten') }}{% endif %}</th>
+              <td class="history-diff-cell">{% if tracking and tracking['actual_end_time'] and (gross_cost_delta|abs) >= 0.005 %}<span class="history-metric-diff">({% if gross_cost_delta >= 0 %}+{% endif %}{{ format_number(gross_cost_delta, 2) }} {{ history_currency_symbol|default('€') }})</span>{% endif %}</td>
+              <td class="history-actual-value-cell">{{ format_number(actual_gross_cost, 2) }} {{ history_currency_symbol|default('€') }}</td>
+            </tr></tbody>
+          </table>
+        </div>
+          </div>
+        </div>
+        <div class="col-lg-2 history-image"><div class="history-image-panel image-size-pending border rounded p-2 d-flex justify-content-center align-items-center">{% if print['image_file'] %}<img src="{{ url_for('print_image', filename=print['image_file']) }}" alt="{{ _('Print Image') }}" class="img-fluid">{% else %}<span class="text-muted">{{ _('No Image') }}</span>{% endif %}</div></div>
       </div></div></div></td></tr>
     {% endfor %}
     </tbody>

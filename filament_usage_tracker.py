@@ -11,7 +11,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 
-from config import EXTERNAL_SPOOL_AMS_ID, EXTERNAL_SPOOL_ID, TRACK_LAYER_USAGE
+from config import (
+  EXTERNAL_SPOOL_AMS_ID,
+  EXTERNAL_SPOOL_ID,
+  TRACK_LAYER_USAGE,
+  LOG_FILAMENT_BOOKING,
+)
 from inventory_repository import record_consumption, record_usage_marker
 from inventory_service import fetchSpools, getAMSFromTray, trayUid
 import inventory_database
@@ -28,6 +33,12 @@ GCODE_STATE_LABELS = {
     "SLICING": "Datei wird verarbeitet",
 }
 from logger import log
+
+
+def _booking_log(message: str) -> None:
+  """Write per-layer booking diagnostics only when explicitly enabled."""
+  if LOG_FILAMENT_BOOKING:
+    log(message)
 
 
 CHECKPOINT_DIR = Path(__file__).resolve().parent / "data" / "checkpoint"
@@ -176,6 +187,15 @@ def update_checkpoint_layer(layer: int) -> None:
   _save_checkpoint_metadata(metadata)
 
 
+def update_checkpoint_ams_mapping(ams_mapping) -> None:
+  """Persist the resolved logical-to-tray mapping with the active checkpoint."""
+  metadata = _get_checkpoint_metadata()
+  if not metadata or metadata.get("print_id") is None:
+    return
+  metadata["ams_mapping"] = list(ams_mapping or [])
+  _save_checkpoint_metadata(metadata)
+
+
 def recover_model(print_id):
   metadata = _get_checkpoint_metadata()
   if not metadata:
@@ -289,6 +309,11 @@ def evaluate_gcode(gcode: str) -> dict:
   current_extrusion = {}
   active_filament = None
   layer_filaments = {}
+  # Bambu G-code normally uses absolute extrusion (M82), but purge and
+  # calibration sections can switch to relative extrusion (M83) and reset E
+  # with G92. Summing absolute E values directly overcounts every layer.
+  extrusion_absolute = True
+  extrusion_position = 0.0
 
   for operation in operations:
     if operation.operation == "M73":
@@ -307,13 +332,38 @@ def evaluate_gcode(gcode: str) -> dict:
           continue
         active_filament = int(filament[:-1])
 
+    if operation.operation == "M82":
+      extrusion_absolute = True
+      continue
+    if operation.operation == "M83":
+      extrusion_absolute = False
+      continue
+    if operation.operation == "G92":
+      if "E" in operation.params:
+        try:
+          extrusion_position = float(operation.params["E"])
+        except (TypeError, ValueError):
+          pass
+      continue
+
     if operation.operation in ("G0", "G1", "G2", "G3"):
       extrusion = operation.params.get("E")
       if extrusion is None:
         continue
       if active_filament is None:
         continue
-      extrusion_amount = float(extrusion)
+      try:
+        extrusion_value = float(extrusion)
+      except (TypeError, ValueError):
+        continue
+      if extrusion_absolute:
+        extrusion_amount = extrusion_value - extrusion_position
+        extrusion_position = extrusion_value
+      else:
+        extrusion_amount = extrusion_value
+      # Retraction/unretraction is not material consumption.
+      if extrusion_amount <= 0:
+        continue
       current_extruded = current_extrusion.get(active_filament, 0)
       current_extrusion[active_filament] = current_extruded + extrusion_amount
 
@@ -431,7 +481,15 @@ class FilamentUsageTracker:
 
     previous_state = self.gcode_state
     self.gcode_state = print_obj.get("gcode_state", self.gcode_state)
-    if self._is_actual_print_execution(print_obj):
+    # Bambu frequently sends the first ``stg_cur=0``/``layer_num`` packet as
+    # a sparse update without repeating ``gcode_state``.  Evaluate the stage
+    # against the last known state as well; otherwise the tracker remains in
+    # preparation forever and all layer consumption is silently discarded.
+    execution_report = dict(print_obj)
+    execution_report.setdefault("gcode_state", self.gcode_state)
+    if self._is_actual_print_execution(execution_report):
+      if not self._printing_started:
+        log("[filament-tracker] Modell-Ausführung bestätigt; Layer-Buchung aktiv")
       self._printing_started = True
     if "mc_remaining_time" in print_obj:
       try:
@@ -455,7 +513,7 @@ class FilamentUsageTracker:
             previous_pending_layer = self._pending_observed_layer
             self._pending_observed_layer = max(previous_pending_layer or 0, layer)
             if previous_pending_layer != self._pending_observed_layer:
-              log(
+              _booking_log(
                 f"[filament-tracker] Verbrauch zwischengespeichert: "
                 f"Print {self.print_id}, beobachtete Schicht {self._pending_observed_layer}"
               )
@@ -705,7 +763,7 @@ class FilamentUsageTracker:
     # that the printer has started extrusion; stage 14, for example, is still
     # nozzle cleaning. Keep layer 0 buffered until stage 0 arrives.
     if buffered_layer <= 0 and not self._printing_started:
-      log(
+      _booking_log(
         f"[filament-tracker] Verbrauch bleibt gepuffert: "
         f"Print {self.print_id}, Druckvorbereitung noch aktiv"
       )
@@ -750,7 +808,7 @@ class FilamentUsageTracker:
       self._replay_layers_after_assignment()
     update_checkpoint_layer(buffered_layer)
     self._update_layer_tracking_progress()
-    log(
+    _booking_log(
       f"[filament-tracker] Zwischengespeicherter Verbrauch nach validierter 3MF gebucht: "
       f"print_id={self.print_id}, schichten=0..{buffered_layer}"
     )
@@ -760,6 +818,25 @@ class FilamentUsageTracker:
       return
     original_ams_mapping = list(ams_mapping)
     ams_mapping = self._hydrate_ams_mapping_from_history(original_ams_mapping)
+    # Once a complete mapping is confirmed, an MQTT reconnect can briefly
+    # publish the same trays in reversed logical order.  That is not a real
+    # filament switch; accepting it would swap the black/white (or any two
+    # equal-colour) bookings.  Real run-out changes introduce a new physical
+    # tray and are still handled by _apply_current_ams_tray below.
+    if self.using_ams and self.ams_mapping:
+      current = list(self.ams_mapping)
+      if (
+        len(current) == len(ams_mapping)
+        and all(value is not None for value in current)
+        and all(value is not None for value in ams_mapping)
+        and set(current) == set(ams_mapping)
+        and current != ams_mapping
+      ):
+        log(
+          f"[filament-tracker][MAPPING] transient reorder ignored: "
+          f"keeping {current!r}, received {ams_mapping!r}"
+        )
+        return
     if self.ams_mapping == ams_mapping and self.using_ams:
       return
 
@@ -776,6 +853,7 @@ class FilamentUsageTracker:
     )
     self.ams_mapping = ams_mapping
     self.using_ams = True
+    update_checkpoint_ams_mapping(ams_mapping)
     if self.print_metadata is not None:
       self.print_metadata["ams_mapping"] = ams_mapping
 
@@ -801,8 +879,6 @@ class FilamentUsageTracker:
       log(f"[filament-tracker] History mapping could not be read: {exc!r}")
       return mapping
     spool_slots = {}
-    spool_signature_slots = {}
-    spool_signature_bindings = {}
     try:
       for spool in inventory_database.list_spools(include_archived=True):
         try:
@@ -812,12 +888,6 @@ class FilamentUsageTracker:
             slot = int(parts[1]) * 4 + int(parts[2])
             if 0 <= slot < 16 and spool.get("id") is not None:
               spool_slots[int(spool["id"])] = slot
-              filament = spool.get("filament") if isinstance(spool.get("filament"), dict) else {}
-              material = str(filament.get("material") or "").strip().upper()
-              color = str(filament.get("color_hex") or "").strip().replace("#", "").upper()[0:6]
-              if material and color:
-                spool_signature_slots.setdefault((material, color), []).append(slot)
-                spool_signature_bindings.setdefault((material, color), []).append((int(spool["id"]), slot))
         except (TypeError, ValueError):
           continue
     except Exception as exc:
@@ -826,11 +896,9 @@ class FilamentUsageTracker:
     for row in rows:
       try:
         logical = int(row.get("ams_slot"))
-        material = str(row.get("gcode_filament_type") or "").strip().upper()
-        color = str(row.get("gcode_color") or "").strip().replace("#", "").upper()[0:6]
-        signature_slots = spool_signature_slots.get((material, color), [])
-        physical = signature_slots[0] if len(signature_slots) == 1 else (
-          spool_slots.get(int(row["spool_id"])) if row.get("spool_id") is not None else row.get("physical_ams_slot")
+        physical = (
+          spool_slots.get(int(row["spool_id"])) if row.get("spool_id") is not None
+          else row.get("physical_ams_slot")
         )
         physical = int(physical) if physical is not None else None
       except (TypeError, ValueError):
@@ -841,25 +909,47 @@ class FilamentUsageTracker:
     ambiguous_physical = {
       physical for physical, logicals in by_physical.items() if len(logicals) > 1
     }
-    unique_bindings = {
-      signature: values[0]
-      for signature, values in spool_signature_bindings.items()
-      if len(values) == 1
+    # When a partial mapping contains a stale tray (for example [None, 0]),
+    # the previous conflict-avoidance pass could keep the valid first logical
+    # filament unresolved even though the local history has one unambiguous
+    # physical tray per logical filament.  In that case the local physical
+    # rows are authoritative and should replace the partial guess as a whole.
+    by_logical = {}
+    for physical, logicals in by_physical.items():
+      if physical in ambiguous_physical:
+        continue
+      for logical in logicals:
+        by_logical.setdefault(logical, set()).add(physical)
+    history_values = {
+      logical: next(iter(physicals))
+      for logical, physicals in by_logical.items()
+      if len(physicals) == 1
     }
-    try:
-      repair_filament_usage_spool_bindings(self.print_id, unique_bindings)
-    except Exception as exc:
-      log(f"[filament-tracker] Usage-row AMS binding repair failed: {exc!r}")
+    if (
+      history_values
+      and len(history_values) == len(by_logical)
+      and len(set(history_values.values())) == len(history_values)
+      and all(value is None or value in history_values.values() for value in mapping)
+    ):
+      while len(mapping) < max(history_values) + 1:
+        mapping.append(None)
+      changed = any(mapping[logical] != physical for logical, physical in history_values.items())
+      for logical, physical in history_values.items():
+        mapping[logical] = physical
+      if changed:
+        log(
+          f"[filament-tracker][MAPPING] print_id={self.print_id} "
+          f"vollständige AMS-Zuordnung aus lokaler History übernommen: {mapping!r}"
+        )
+      return mapping
     used = {int(value) for value in mapping if value is not None}
     changed = False
     for row in rows:
       try:
         logical = int(row.get("ams_slot"))
-        material = str(row.get("gcode_filament_type") or "").strip().upper()
-        color = str(row.get("gcode_color") or "").strip().replace("#", "").upper()[0:6]
-        signature_slots = spool_signature_slots.get((material, color), [])
-        physical = signature_slots[0] if len(signature_slots) == 1 else (
-          spool_slots.get(int(row["spool_id"])) if row.get("spool_id") is not None else row.get("physical_ams_slot")
+        physical = (
+          spool_slots.get(int(row["spool_id"])) if row.get("spool_id") is not None
+          else row.get("physical_ams_slot")
         )
         physical = int(physical) if physical is not None else None
       except (TypeError, ValueError):
@@ -868,17 +958,11 @@ class FilamentUsageTracker:
         continue
       while len(mapping) <= logical:
         mapping.append(None)
-      # A unique local (material, colour) signature is authoritative.  The
-      # MQTT payload can arrive with a stale logical index after a tray
-      # switch; keeping that value would swap e.g. the small green segment
-      # with the large black segment.  Replace it when the target tray is not
-      # already occupied by another logical filament.
-      signature_is_unique = len(signature_slots) == 1
       occupied_by_other = {
         int(value) for index, value in enumerate(mapping)
         if index != logical and value is not None
       }
-      if signature_is_unique and physical not in occupied_by_other:
+      if physical not in occupied_by_other:
         if mapping[logical] != physical:
           mapping[logical] = physical
           changed = True
@@ -1053,7 +1137,7 @@ class FilamentUsageTracker:
       observed_tray = self._observed_ams_tray
       if observed_tray is None:
         self._pending_usage_mm[filament] = self._pending_usage_mm.get(filament, 0.0) + total_mm
-        log(
+        _booking_log(
           f"[filament-tracker][BOOKING-WAIT] print_id={self.print_id} "
           f"filament_index={filament} mapping_tray={mapping_value} "
           "observed_tray=UNRESOLVED reason=no_confirmed_ams_tray"
@@ -1066,7 +1150,7 @@ class FilamentUsageTracker:
           if observed_tray in (self.ams_mapping or [])
           else "tray_mismatch"
         )
-        log(
+        _booking_log(
           f"[filament-tracker][BOOKING-WAIT] print_id={self.print_id} "
           f"filament_index={filament} mapping_tray={mapping_value} "
           f"observed_tray={observed_tray} reason={wait_reason}"
@@ -1080,7 +1164,7 @@ class FilamentUsageTracker:
 
     spool_id = self._lookup_spool_for_tray(tray_uid)
     if spool_id is None:
-      log(
+      _booking_log(
         f"[filament-tracker][BOOKING-WAIT] print_id={self.print_id} "
         f"filament_index={filament} mapping_tray={mapping_value} "
         f"observed_tray={self._observed_ams_tray} tray_uid={tray_uid} "
@@ -1102,6 +1186,54 @@ class FilamentUsageTracker:
     filament_data = spool_data.get("filament", {})
     diameter_mm = filament_data.get("diameter", 1.75)
     density = filament_data.get("density", 1.24)
+    filament_key = filament + 1
+    previous_length = self.cumulative_length_used.get(
+      filament_key,
+      self.cumulative_length_used.get(filament, 0.0),
+    )
+    expected_mm = self._total_usage_mm_per_filament.get(filament)
+    # The 3MF estimate is the authoritative Soll value.  The parsed G-code
+    # path length can include purge/wipe moves and therefore must be
+    # normalized to the validated 3MF length before it is booked as Ist.
+    validated_expected_length = None
+    validated_expected_grams = None
+    if self.print_id:
+      try:
+        validated_rows = get_filament_usage_for_reconciliation(self.print_id)
+        matching_rows = [
+          row for row in validated_rows
+          if row.get("ams_slot") is not None
+          and int(row.get("ams_slot")) == int(filament)
+        ]
+        expected_lengths = [
+          float(row["estimated_length"])
+          for row in matching_rows
+          if row.get("estimated_length") is not None and float(row["estimated_length"] or 0) > 0
+        ]
+        expected_grams = [
+          float(row["estimated_grams"])
+          for row in matching_rows
+          if row.get("estimated_grams") is not None and float(row["estimated_grams"] or 0) > 0
+        ]
+        validated_expected_length = sum(expected_lengths) if expected_lengths else None
+        validated_expected_grams = sum(expected_grams) if expected_grams else None
+      except Exception as exc:
+        log(f"[filament-tracker] Validierte 3MF-Sollwerte konnten nicht gelesen werden: {exc!r}")
+
+    if expected_mm is not None:
+      if validated_expected_length:
+        scale = max(validated_expected_length / float(expected_mm), 0.0)
+        total_mm *= scale
+        previous_length *= scale
+        budget_mm = validated_expected_length
+      else:
+        budget_mm = float(expected_mm)
+      # Keep the audit event and history row within the validated Soll budget.
+      remaining_mm = max(float(budget_mm) - float(previous_length or 0.0), 0.0)
+      total_mm = min(max(float(total_mm or 0.0), 0.0), remaining_mm)
+      if total_mm <= 0:
+        return False
+
     usage_grams = self._mm_to_grams(total_mm, diameter_mm, density)
 
     usage_rounded = round(total_mm, 5)
@@ -1109,23 +1241,24 @@ class FilamentUsageTracker:
     event_layer = event_layer or 0
     event_status = claim_filament_usage_event(self.print_id, event_layer, filament, spool_id, usage_rounded)
     if event_status in {"confirmed", "sent"}:
-      log(f"[filament-tracker] Skipping already transferred consumption event: print_id={self.print_id}, layer={event_layer}, filament={filament}, status={event_status}")
+      _booking_log(
+        f"[filament-tracker] Skipping already transferred consumption event: "
+        f"print_id={self.print_id}, layer={event_layer}, filament={filament}, status={event_status}"
+      )
       return False
     if self.print_id:
       set_filament_usage_event_status(self.print_id, event_layer, filament, "sent")
-    filament_key = filament + 1
-    previous_grams = self.cumulative_grams_used.get(filament_key, 0.0)
+    previous_grams = self.cumulative_grams_used.get(
+      filament_key,
+      self.cumulative_grams_used.get(filament, 0.0),
+    )
     self.cumulative_grams_used[filament_key] = previous_grams + usage_grams
-    previous_length = self.cumulative_length_used.get(filament_key, 0.0)
     cumulative_length = previous_length + usage_rounded
     self.cumulative_length_used[filament_key] = cumulative_length
 
     grams_rounded = round(self.cumulative_grams_used[filament_key], 2)
-    expected_mm = self._total_usage_mm_per_filament.get(filament)
-    expected_grams = None
-    if expected_mm is not None:
-      expected_grams = round(self._mm_to_grams(expected_mm, diameter_mm, density), 2)
-    log(
+    expected_grams = round(validated_expected_grams, 2) if validated_expected_grams is not None else None
+    _booking_log(
       f"[filament-tracker][BOOKING] print_id={self.print_id} "
       f"layer={event_layer} filament_index={filament} "
       f"mapping_tray={mapping_value} observed_tray={self._observed_ams_tray} "
@@ -1156,7 +1289,7 @@ class FilamentUsageTracker:
         log(f"[filament-tracker] History segment could not be saved: print_id={self.print_id}, filament={filament}, spool_id={spool_id}, error={exc!r}")
         return False
       set_filament_usage_event_status(self.print_id, event_layer, filament, "confirmed")
-      log(
+      _booking_log(
         f"[filament-tracker][BOOKING-OK] print_id={self.print_id} "
         f"layer={event_layer} filament_index={filament} spool_id={spool_id} "
         f"ams_slot={mapping_value} grams={round(usage_grams, 3)} "
@@ -1210,7 +1343,7 @@ class FilamentUsageTracker:
     self._replay_after_assignment = False
     self._flush_all_pending_usage()
     update_checkpoint_layer(current_layer)
-    log(
+    _booking_log(
       f"[filament-tracker] Gepufferte Schichten nach AMS-Wiederherstellung "
       f"erneut geprüft: print_id={self.print_id}, schichten=0..{current_layer}"
     )
@@ -1291,6 +1424,31 @@ class FilamentUsageTracker:
     if not self._total_usage_mm_per_filament:
       return
 
+    # A validated 3MF already provides the slicer's authoritative per-
+    # filament gram totals in spool_usage.  Prefer that value over a second
+    # geometry/density calculation from the parsed G-code; the latter can
+    # include purge/wipe paths and otherwise makes the expected total differ
+    # from the values shown for the individual filaments in History.
+    if self.print_id:
+      try:
+        validated_rows = get_filament_usage_for_reconciliation(self.print_id)
+        validated_total = sum(
+          float(row.get("estimated_grams") or 0.0)
+          for row in validated_rows
+          if row.get("estimated_grams") is not None
+        )
+        if validated_total > 0:
+          self._layer_tracking_predicted_total = validated_total
+          update_layer_tracking(
+            self.print_id,
+            filament_grams_total=round(validated_total, 2),
+          )
+          return
+      except Exception as exc:
+        log(
+          f"[filament-tracker] Validierte 3MF-Gesamtsumme konnte nicht gelesen werden: {exc!r}"
+        )
+
     total_grams = 0.0
 
     for filament, total_mm in self._total_usage_mm_per_filament.items():
@@ -1346,7 +1504,21 @@ class FilamentUsageTracker:
       return
 
     layers_printed = max(self.spent_layers) if self.spent_layers else 0
+    # The persisted per-filament usage rows are the single source of truth.
+    # On a resume the in-memory dictionary can contain a mix of zero-based
+    # logical slots and one-based segment keys; summing it would double-count
+    # already booked material even though spool_usage is correct.
     grams_used = sum(self.cumulative_grams_used.values())
+    if self.print_id:
+      try:
+        grams_used = sum(
+          float(row.get("grams_used") or 0.0)
+          for row in get_filament_usage_for_reconciliation(self.print_id)
+        )
+      except Exception as exc:
+        log(
+          f"[filament-tracker] Persistierte Verbrauchssumme konnte nicht gelesen werden: {exc!r}"
+        )
 
     payload = {
         "layers_printed": layers_printed,
@@ -1382,6 +1554,11 @@ class FilamentUsageTracker:
     payload = {"status": status}
     if extra_fields:
       payload.update(extra_fields)
+    if status == LAYER_TRACKING_STATUS_COMPLETED:
+      # The tracker is an authoritative completion source.  Supplying this
+      # marker keeps browser-side reconciliation from closing a provisional
+      # row while the 3MF is still being downloaded.
+      payload.setdefault("completion_source", "filament_tracker")
     update_layer_tracking(print_id, **payload)
     if target_print_id is None:
       self._layer_tracking_status = status
@@ -1591,7 +1768,7 @@ class FilamentUsageTracker:
       )
       job_state = worker_status.get("state")
       if job_state in {"queued", "resolving", "downloading", "processing"}:
-        log(
+        _booking_log(
           f"[filament-tracker] Resume wartet auf zentralen 3MF-Worker: "
           f"{worker_status.get('transfer_id')} ({job_state})"
         )
@@ -1723,6 +1900,11 @@ class FilamentUsageTracker:
         f"{checkpoint_layer} -> {current_layer}; keine rückwirkende Doppelbuchung"
       )
     current_tray = self._active_ams_tray(print_obj)
+    # A reconnect can report an incomplete or transiently reordered tray
+    # array. Prefer the persisted/history-resolved logical mapping so a resume
+    # cannot swap two filaments and book subsequent layers to the wrong spool.
+    if ams_mapping is not None:
+      ams_mapping = self._hydrate_ams_mapping_from_history(list(ams_mapping or []))
     if not ams_mapping and current_tray is not None:
       ams_mapping = [current_tray]
       log(f"[filament-tracker] Checkpoint AMS mapping from current tray: filament 0 -> tray {current_tray}")
@@ -1733,6 +1915,7 @@ class FilamentUsageTracker:
     self.ams_mapping = ams_mapping
     self.current_layer = current_layer
     self.using_ams = ams_mapping is not None
+    update_checkpoint_ams_mapping(ams_mapping)
     
     # Initialize cumulative usage from database to continue tracking correctly
     self.cumulative_grams_used = {}

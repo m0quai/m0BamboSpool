@@ -17,13 +17,11 @@ Diese Datei ist die zentrale und verbindliche Sammlung dauerhafter Projektentsch
 ## m0BamboSpool-Struktur
 
 - m0BamboSpool wird als eigener Fork gepflegt.
-- `app.py` darf für projektspezifische Anpassungen nicht geändert werden.
-- Eigener Einstieg: `app_custom.py`.
-- Bambu-Routen: `bambu_auth_routes.py`.
-- Bambu-Authentifizierung: `bambu_auth.py`.
-- Bambu-UI: `templates/bambu_auth.html`.
+- `app.py` ist der alleinige Anwendungseinstieg des eigenständigen Forks.
+- Die Fork-Erweiterungen sind direkt in den Anwendungseinstieg integriert.
+- Lokale Druckereinstellungen: `local_settings_routes.py` und
+  `templates/local_settings.html`.
 - Navigation: `templates/base.html`.
-- Zertifikats-/Signing-Funktionalität: `bambu_certificate.py`.
 - Eigene Funktionalität bleibt modular und updatefreundlich; keine aufgabenfremden Refactorings.
 - Inventardaten werden über `inventory_repository.py` als zentrale lokale
   Datenzugriffsschicht bezogen.
@@ -31,17 +29,14 @@ Diese Datei ist die zentrale und verbindliche Sammlung dauerhafter Projektentsch
 - Dauerhafte UI-Texte liegen zentral in `translations.py`; sichtbare Texte und
   Buttons dürfen nicht seitenweise fest verdrahtet werden.
 
-## Bambu-Verbindungsmodi und Cloud
+## Bambu-Verbindung (lokal)
 
-- Standard ist **Lokaler LAN-Modus**; **Online-Authentifizierung** bleibt erhalten.
-- LAN-Modus verwendet `Printer Access LAN` / `PRINTER_ACCESS_LAN`.
+- Die Anwendung arbeitet ausschließlich im lokalen LAN-Modus.
+- Verwendet werden `PRINTER_IP`, `PRINTER_ID`, `PRINTER_NAME` und
+  `PRINTER_ACCESS_LAN`.
 - MQTT-Status in der UI nur verbunden/nicht verbunden; keine gelbe Zwischenanzeige.
-- Bambu Cloud ist direkt im Hauptmenü integriert.
-- Login mit E-Mail/Passwort und ggf. E-Mail-Verifizierungscode.
-- Passwort wird nicht gespeichert.
-- Access Token, numerische User-ID und Token-Metadaten dürfen lokal gespeichert werden.
-- User-ID wird über `/v1/design-user-service/my/preference` ermittelt und der Token dort live geprüft.
-- Token-, Credential- und Secret-Dateien dürfen nicht in Git gelangen.
+- Es gibt keinen Cloud-Login, keinen Online-Verbindungsmodus und keine Online-
+  Authentifizierungs- oder Zertifikatssignierungsschicht.
 
 ## Bambu MQTT
 
@@ -50,8 +45,8 @@ Diese Datei ist die zentrale und verbindliche Sammlung dauerhafter Projektentsch
 - `BambuMqtt` ist ausschließlich für Transport, TLS, Subscribe, Empfang und Reconnect zuständig.
 - JSON-Auswertung ist separat gekapselt und verarbeitet inkrementelle Reports über `Has...`-Flags.
 - `nozzle_temper` gehört nicht zur gewünschten Standardausgabe; vollständiges Report-Dumping ist konfigurierbar.
-- `pushall` und `ams_filament_setting` funktionieren im LAN-Pfad ohne RSA-SHA256/X.509-Signierung.
-- Signing bleibt für den Online-/Cloud-Kontext relevant.
+- `pushall` und `ams_filament_setting` funktionieren im LAN-Pfad als normales JSON
+  über die lokale MQTT-Verbindung.
 - Sparse AMS-Materialdaten werden serverseitig mit dem zuletzt bestätigten Cache ergänzt.
 - `Clear` löscht zuerst am Drucker, danach die lokale m0BamboSpool-Zuordnung und invalidiert den Cache sofort.
 
@@ -127,15 +122,15 @@ Dieser I²C-Aufbau ist der aktuelle Einzelreader-Teststand, **nicht** die Zielar
 ## Entwicklung und Sicherheit
 
 - Primärer Testweg ist Visual Studio Debug; Docker-Rebuild/Compose ist nicht Standard.
-- Dokumentationsscreenshots verwenden den Einstieg `app_custom.py` und Live-Daten im Read-only-Modus; einen Snapshot-/Testdatenmodus gibt es nicht.
+- Dokumentationsscreenshots verwenden den Einstieg `app.py` und Live-Daten im Read-only-Modus; einen Snapshot-/Testdatenmodus gibt es nicht.
 - Vor Änderungen den aktuellen Stand von `dev` beziehungsweise des zugehörigen Feature-/Bug-Branches prüfen und unabhängige Nutzeränderungen nicht überschreiben.
 - Änderungen auf die konkrete Aufgabe begrenzen, Upstream-Kompatibilität erhalten und keine aufgabenfremden Formatierungs- oder Refactoring-Änderungen einführen.
-- Den LAN- und Online-Verbindungsmodus erhalten, sofern nicht ausdrücklich anders entschieden.
+- Ausschließlich den lokalen LAN-Verbindungsweg pflegen; Online-/Cloud-Komponenten
+  gehören nicht mehr zum Projekt.
 - Vor Commit oder Übergabe Diff und geänderte Dateien auf unbeabsichtigte Änderungen und Geheimnisse prüfen.
 - Tatsächlich ausgeführte Tests von offenen Laufzeit- oder Hardwaretests unterscheiden.
 - Keine echten Geheimnisse in Git, Dokumentation oder Debugausgaben: insbesondere keine Passwörter,
   WLAN-Zugangsdaten, Bambu-LAN-Access-Codes, Tokens, API-Schlüssel, Session-Cookies oder privaten Schlüssel.
 - In Dokumentation und Beispielkonfiguration ausschließlich erkennbare Platzhalter verwenden.
-- Bambu-Passwörter und LAN-Access-Codes nur zur Anmeldung beziehungsweise Verbindung verwenden und nicht speichern.
-- Access Token, numerische User-ID und erforderliche Token-Metadaten dürfen nur entsprechend der Implementierung
-  lokal gespeichert werden; Credential-Dateien bleiben von Git ausgeschlossen.
+- LAN-Access-Codes nur zur lokalen Verbindung verwenden und niemals in Logs oder
+  Dokumentation ausgeben.

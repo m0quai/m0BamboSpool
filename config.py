@@ -48,16 +48,11 @@ def _env_to_int(name: str, default: int) -> int:
 
 
 BASE_URL = os.getenv("M0BAMBOSPOOL_BASE_URL")  # Where will this app be accessible
-PRINTER_ID = (os.getenv("PRINTER_ID") or "").upper()  # Printer serial number - Run init_bambulab.py
-PRINTER_ACCESS_ONLINE = os.getenv("PRINTER_ACCESS_ONLINE") or ""  # Online/cloud printer access code
+PRINTER_ID = (os.getenv("PRINTER_ID") or "").upper()  # Printer serial number
 PRINTER_ACCESS_LAN = os.getenv("PRINTER_ACCESS_LAN") or ""  # Local LAN/Developer Mode access code
-PRINTER_CONNECTION_MODE = (os.getenv("PRINTER_CONNECTION_MODE") or "LAN").strip().lower()
-if PRINTER_CONNECTION_MODE not in ("lan", "online"):
-    PRINTER_CONNECTION_MODE = "lan"
 
-# Backwards-compatible active access code used by existing printer/FTP code.
-# The selected mode decides which credential is active.
-PRINTER_CODE = PRINTER_ACCESS_LAN if PRINTER_CONNECTION_MODE == "lan" else PRINTER_ACCESS_ONLINE
+# Active local access code used by the printer MQTT/FTP connection.
+PRINTER_CODE = PRINTER_ACCESS_LAN
 PRINTER_IP = os.getenv("PRINTER_IP")  # Required printer IP address for the connection
 PRINTER_NAME = os.getenv("PRINTER_NAME")  # Printer name - Check wireless on printer
 AUTO_SPEND = True
@@ -65,6 +60,10 @@ TRACK_LAYER_USAGE = True
 LOG_AMS_MODE = (os.getenv("LOG_AMS_MODE") or "changes").strip().lower()
 if LOG_AMS_MODE not in ("none", "changes", "everything"):
     LOG_AMS_MODE = "changes"
+# Detailed per-layer filament booking lines are useful while diagnosing a
+# mapping issue, but stay quiet by default so normal operation does not flood
+# the logbook. Set LOG_FILAMENT_BOOKING=true to re-enable them.
+LOG_FILAMENT_BOOKING = _env_to_bool("LOG_FILAMENT_BOOKING", False)
 SPOOL_SORTING = os.getenv(
     "SPOOL_SORTING", "filament.material:asc,filament.vendor.name:asc,filament.name:asc"
 )
@@ -72,8 +71,3 @@ DISABLE_MISMATCH_WARNING = _env_to_bool("DISABLE_MISMATCH_WARNING", False)
 CLEAR_ASSIGNMENT_WHEN_EMPTY = False
 COLOR_DISTANCE_TOLERANCE = _env_to_int("COLOR_DISTANCE_TOLERANCE", 40)
 
-# Bambu MQTT command signing (optional)
-BAMBU_LAB_USER_ID = os.getenv("BAMBU_LAB_USER_ID")
-BAMBU_LAB_APP_CERT_ID = os.getenv("BAMBU_LAB_APP_CERT_ID")
-BAMBU_APP_PRIVATE_KEY_PATH = os.getenv("BAMBU_APP_PRIVATE_KEY_PATH")
-BAMBU_APP_CERTIFICATE_PATH = os.getenv("BAMBU_APP_CERTIFICATE_PATH")

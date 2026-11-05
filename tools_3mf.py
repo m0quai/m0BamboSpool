@@ -543,7 +543,6 @@ def download3mfFromFTP(filename, destFile, progress_callback=None, cancel_event=
         _append_unique_path(remote_paths, bbl_resolved)
         _append_unique_path(remote_paths, f"/cache/{base_name}")
         _append_unique_path(remote_paths, f"/{base_name}")
-        _append_unique_path(remote_paths, f"/sdcard/{base_name}")
 
     log(f"[3MF][FTP] Pfadkandidaten in Reihenfolge: {remote_paths!r}")
     last_error = None
@@ -721,14 +720,130 @@ def delete3mfFromFTP(remote_path: str) -> bool:
         raise ValueError("Unsafe printer path")
     c = setupPycurlConnection("bblp", app_config.PRINTER_CODE)
     try:
-        c.setopt(c.URL, f"ftps://{app_config.PRINTER_IP}{urllib.parse.quote(remote_path, safe='/')}")
-        c.setopt(c.CUSTOMREQUEST, "DELE")
-        c.setopt(c.WRITEDATA, io.BytesIO())
-        c.perform()
+        _delete_remote_3mf_with_connection(c, remote_path)
         log(f"[3MF][FTP] Druckdatei gelöscht: {remote_path}")
         return True
     finally:
         c.close()
+
+
+def _delete_remote_3mf_with_connection(connection, remote_path: str) -> None:
+    """Delete one validated 3MF path using an already-open FTPS handle."""
+    # DELE can be rejected or left waiting by the printer firmware for stale
+    # cache entries.  Never let cleanup hold the transfer worker indefinitely.
+    connection.setopt(connection.CONNECTTIMEOUT, 5)
+    connection.setopt(connection.TIMEOUT, 5)
+    # A custom request against the file URL makes some Bambu firmware start a
+    # RETR response before issuing DELE (and can therefore wait for bytes).
+    # Send the FTP command explicitly against the directory and suppress the
+    # response body instead.
+    connection.setopt(connection.URL, f"ftps://{app_config.PRINTER_IP}/")
+    # pycurl's QUOTE option treats text as ASCII; pass UTF-8 bytes so German
+    # and other non-ASCII print names are deleted correctly as well.
+    connection.setopt(connection.QUOTE, [f"DELE {remote_path}".encode("utf-8")])
+    connection.setopt(connection.CUSTOMREQUEST, None)
+    connection.setopt(connection.NOBODY, True)
+    connection.setopt(connection.DIRLISTONLY, False)
+    connection.setopt(connection.WRITEDATA, io.BytesIO())
+    connection.perform()
+
+
+def _ftp_listing_names(payload: bytes) -> list[str]:
+    """Extract file names from DIRLISTONLY or long-format FTP listings."""
+    names: list[str] = []
+    for raw_line in (payload or b"").decode("utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if not line or line in {".", ".."}:
+            continue
+        parsed = parse_ftp_listing(line)
+        name = str(parsed.get("name") if parsed else line).strip()
+        if name and name not in {".", ".."}:
+            names.append(name)
+    return names
+
+
+def cleanup_stale_printer_3mf_files(
+    current_remote_path: str,
+    *,
+    preserve_current_assets: bool = True,
+) -> dict[str, int]:
+    """Remove old printer-side job files while preserving the active job.
+
+    Root ``.3mf`` files and cache ``.gcode``/``.bbl`` artifacts belong to
+    previously transferred jobs. Printer metadata and unrelated files remain
+    untouched. The current job's cache assets stay protected until the print
+    has ended. Failures are summarized and never invalidate a valid download.
+    """
+    current = _normalize_printer_3mf_path(current_remote_path)
+    if not current or not current.lower().endswith(".3mf"):
+        return {"listed": 0, "deleted": 0, "failed": 0}
+
+    directories = ("/", "/cache/")
+    candidates: set[str] = set()
+    listed = 0
+    failed = 0
+    listing_connection = setupPycurlConnection("bblp", app_config.PRINTER_CODE)
+    try:
+        for directory in directories:
+            try:
+                names = _ftp_listing_names(
+                    _ftp_read(directory, directory=True, connection=listing_connection)
+                )
+            except Exception as exc:
+                failed += 1
+                log(f"[3MF][FTP] Altes 3MF-Verzeichnis konnte nicht gelesen werden: {directory}, fehler={exc!r}")
+                continue
+            for name in names:
+                lowered_name = name.casefold()
+                is_root_3mf = directory == "/" and lowered_name.endswith(".3mf")
+                is_cache_asset = directory == "/cache/" and lowered_name.endswith((".gcode", ".bbl"))
+                if not (is_root_3mf or is_cache_asset):
+                    continue
+                raw_path = name if str(name).startswith("/") else f"{directory.rstrip('/')}/{name}"
+                normalized = _normalize_printer_3mf_path(raw_path)
+                if normalized:
+                    candidates.add(normalized)
+            listed += len(names)
+    finally:
+        listing_connection.close()
+
+    current_name = os.path.basename(current).casefold()
+    for suffix in (".gcode.3mf", ".3mf"):
+        if current_name.endswith(suffix):
+            current_name = current_name[: -len(suffix)]
+            break
+
+    def is_current_asset(path: str) -> bool:
+        if path == current:
+            return True
+        if not preserve_current_assets or not path.startswith("/cache/"):
+            return False
+        return bool(current_name and current_name in os.path.basename(path).casefold())
+
+    stale = sorted(path for path in candidates if not is_current_asset(path))
+    if not stale:
+        return {"listed": listed, "deleted": 0, "failed": failed}
+
+    deleted = 0
+    # Use one bounded handle per file.  Some printer firmware keeps a failed
+    # DELE command alive and cannot safely reuse that FTPS connection.
+    for remote_path in stale:
+        delete_connection = setupPycurlConnection("bblp", app_config.PRINTER_CODE)
+        try:
+            _delete_remote_3mf_with_connection(delete_connection, remote_path)
+            deleted += 1
+        except Exception:
+            failed += 1
+            # Keep hundreds of server-side delete failures out of the log;
+            # the aggregate count below remains available for diagnosis.
+        finally:
+            delete_connection.close()
+    log(
+        f"[3MF][FTP] Altdateien bereinigt: gelistet={listed}, "
+        f"kandidaten={len(candidates)}, gelöscht={deleted}, fehler={failed}, "
+        f"behalten={current}"
+    )
+    return {"listed": listed, "deleted": deleted, "failed": failed}
 
 
 def download3mfFromLocalFilesystem(path, destFile, progress_callback=None, cancel_event=None):

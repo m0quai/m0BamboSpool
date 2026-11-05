@@ -95,7 +95,7 @@
       <a href="{{ url_for('print_history') }}" class="app-nav-link{% if request.endpoint == 'print_history' %} active{% endif %}"><i class="bi bi-clock-history" aria-hidden="true"></i><span>{{ _('History') }}</span></a>
       <a href="{{ url_for('livecam') }}" class="app-nav-link{% if request.endpoint == 'livecam' %} active{% endif %}"><i class="bi bi-camera-video" aria-hidden="true"></i><span>{{ _('LiveCam') }}</span></a>
       <span class="app-nav-divider"></span>
-      <a href="{{ url_for('bambu_cloud.index') }}" class="app-nav-link{% if request.endpoint and request.endpoint.startswith('bambu_cloud.') %} active{% endif %}"><i class="bi bi-gear" aria-hidden="true"></i><span>{{ _('Settings') }}</span>{% if not mqtt_connected|default(false) %}<span class="mqtt-menu-status-dot disconnected"></span>{% endif %}</a>
+      <a href="{{ url_for('settings.index') }}" class="app-nav-link{% if request.endpoint and request.endpoint.startswith('settings.') %} active{% endif %}"><i class="bi bi-gear" aria-hidden="true"></i><span>{{ _('Settings') }}</span>{% if not mqtt_connected|default(false) %}<span class="mqtt-menu-status-dot disconnected"></span>{% endif %}</a>
       <a href="{{ url_for('about') }}" class="app-nav-link{% if request.endpoint == 'about' %} active{% endif %}"><i class="bi bi-info-circle" aria-hidden="true"></i><span>{{ _('About') }}</span></a>
     </nav>
     <div class="app-sidebar-footer">v{{ m0bambospool_version }} ({{ _('Build') }} {{ m0bambospool_build_number }})</div>
@@ -279,15 +279,12 @@
       const download = data.download || {};
       if (['queued', 'resolving', 'downloading', 'processing'].includes(download.state)) {
         const items = [topbarLabels.download];
-        const downloaded = formatTransferBytes(download.bytes_downloaded);
-        const total = formatTransferBytes(download.bytes_total);
-        if (downloaded && total) items.push(`${downloaded} / ${total}`);
-        else if (downloaded) items.push(downloaded);
-        const speed = formatTransferBytes(download.speed_bytes_per_second);
-        if (speed && Number(download.speed_bytes_per_second) > 0) items.push(`${speed}/s`);
-        const remaining = Number(download.bytes_total) - Number(download.bytes_downloaded);
-        const remainingText = formatTransferBytes(remaining);
-        if (remainingText && Number.isFinite(remaining) && remaining > 0) items.push(`${remainingText} ${topbarLabels.remaining}`);
+        const totalBytes = Number(download.bytes_total);
+        const downloadedBytes = Number(download.bytes_downloaded);
+        const percent = totalBytes > 0 && Number.isFinite(downloadedBytes)
+          ? Math.max(0, Math.min(100, Math.round(downloadedBytes * 100 / totalBytes)))
+          : null;
+        if (percent !== null) items.push(`${percent}%`);
         if (topbarPrintProgressIcon) topbarPrintProgressIcon.className = 'bi bi-cloud-arrow-down';
         topbarPrintProgress.hidden = false;
         topbarPrintProgressText.textContent = items.join(' · ');

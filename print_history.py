@@ -13,6 +13,48 @@ db_config = {
 }  # Compatibility for existing callers.
 
 
+def spool_cost_per_gram(spool: dict | None) -> float:
+    """Return one canonical local cost rate for a spool history row.
+
+    A spool may deliberately keep only its own price or only its own weight.
+    In that case the missing value is resolved from the linked filament
+    standard. Keeping this rule here ensures the Home summary and the
+    per-filament history rows calculate the same costs.
+    """
+    if not isinstance(spool, dict):
+        return 0.0
+    filament = spool.get("filament") if isinstance(spool.get("filament"), dict) else {}
+    try:
+        initial_weight = float(spool.get("initial_weight") or 0)
+    except (TypeError, ValueError):
+        initial_weight = 0.0
+    if initial_weight <= 0:
+        try:
+            initial_weight = float(filament.get("weight") or 0)
+        except (TypeError, ValueError):
+            initial_weight = 0.0
+    try:
+        price = float(spool.get("price") or 0)
+    except (TypeError, ValueError):
+        price = 0.0
+    if price <= 0:
+        try:
+            price = float(filament.get("price") or 0)
+        except (TypeError, ValueError):
+            price = 0.0
+    return price / initial_weight if initial_weight > 0 and price > 0 else 0.0
+
+
+# SQL equivalent of spool_cost_per_gram() for aggregate history queries.
+SPOOL_COST_RATE_SQL = """CASE
+  WHEN (CASE WHEN COALESCE(s.initial_weight, 0) > 0 THEN s.initial_weight ELSE f.weight END) > 0
+       AND (CASE WHEN COALESCE(s.price, 0) > 0 THEN s.price ELSE f.price END) > 0
+    THEN (CASE WHEN COALESCE(s.price, 0) > 0 THEN s.price ELSE f.price END)
+         / (CASE WHEN COALESCE(s.initial_weight, 0) > 0 THEN s.initial_weight ELSE f.weight END)
+  ELSE 0
+END"""
+
+
 def printer_state_to_history_status(state: str | None, print_error=None) -> str | None:
     state = str(state or "").upper()
     if state == "FAILED":
@@ -331,7 +373,7 @@ def recalculate_usage_grams_from_lengths(*, force: bool = False) -> dict[str, in
         required = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         if not {"spool_usage", "spools", "filaments", "materials"}.issubset(required):
             return {"usage_rows": 0, "tracking_rows": 0}
-        marker = "material_density_grams_v1"
+        marker = "material_density_grams_v2"
         if not force:
             existing = conn.execute(
                 "SELECT metadata_value FROM runtime_metadata WHERE namespace = 'history' AND metadata_key = ? AND deleted = 0",
@@ -342,6 +384,7 @@ def recalculate_usage_grams_from_lengths(*, force: bool = False) -> dict[str, in
 
         rows = conn.execute(
             """SELECT u.id, u.print_id, u.length_used, u.estimated_length,
+                      u.estimated_grams,
                       f.diameter, m.density
                  FROM spool_usage u
                  LEFT JOIN spools s ON s.id = u.spool_id
@@ -356,25 +399,29 @@ def recalculate_usage_grams_from_lengths(*, force: bool = False) -> dict[str, in
                 diameter = float(row["diameter"] or 1.75)
                 density = float(row["density"] or 1.24)
                 length_mm = max(0.0, float(row["length_used"] or 0.0))
-                estimated_length = row["estimated_length"]
-                estimated_length_mm = max(0.0, float(estimated_length)) if estimated_length is not None else None
+                estimated_grams_value = row["estimated_grams"]
             except (TypeError, ValueError):
                 continue
             if diameter <= 0 or density <= 0:
                 continue
             grams_per_mm = math.pi * ((diameter / 2.0) / 10.0) ** 2 * 0.1 * density
             grams = length_mm * grams_per_mm
-            # A zero/empty estimated length is not a usable measurement.  Keep
-            # the legacy expected grams in that case instead of accidentally
-            # erasing a valid estimate during the one-time repair.
-            estimated_grams = (
-                estimated_length_mm * grams_per_mm
-                if estimated_length_mm is not None and estimated_length_mm > 0
+            # Keep the expected grams from the validated 3MF and derive its
+            # expected length with the same local diameter/material density.
+            # This prevents a legacy 1.21 g/cm³ length estimate from being
+            # compared with a current PLA+ 1.22 g/cm³ actual conversion.
+            try:
+                expected_grams = float(estimated_grams_value) if estimated_grams_value is not None else None
+            except (TypeError, ValueError):
+                expected_grams = None
+            estimated_length = (
+                max(expected_grams, 0.0) / grams_per_mm
+                if expected_grams is not None and expected_grams > 0
                 else None
             )
             conn.execute(
-                "UPDATE spool_usage SET grams_used = ?, estimated_grams = COALESCE(?, estimated_grams) WHERE id = ?",
-                (grams, estimated_grams, row["id"]),
+                "UPDATE spool_usage SET grams_used = ?, estimated_length = COALESCE(?, estimated_length) WHERE id = ?",
+                (grams, estimated_length, row["id"]),
             )
             updated += 1
 
@@ -682,6 +729,60 @@ def find_recent_aborted_print(file_name: str, cooldown_seconds: int = 120):
             continue
         if cutoff <= ended <= now:
             return {"print_id": int(row["id"]), "actual_end_time": row["actual_end_time"]}
+    return None
+
+
+def find_recent_terminal_print_for_source(file_name: str, cooldown_seconds: int = 1800):
+    """Find a terminal row that a stale PREPARE/project_file can replay.
+
+    Bambu can resend the previous project's source shortly after a completed
+    job. Such a packet is not a new print: a real reprint will emit RUNNING
+    afterwards and can then create its own row. The short terminal cooldown
+    prevents a zero-layer ghost history entry without suppressing later,
+    genuine reprints.
+    """
+    if not file_name:
+        return None
+    import datetime as _datetime
+    now = _datetime.datetime.now()
+    wanted = _normalise_print_name(str(file_name).replace("\\", "/").rsplit("/", 1)[-1])
+    if not wanted:
+        return None
+    with connect_database(db_config["db_path"]) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """SELECT p.id, p.file_name, p.print_date,
+            t.remote_3mf_path, t.status, t.actual_end_time,
+            t.total_layers, t.layers_printed, t.filament_grams_billed,
+            t.completion_source
+               FROM prints p JOIN print_layer_tracking t ON t.print_id = p.id
+              WHERE COALESCE(p.is_deleted, 0) = 0
+                AND COALESCE(p.deleted, 0) = 0
+                AND COALESCE(t.deleted, 0) = 0
+                AND t.status IN ('COMPLETED', 'ABORTED', 'FAILED')
+              ORDER BY p.id DESC"""
+        ).fetchall()
+    for row in rows:
+        names = {
+            _normalise_print_name(str(row["file_name"] or "")),
+            _normalise_print_name(str(row["remote_3mf_path"] or "")),
+        }
+        if wanted not in names:
+            continue
+        ended = None
+        for value in (row["actual_end_time"], row["print_date"]):
+            try:
+                ended = _datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+                break
+            except (TypeError, ValueError):
+                continue
+        if ended is None:
+            continue
+        if ended.tzinfo is not None:
+            ended = ended.replace(tzinfo=None)
+        age = (now - ended).total_seconds()
+        if 0 <= age <= int(cooldown_seconds):
+            return dict(row)
     return None
 
 
@@ -1007,14 +1108,41 @@ def insert_filament_usage(
     # duplicate once the real metadata has been parsed.
     cursor.execute(
         """UPDATE spool_usage
-           SET grams_used = MAX(COALESCE(grams_used, 0), ?),
+           SET grams_used = CASE
+                               WHEN COALESCE(grams_used, 0) = 0 AND COALESCE(length_used, 0) = 0
+                               THEN MAX(COALESCE(grams_used, 0), ?)
+                               ELSE grams_used
+                             END,
                gcode_filament_type = COALESCE(NULLIF(?, ''), gcode_filament_type),
                gcode_color = COALESCE(NULLIF(?, ''), gcode_color),
-               estimated_grams = COALESCE(?, estimated_grams),
-               length_used = MAX(COALESCE(length_used, 0), ?),
-               estimated_length = COALESCE(?, estimated_length),
-               calculated_length = MAX(COALESCE(calculated_length, 0), ?),
-               physical_ams_slot = COALESCE(?, physical_ams_slot)
+               estimated_grams = CASE
+                                   WHEN COALESCE(grams_used, 0) = 0 AND COALESCE(length_used, 0) = 0
+                                   THEN COALESCE(?, estimated_grams)
+                                   ELSE estimated_grams
+                                 END,
+               length_used = CASE
+                               WHEN COALESCE(grams_used, 0) = 0 AND COALESCE(length_used, 0) = 0
+                               THEN MAX(COALESCE(length_used, 0), ?)
+                               ELSE length_used
+                             END,
+               estimated_length = CASE
+                                    WHEN COALESCE(grams_used, 0) = 0 AND COALESCE(length_used, 0) = 0
+                                    THEN COALESCE(?, estimated_length)
+                                    ELSE estimated_length
+                                  END,
+               calculated_length = CASE
+                                     WHEN COALESCE(grams_used, 0) = 0 AND COALESCE(length_used, 0) = 0
+                                     THEN MAX(COALESCE(calculated_length, 0), ?)
+                                     ELSE calculated_length
+                                   END,
+                -- Once a segment has consumption, its physical tray is
+                -- historical and must not be overwritten by a later
+                -- push_status/3MF remapping to the replacement tray.
+                physical_ams_slot = CASE
+                    WHEN COALESCE(grams_used, 0) = 0 AND COALESCE(length_used, 0) = 0
+                    THEN COALESCE(?, physical_ams_slot)
+                    ELSE physical_ams_slot
+                END
            WHERE print_id = ? AND ams_slot = ?""",
         (
             grams_used,
@@ -1127,14 +1255,46 @@ def record_filament_usage_segment(
     # segment so AMS auto-switches remain visible in the print and spool history.
     conn = connect_database(db_config["db_path"])
     cursor = conn.cursor()
+    # The tracker passes a one-based segment key while the original 3MF row
+    # uses a zero-based logical filament slot.  Keep all physical-spool
+    # segments on the same logical slot; the physical tray distinguishes them.
+    try:
+        logical_slot = max(int(filament_id) - 1, 0)
+    except (TypeError, ValueError):
+        logical_slot = int(filament_id or 0)
     cursor.execute(
         """SELECT id FROM spool_usage
            WHERE print_id = ? AND spool_id = ?
+             AND ams_slot = ?
+             AND deleted = 0
              AND physical_ams_slot IS ?
            ORDER BY id LIMIT 1""",
-        (int(print_id), int(spool_id), physical_ams_slot),
+        (int(print_id), int(spool_id), logical_slot, physical_ams_slot),
     )
     row = cursor.fetchone()
+
+    # The validated slicer expectation is a Sollwert, not a hard upper bound
+    # for the measured Istverbrauch.  A print can consume more than the
+    # slicer's estimate (purge, calibration, or a model/tool-path difference),
+    # and an aborted print must retain that real value.  Duplicate/replayed
+    # segments are prevented by the unique filament-usage event claim below,
+    # not by truncating actual consumption to the estimate.
+    logical_rows = cursor.execute(
+        """SELECT grams_used, estimated_grams, length_used, estimated_length
+             FROM spool_usage
+            WHERE print_id = ? AND ams_slot = ? AND deleted = 0""",
+        (int(print_id), logical_slot),
+    ).fetchall()
+    expected_grams = sum(float(item[1]) for item in logical_rows if item[1] is not None)
+    expected_length = sum(float(item[3]) for item in logical_rows if item[3] is not None)
+    used_grams = sum(float(item[0] or 0) for item in logical_rows)
+    used_length = sum(float(item[2] or 0) for item in logical_rows)
+    safe_grams = max(float(grams_used or 0), 0.0)
+    safe_length = max(float(length_used or 0), 0.0)
+    if safe_grams <= 0 and safe_length <= 0:
+        conn.commit()
+        conn.close()
+        return
     if row:
         cursor.execute(
             """UPDATE spool_usage
@@ -1143,18 +1303,58 @@ def record_filament_usage_segment(
                    calculated_length = COALESCE(calculated_length, 0) + ?,
                    consumed_length = COALESCE(consumed_length, 0) + ?
                WHERE id = ?""",
-            (float(grams_used), float(length_used), float(length_used), float(length_used), row[0]),
+            (safe_grams, safe_length, safe_length, safe_length, row[0]),
         )
     else:
+        # When AMS run-out moves a logical filament to another spool, the
+        # complete expectation belongs to the logical filament, not to the
+        # first spool. Freeze previous segments at their actual consumption
+        # and assign the remaining expectation to the new physical spool.
+        prior_rows = cursor.execute(
+            """SELECT id, grams_used, estimated_grams,
+                              length_used, estimated_length
+                 FROM spool_usage
+                WHERE print_id = ? AND ams_slot = ? AND deleted = 0
+                ORDER BY id""",
+            (int(print_id), logical_slot),
+        ).fetchall()
+        expected_grams_total = sum(
+            float(item[2]) for item in prior_rows if item[2] is not None
+        )
+        expected_length_total = sum(
+            float(item[4]) for item in prior_rows if item[4] is not None
+        )
+        prior_grams = sum(float(item[1] or 0) for item in prior_rows)
+        prior_length = sum(float(item[3] or 0) for item in prior_rows)
+        has_expected_grams = any(item[2] is not None for item in prior_rows)
+        has_expected_length = any(item[4] is not None for item in prior_rows)
+        if prior_rows and (has_expected_grams or has_expected_length):
+            for prior in prior_rows:
+                cursor.execute(
+                    """UPDATE spool_usage
+                          SET estimated_grams = CASE WHEN ? THEN MAX(COALESCE(grams_used, 0), 0) ELSE estimated_grams END,
+                              estimated_length = CASE WHEN ? THEN MAX(COALESCE(length_used, 0), 0) ELSE estimated_length END
+                        WHERE id = ?""",
+                    (has_expected_grams, has_expected_length, int(prior[0])),
+                )
+        remaining_expected_grams = (
+            max(expected_grams_total - prior_grams, 0.0)
+            if has_expected_grams else None
+        )
+        remaining_expected_length = (
+            max(expected_length_total - prior_length, 0.0)
+            if has_expected_length else None
+        )
         cursor.execute(
             """INSERT INTO spool_usage
                (print_id, spool_id, grams_used, ams_slot,
                 estimated_grams, length_used, estimated_length, physical_ams_slot,
-                calculated_length, consumed_length)
-               VALUES (?, ?, ?, ?, NULL, ?, NULL, ?, ?, ?)""",
-            (int(print_id), int(spool_id), float(grams_used), int(filament_id),
-             float(length_used), physical_ams_slot,
-             float(length_used), float(length_used)),
+                 calculated_length, consumed_length, gcode_filament_type, gcode_color)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+             (int(print_id), int(spool_id), safe_grams, logical_slot,
+              remaining_expected_grams, safe_length, remaining_expected_length,
+              physical_ams_slot, safe_length, safe_length,
+              filament_type, color),
         )
     conn.commit()
     conn.close()
@@ -1174,36 +1374,52 @@ def claim_filament_usage_event(print_id: int | None, layer: int, filament_index:
     if print_id is None:
         return "pending"
     conn = connect_database(db_config["db_path"])
-    # Claim and state transition must be one SQLite transaction. Without an
-    # immediate lock, the replay worker and the live MQTT layer can both see
-    # the same missing event and race into a duplicate insert/consumption.
-    conn.execute("BEGIN IMMEDIATE")
-    row = conn.execute(
-        "SELECT id, status, deleted FROM filament_usage_events WHERE print_id = ? AND layer = ? AND filament_index = ?",
-        (print_id, int(layer), int(filament_index)),
-    ).fetchone()
-    if row is None:
-        conn.execute(
-            """INSERT INTO filament_usage_events
-               (print_id, layer, filament_index, spool_id, length_used, created_at, status)
-               VALUES (?, ?, ?, ?, ?, ?, 'pending')""",
-            (print_id, int(layer), int(filament_index), int(spool_id), float(length_used), datetime.now().isoformat()),
-        )
+    try:
+        # Claim and state transition must be one SQLite transaction. Without
+        # an immediate lock, the replay worker and the live MQTT layer can
+        # both see the same missing event and race into a duplicate insert.
+        conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
             "SELECT id, status, deleted FROM filament_usage_events WHERE print_id = ? AND layer = ? AND filament_index = ?",
             (print_id, int(layer), int(filament_index)),
         ).fetchone()
-    elif row[2]:
-        # Soft-deleted events retain the unique logical key. Reuse that row
-        # during an idempotent replay instead of attempting a duplicate insert.
-        conn.execute(
-            "UPDATE filament_usage_events SET spool_id = ?, length_used = ?, status = 'pending', deleted = 0 WHERE id = ?",
-            (int(spool_id), float(length_used), int(row[0])),
-        )
-        row = (row[0], "pending", 0)
-    conn.commit()
-    conn.close()
-    return row[1] if row else None
+        if row is None:
+            try:
+                conn.execute(
+                    """INSERT INTO filament_usage_events
+                       (print_id, layer, filament_index, spool_id, length_used, created_at, status)
+                       VALUES (?, ?, ?, ?, ?, ?, 'pending')""",
+                    (print_id, int(layer), int(filament_index), int(spool_id), float(length_used), datetime.now().isoformat()),
+                )
+                row = conn.execute(
+                    "SELECT id, status, deleted FROM filament_usage_events WHERE print_id = ? AND layer = ? AND filament_index = ?",
+                    (print_id, int(layer), int(filament_index)),
+                ).fetchone()
+            except sqlite3.IntegrityError:
+                # A legacy worker or a second process may have inserted the
+                # same logical key just before our transaction was acquired.
+                # Reuse that event instead of surfacing a UNIQUE error.
+                row = conn.execute(
+                    "SELECT id, status, deleted FROM filament_usage_events WHERE print_id = ? AND layer = ? AND filament_index = ?",
+                    (print_id, int(layer), int(filament_index)),
+                ).fetchone()
+                if row is None:
+                    raise
+        elif row[2]:
+            # Soft-deleted events retain the unique logical key. Reuse that
+            # row during an idempotent replay instead of another insert.
+            conn.execute(
+                "UPDATE filament_usage_events SET spool_id = ?, length_used = ?, status = 'pending', deleted = 0 WHERE id = ?",
+                (int(spool_id), float(length_used), int(row[0])),
+            )
+            row = (row[0], "pending", 0)
+        conn.commit()
+        return row[1] if row else None
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def finalize_filament_usage_events(print_id: int) -> None:
@@ -1345,7 +1561,17 @@ def get_prints_with_filament(limit: int | None = None, offset: int | None = None
             query += " OFFSET ?"
             params.append(offset)
 
-    cursor.execute(query, params)
+    try:
+        cursor.execute(query, params)
+    except sqlite3.OperationalError as exc:
+        # Inventory migration may recreate the derived view on a parallel
+        # startup connection between the initial existence check and this
+        # query. Recreate it once and retry so the first page request does not
+        # fail with a transient "no such table: v_spool_usage" error.
+        if "no such table: v_spool_usage" not in str(exc):
+            raise
+        _ensure_spool_usage_view(conn)
+        cursor.execute(query, params)
     prints = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return prints, total_count
@@ -1530,6 +1756,7 @@ def update_layer_tracking(print_id: int, **fields):
       "last_status_at",
       "last_usage_event_at",
       "remote_3mf_path",
+      "completion_source",
   }
 
   sanitized = {key: value for key, value in fields.items() if key in allowed_columns}
@@ -1537,6 +1764,35 @@ def update_layer_tracking(print_id: int, **fields):
     return
 
   _ensure_layer_tracking_entry(print_id)
+
+  # A browser request can observe the previous FINISH/IDLE state while the
+  # next physical job is still downloading its 3MF.  That request must never
+  # close the new row: it has no authoritative completion source and would
+  # leave the tracker with an already-completed row and no consumption data.
+  # Only the MQTT terminal packet or the layer tracker may close a job.
+  if sanitized.get("status") == "COMPLETED":
+    if not sanitized.get("completion_source"):
+      if sanitized.get("actual_end_time") is not None:
+        return
+    conn = connect_database(db_config["db_path"])
+    row = conn.execute(
+        "SELECT status, total_layers, layers_printed, printer_percent, "
+        "remote_3mf_path, last_usage_event_at, reconciliation_done "
+        "FROM print_layer_tracking WHERE print_id = ? AND deleted = 0",
+        (int(print_id),),
+    ).fetchone()
+    conn.close()
+    if row and row[0] in {"PREPARING", "RUNNING", "PAUSED"}:
+      evidence = (
+          sanitized.get("total_layers") is not None
+          or sanitized.get("layers_printed") is not None
+          or sanitized.get("printer_percent") is not None
+          or row[1] is not None
+          or row[2] is not None
+          or row[3] is not None
+      )
+      if not evidence:
+        return
 
   set_clause = ", ".join(f"{key} = ?" for key in sanitized)
   params = list(sanitized.values()) + [print_id]
@@ -1585,8 +1841,39 @@ def get_latest_print_summary() -> dict | None:
        ORDER BY p.print_date DESC, p.id DESC
        LIMIT 1"""
   ).fetchone()
+  if row:
+    cost_row = conn.execute(
+      f"""
+      SELECT
+        COALESCE(SUM(
+          COALESCE(u.grams_used, 0) * {SPOOL_COST_RATE_SQL}
+        ), 0) AS actual_cost_total,
+        COALESCE(SUM(
+          COALESCE(u.estimated_grams, 0) * {SPOOL_COST_RATE_SQL}
+        ), 0) AS expected_cost_total,
+        COALESCE(SUM(COALESCE(u.estimated_grams, 0)), 0) AS expected_grams_total
+      FROM spool_usage u
+      LEFT JOIN spools s ON s.id = u.spool_id
+      LEFT JOIN filaments f ON f.id = s.filament_id
+      WHERE u.print_id = ? AND COALESCE(u.deleted, 0) = 0
+      """,
+      (row["id"],),
+    ).fetchone()
+    result = dict(row)
+    result["actual_cost_total"] = float(cost_row["actual_cost_total"] or 0) if cost_row else 0.0
+    result["expected_cost_total"] = float(cost_row["expected_cost_total"] or 0) if cost_row else 0.0
+    expected_grams_total = float(cost_row["expected_grams_total"] or 0) if cost_row else 0.0
+    # The validated per-filament rows are authoritative for the expected
+    # amount, including while a job is running.  The live tracker can retain
+    # a geometry estimate (or a duplicated provisional total) that differs
+    # from those rows; using the same source as History keeps Home and
+    # History mathematically consistent.
+    if expected_grams_total > 0:
+      result["filament_grams_total"] = expected_grams_total
+    conn.close()
+    return result
   conn.close()
-  return dict(row) if row else None
+  return None
 
 def get_all_filament_usage_for_print(print_id: int):
   #
